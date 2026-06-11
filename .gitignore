@@ -2,3 +2,15 @@
 __pycache__/
 *.pyc
 AGENTS.md
+
+# DailyHotApi clone (run tools/run-demo.sh instead)
+tools/DailyHotApi/
+tools/node_modules/
+tools/package.json
+tools/start-dailyhot-api.js
+
+# Generated outputs (created at runtime)
+data/*.json
+reports/daily_digest_demo.md
+reports/daily_digest_demo.html
+reports/hot_topic_cards.md

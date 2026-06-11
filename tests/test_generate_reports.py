@@ -1,3 +1,5 @@
+import unittest
+
 from src.generate_reports import render_daily_digest, render_topic_cards
 from src.hot_topic_types import TopicCard
 
@@ -17,16 +19,20 @@ def sample_card():
     )
 
 
-def test_render_topic_cards_contains_required_sections():
-    markdown = render_topic_cards([sample_card()])
-    assert "# 热点详情卡" in markdown
-    assert "## AI 新产品发布" in markdown
-    assert "**为什么火：**" in markdown
-    assert "**置信度：** medium" in markdown
+class GenerateReportsTests(unittest.TestCase):
+    def test_render_topic_cards_contains_required_sections(self):
+        markdown = render_topic_cards([sample_card()])
+        self.assertIn("# 热点详情卡", markdown)
+        self.assertIn("## AI 新产品发布", markdown)
+        self.assertIn("**为什么火：**", markdown)
+        self.assertIn("**置信度：** medium", markdown)
+
+    def test_render_daily_digest_contains_required_sections(self):
+        markdown = render_daily_digest([sample_card()])
+        self.assertIn("# 当前国内热点话题简报", markdown)
+        self.assertIn("## 今日概览", markdown)
+        self.assertIn("## 建议继续跟踪", markdown)
 
 
-def test_render_daily_digest_contains_required_sections():
-    markdown = render_daily_digest([sample_card()])
-    assert "# 当前国内热点话题简报" in markdown
-    assert "## 今日概览" in markdown
-    assert "## 建议继续跟踪" in markdown
+if __name__ == "__main__":
+    unittest.main()

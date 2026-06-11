@@ -4,7 +4,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 
-DAILY_HOT_API_BASE = "https://dailyhot.imsyy.top"
+DAILY_HOT_API_BASES = [
+    "https://api-hot.imsyy.top",
+    "https://dailyhot.imsyy.top",
+]
 JINA_READER_PREFIX = "https://r.jina.ai/"
 JINA_SEARCH_PREFIX = "https://s.jina.ai/"
 

@@ -1,16 +1,36 @@
 import json
+import os
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import ProxyHandler, build_opener, urlopen
 
-from src.demo_config import DAILY_HOT_API_BASE, TOP_N_PER_PLATFORM
+from src.demo_config import DAILY_HOT_API_BASES, TOP_N_PER_PLATFORM
 from src.hot_topic_types import HotRecord
 
 
+@dataclass(frozen=True)
+class FetchIssue:
+    platform: str
+    url: str
+    error: str
+
+
 def fetch_json(url: str, timeout: int = 12) -> dict[str, Any]:
-    with urlopen(url, timeout=timeout) as response:
+    host = urlparse(url).hostname
+    opener = build_opener(ProxyHandler({})) if host in {"localhost", "127.0.0.1", "::1"} else None
+    open_url = opener.open if opener else urlopen
+    with open_url(url, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def daily_hot_api_bases() -> list[str]:
+    configured = os.getenv("DAILY_HOT_API_BASES") or os.getenv("DAILY_HOT_API_BASE")
+    if configured:
+        return [base.strip().rstrip("/") for base in configured.split(",") if base.strip()]
+    return [base.rstrip("/") for base in DAILY_HOT_API_BASES]
 
 
 def extract_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -40,27 +60,52 @@ def normalize_item(platform: str, index: int, item: dict[str, Any], crawl_time: 
     )
 
 
-def fetch_platform(platform: str, limit: int = TOP_N_PER_PLATFORM) -> list[HotRecord]:
-    url = f"{DAILY_HOT_API_BASE}/{platform}"
+def fetch_platform(
+    platform: str,
+    limit: int = TOP_N_PER_PLATFORM,
+    api_bases: list[str] | None = None,
+    fetcher=fetch_json,
+    issues: list[FetchIssue] | None = None,
+) -> list[HotRecord]:
     crawl_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    bases = api_bases or daily_hot_api_bases()
 
-    try:
-        payload = fetch_json(url)
-    except (URLError, TimeoutError, json.JSONDecodeError, OSError):
-        return []
-
-    records = []
-    for index, item in enumerate(extract_items(payload)[:limit]):
-        if not isinstance(item, dict):
+    for base in bases:
+        url = f"{base.rstrip('/')}/{platform}"
+        try:
+            payload = fetcher(url)
+        except (URLError, TimeoutError, json.JSONDecodeError, OSError) as exc:
+            if issues is not None:
+                issues.append(FetchIssue(platform=platform, url=url, error=str(exc)))
             continue
-        record = normalize_item(platform, index, item, crawl_time)
-        if record.title:
-            records.append(record)
-    return records
+
+        records = []
+        for index, item in enumerate(extract_items(payload)[:limit]):
+            if not isinstance(item, dict):
+                continue
+            record = normalize_item(platform, index, item, crawl_time)
+            if record.title:
+                records.append(record)
+
+        if records:
+            return records
+
+        if issues is not None:
+            issues.append(FetchIssue(platform=platform, url=url, error="empty data"))
+
+    return []
 
 
-def fetch_all_platforms(platforms: list[str], limit: int = TOP_N_PER_PLATFORM) -> list[HotRecord]:
+def fetch_all_platforms(
+    platforms: list[str],
+    limit: int = TOP_N_PER_PLATFORM,
+    api_bases: list[str] | None = None,
+    return_issues: bool = False,
+):
     records: list[HotRecord] = []
+    issues: list[FetchIssue] = []
     for platform in platforms:
-        records.extend(fetch_platform(platform, limit=limit))
+        records.extend(fetch_platform(platform, limit=limit, api_bases=api_bases, issues=issues))
+    if return_issues:
+        return records, issues
     return records
