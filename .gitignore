@@ -3,6 +3,11 @@ __pycache__/
 *.pyc
 AGENTS.md
 
+# Browser session state (contains cookies, localStorage, etc.)
+data/browser_state/
+data/snapshots/
+data/screenshots/
+
 # DailyHotApi clone (run tools/run-demo.sh instead)
 tools/DailyHotApi/
 tools/node_modules/
