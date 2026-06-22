@@ -20,7 +20,7 @@
 - **热榜入口**：DailyHotApi HTTP JSON
 - **浏览器登录态**：本地浏览器 session 文件，供微博和小红书详情采集使用
 - **依赖策略**：当前核心管道尽量使用 Python 标准库，避免引入额外运行依赖
-- **命令入口**：`Makefile` 和 `python -m src.core_pipeline.run`
+- **命令入口**：`python -m src.core_pipeline.run`
 
 ## 项目流程
 
@@ -108,7 +108,6 @@ DailyHotApi 热榜采集
 
 ```text
 heatedTopics/
-  Makefile
   README.md
   src/
     core_pipeline/
@@ -144,27 +143,14 @@ heatedTopics/
 
 ## 快速开始
 
-在项目根目录运行：
+在项目根目录运行测试：
 
 ```bash
 cd heatedTopics
-make test
-```
-
-如果当前环境没有 `make`，可以直接运行：
-
-```bash
 python -m unittest discover -s tests -v
-python -m unittest discover -s tests/core_pipeline -v
 ```
 
 采集今日热点详情：
-
-```bash
-make collect-recent-hot-details
-```
-
-或直接调用 Python CLI：
 
 ```bash
 python -m src.core_pipeline.run collect-recent-details --window today
@@ -186,15 +172,14 @@ cat reports/recent_hot_topics_digest.md
 
 | 命令 | 说明 |
 | --- | --- |
-| `make test` | 运行 Makefile 中配置的测试入口 |
-| `make collect-recent-hot-details` | 采集今日热点并生成近期热点详情报告 |
-| `python -m src.core_pipeline.run collect-recent-details --window today` | 采集今日窗口 |
-| `python -m src.core_pipeline.run collect-recent-details --window last_7_days` | 采集近 7 天窗口 |
-| `python -m src.core_pipeline.run paths` | 写出核心输出路径到 `data/processed/pipeline_paths.json` |
-| `python -m src.core_pipeline.run render-report` | 基于 `topic_briefs.json` 渲染旧版核心平台报告 |
-| `make check-sessions` | 检查微博和小红书浏览器登录状态 |
-| `make login-weibo` | 初始化微博浏览器登录态 |
-| `make login-xiaohongshu` | 初始化小红书浏览器登录态 |
+| `python -m unittest discover -s tests -v` | 运行全部测试 |
+| `python -m src.core_pipeline.run collect-recent-details --window today` | 采集今日热点详情 |
+| `python -m src.core_pipeline.run collect-recent-details --window last_7_days` | 采集近 7 天热点详情 |
+| `python -m src.core_pipeline.run paths` | 写出核心输出路径 |
+| `python -m src.core_pipeline.run render-report` | 渲染旧版核心平台报告 |
+| `python -m src.browser.session_manager check` | 检查浏览器登录状态 |
+| `python -m src.browser.session_manager login weibo` | 初始化微博登录态 |
+| `python -m src.browser.session_manager login xiaohongshu` | 初始化小红书登录态 |
 
 ## 输出文件
 
@@ -227,14 +212,14 @@ cat reports/recent_hot_topics_digest.md
 微博和小红书属于登录态平台。使用前可以运行：
 
 ```bash
-make check-sessions
+python -m src.browser.session_manager check
 ```
 
 如果提示缺少登录态，再运行：
 
 ```bash
-make login-weibo
-make login-xiaohongshu
+python -m src.browser.session_manager login weibo
+python -m src.browser.session_manager login xiaohongshu
 ```
 
 登录态文件属于本地私有运行产物，不应提交到仓库。遇到验证码、滑块、登录失效或风控页时，采集逻辑应记录状态并停止对应平台，不做绕过。
@@ -251,14 +236,7 @@ make login-xiaohongshu
 运行全部测试：
 
 ```bash
-make test
-```
-
-在没有 `make` 的 Windows PowerShell 环境中，使用：
-
-```bash
 python -m unittest discover -s tests -v
-python -m unittest discover -s tests/core_pipeline -v
 ```
 
 运行核心管道测试：
