@@ -12,7 +12,7 @@ def build_cards(topics: list[SelectedTopic], sources: list[TopicSource]) -> list
         content = source.content_preview if source else ""
         confidence = "medium" if source and source.status == "ok" else "low"
         summary = f"{topic.title} 出现在 {len(topic.platforms)} 个平台，Demo 阶段已整理为重点观察话题。"
-        background = content[:260].replace("\n", " ") if content else "暂无稳定详情来源。"
+        background = content[:2000].replace("\n", " ") if content else "暂无稳定详情来源。"
 
         cards.append(
             TopicCard(

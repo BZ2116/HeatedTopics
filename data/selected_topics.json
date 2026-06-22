@@ -1,1 +1,106 @@
-[]
+[
+  {
+    "title": "世界杯开幕式",
+    "platforms": [
+      "weibo"
+    ],
+    "ranks": {
+      "weibo": 1
+    },
+    "urls": [
+      "https://s.weibo.com/weibo?q=%E4%B8%96%E7%95%8C%E6%9D%AF%E5%BC%80%E5%B9%95%E5%BC%8F"
+    ],
+    "score": 19
+  },
+  {
+    "title": "友谊牢不可破",
+    "platforms": [
+      "baidu"
+    ],
+    "ranks": {
+      "baidu": 1
+    },
+    "urls": [
+      "https://www.baidu.com/s?wd=%E5%8F%8B%E8%B0%8A%E7%89%A2%E4%B8%8D%E5%8F%AF%E7%A0%B4"
+    ],
+    "score": 19
+  },
+  {
+    "title": "中方对菲律宾国防部长特奥多罗及其亲属实施制裁，释放了什么信号？会对其产生哪些影响？",
+    "platforms": [
+      "zhihu"
+    ],
+    "ranks": {
+      "zhihu": 1
+    },
+    "urls": [
+      "https://www.zhihu.com/question/2048497172845442555"
+    ],
+    "score": 19
+  },
+  {
+    "title": "OpenAI 考虑大幅降价以与 Anthropic 竞争，此举将如何影响 AI 市场格局？",
+    "platforms": [
+      "zhihu"
+    ],
+    "ranks": {
+      "zhihu": 6
+    },
+    "urls": [
+      "https://www.zhihu.com/question/2048342346048213458"
+    ],
+    "score": 19
+  },
+  {
+    "title": "认为自己旅游运差时可以看看我.",
+    "platforms": [
+      "bilibili"
+    ],
+    "ranks": {
+      "bilibili": 1
+    },
+    "urls": [
+      "https://b23.tv/BV18VED63EBi"
+    ],
+    "score": 19
+  },
+  {
+    "title": "199元，诺基亚小屏手机评测：能打微信视频，体验有点意思",
+    "platforms": [
+      "36kr"
+    ],
+    "ranks": {
+      "36kr": 1
+    },
+    "urls": [
+      "https://www.36kr.com/p/3847321017547653"
+    ],
+    "score": 19
+  },
+  {
+    "title": "DeepSeek 梁文锋当年拿高考状元照片曝光：过了清华线，但报了浙大",
+    "platforms": [
+      "ithome"
+    ],
+    "ranks": {
+      "ithome": 1
+    },
+    "urls": [
+      "https://www.ithome.com/0/962/735.htm"
+    ],
+    "score": 19
+  },
+  {
+    "title": "世界杯开幕式 吓我一跳",
+    "platforms": [
+      "weibo"
+    ],
+    "ranks": {
+      "weibo": 2
+    },
+    "urls": [
+      "https://s.weibo.com/weibo?q=%E4%B8%96%E7%95%8C%E6%9D%AF%E5%BC%80%E5%B9%95%E5%BC%8F%20%E5%90%93%E6%88%91%E4%B8%80%E8%B7%B3"
+    ],
+    "score": 18
+  }
+]

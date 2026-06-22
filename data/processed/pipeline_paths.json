@@ -1,0 +1,9 @@
+[
+  {
+    "detail_evidence": "data/evidence/detail_evidence.json",
+    "hot_records": "data/raw/dailyhot_records.json",
+    "markdown_report": "reports/core_platform_topic_digest.md",
+    "topic_briefs": "data/processed/topic_briefs.json",
+    "topic_clusters": "data/processed/topic_clusters.json"
+  }
+]

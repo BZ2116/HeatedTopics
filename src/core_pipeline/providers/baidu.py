@@ -1,6 +1,17 @@
 from src.core_pipeline.types import DetailEvidence, HotRecord
 
 
+def detail_queries_for_title(title: str) -> list[str]:
+    clean_title = str(title).strip()
+    if not clean_title:
+        return []
+    return [
+        clean_title,
+        f"{clean_title} 怎么回事",
+        f"{clean_title} 最新进展",
+    ]
+
+
 def collect_baidu_detail(
     record: HotRecord,
     fetched_at: str,
