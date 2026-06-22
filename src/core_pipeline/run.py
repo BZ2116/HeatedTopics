@@ -1,9 +1,10 @@
 import argparse
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_dailyhot_route
-from src.core_pipeline.detail_collector import collect_topic_details
+from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
 from src.core_pipeline.json_store import read_json_list, write_json_list
 from src.core_pipeline.providers.baidu import collect_baidu_detail
 from src.core_pipeline.providers.weibo import collect_weibo_detail
@@ -33,6 +34,14 @@ def default_search_provider(query: str) -> list[dict[str, str]]:
     return []
 
 
+def fetch_url_text(url: str, timeout_seconds: int = 15) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": "heatedTopics/0.1"})
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        body = response.read().decode(charset, errors="replace")
+    return html_to_text(body)
+
+
 def rooted_output_paths(root: Path) -> dict[str, Path]:
     return {key: root / value for key, value in output_paths().items()} | {
         "recent_markdown_report": root / "reports/recent_hot_topics_digest.md"
@@ -45,6 +54,7 @@ def run_recent_detail_collection(
     routes: tuple[str, ...] = ALL_DAILYHOT_ROUTES,
     route_fetcher=None,
     search_provider=default_search_provider,
+    page_fetcher=fetch_url_text,
     session_status: dict[str, str] | None = None,
     now=now_shanghai_iso,
 ) -> dict[str, int]:
@@ -60,6 +70,7 @@ def run_recent_detail_collection(
         fetched_at=captured_at,
         search_provider=search_provider,
         session_status=status,
+        page_fetcher=page_fetcher,
     )
     paths = rooted_output_paths(root)
     write_json_list(paths["hot_records"], [record.to_dict() for record in records])

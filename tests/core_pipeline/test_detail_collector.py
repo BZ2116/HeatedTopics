@@ -70,6 +70,45 @@ class DetailCollectorTests(unittest.TestCase):
         self.assertTrue(any(row.fetch_status == "empty_content" for row in evidence if row.platform == "baidu"))
         self.assertTrue(any(row.fetch_status == "login_required" for row in evidence if row.platform == "weibo"))
 
+    def test_collect_topic_details_uses_source_url_when_search_has_no_detail(self):
+        topic = {
+            "topic_key": "某事件",
+            "canonical_title": "某事件",
+            "hot_record_ids": ["hot_weibo_001"],
+            "records": [hot_record("hot_weibo_001", "weibo", "某事件")],
+        }
+
+        evidence = collect_topic_details(
+            topics=[topic],
+            fetched_at="2026-06-22T20:10:00+08:00",
+            search_provider=lambda query: [],
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            page_fetcher=lambda url: "<html><body><h1>某事件详情</h1><p>这里是原始页面里的详细内容。</p></body></html>",
+        )
+
+        source_rows = [row for row in evidence if row.source_method == "source_url"]
+        self.assertEqual(source_rows[0].fetch_status, "ok")
+        self.assertEqual(source_rows[0].topic_key, "某事件")
+        self.assertIn("这里是原始页面里的详细内容", source_rows[0].content)
+
+    def test_collect_topic_details_uses_normalized_topic_key_for_all_evidence(self):
+        topic = {
+            "topic_key": "testhottopic",
+            "canonical_title": "test hot topic",
+            "hot_record_ids": ["hot_weibo_001"],
+            "records": [hot_record("hot_weibo_001", "weibo", "test hot topic")],
+        }
+
+        evidence = collect_topic_details(
+            topics=[topic],
+            fetched_at="2026-06-22T20:10:00+08:00",
+            search_provider=lambda query: [],
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            page_fetcher=lambda url: "Detailed content from source page.",
+        )
+
+        self.assertEqual({row.topic_key for row in evidence}, {"testhottopic"})
+
 
 if __name__ == "__main__":
     unittest.main()

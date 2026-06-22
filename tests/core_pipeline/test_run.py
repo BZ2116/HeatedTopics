@@ -7,10 +7,10 @@ class RunTests(unittest.TestCase):
     def test_output_paths_are_fixed(self):
         paths = output_paths()
 
-        self.assertEqual(str(paths["hot_records"]), "data/raw/dailyhot_records.json")
-        self.assertEqual(str(paths["detail_evidence"]), "data/evidence/detail_evidence.json")
-        self.assertEqual(str(paths["topic_briefs"]), "data/processed/topic_briefs.json")
-        self.assertEqual(str(paths["markdown_report"]), "reports/core_platform_topic_digest.md")
+        self.assertEqual(paths["hot_records"].as_posix(), "data/raw/dailyhot_records.json")
+        self.assertEqual(paths["detail_evidence"].as_posix(), "data/evidence/detail_evidence.json")
+        self.assertEqual(paths["topic_briefs"].as_posix(), "data/processed/topic_briefs.json")
+        self.assertEqual(paths["markdown_report"].as_posix(), "reports/core_platform_topic_digest.md")
 
 
 from pathlib import Path

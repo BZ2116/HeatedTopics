@@ -57,7 +57,7 @@ def render_recent_hot_topics_report(
         for topic in topics
         if any(
             row.fetch_status == "ok" and row.content.strip()
-            for row in evidence_by_topic.get(str(topic.get("canonical_title", "")), [])
+            for row in evidence_by_topic.get(str(topic.get("topic_key", topic.get("canonical_title", ""))), [])
         )
     )
     lines = [
@@ -74,7 +74,7 @@ def render_recent_hot_topics_report(
         title = str(topic.get("canonical_title", "未命名话题"))
         topic_key = str(topic.get("topic_key", title))
         records = [record for record in topic.get("records", []) if isinstance(record, HotRecord)]
-        evidence_for_topic = evidence_by_topic.get(str(topic.get("canonical_title", "")), [])
+        evidence_for_topic = evidence_by_topic.get(topic_key, [])
         lines.extend([f"## {index}. {title}", "", "### 热榜来源", ""])
         if records:
             for record in records:

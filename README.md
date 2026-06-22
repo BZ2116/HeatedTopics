@@ -33,6 +33,7 @@ DailyHotApi 热榜采集
   -> 热点标题基础去重
   -> 详情证据采集
      -> baidu 搜索详情接口
+     -> source_url 原始页面详情兜底
      -> weibo 登录态详情接口
      -> xiaohongshu 登录态详情接口
   -> DetailEvidence 落盘
@@ -72,6 +73,7 @@ DailyHotApi 热榜采集
 当前详情来源包括：
 
 - `baidu`：通过搜索结果接口生成详情证据。
+- `source_url`：当搜索结果为空时，直接读取热榜记录自带的原始 URL，并从页面中提取文本作为详情兜底。
 - `weibo`：通过登录态接口记录微博详情状态。
 - `xiaohongshu`：通过登录态接口记录小红书详情状态。
 
@@ -90,7 +92,7 @@ DailyHotApi 热榜采集
 - `error_type`
 - 原始载荷
 
-当前命令行默认的搜索 provider 是空实现，因此直接运行 CLI 时，百度详情可能显示为 `empty_content`。真实搜索结果接入点已经预留在 `run_recent_detail_collection(..., search_provider=...)`，后续可以接入百度搜索 API、网页搜索服务或自建搜索 provider。
+当前命令行默认的搜索 provider 是空实现，因此百度搜索详情可能显示为 `empty_content`。不过主流程会继续尝试读取热榜记录自带的原始 URL，并以 `source_method = source_url` 保存页面文本。真实搜索结果接入点仍然预留在 `run_recent_detail_collection(..., search_provider=...)`，后续可以接入百度搜索 API、网页搜索服务或自建搜索 provider。
 
 ### 4. 报告输出
 
@@ -226,7 +228,7 @@ python -m src.browser.session_manager login xiaohongshu
 
 ## 当前限制
 
-- 默认 CLI 已串起近期热点收集、去重、详情证据写入和报告输出，但真实网页搜索 provider 仍需接入。
+- 默认 CLI 已串起近期热点收集、去重、详情证据写入和报告输出；搜索 provider 仍需接入，但原始 URL 页面读取已经作为详情兜底。
 - `today` 和 `last_7_days` 当前共享同一套执行流程；近 7 天窗口需要结合已有缓存或后续的历史采集任务才能体现完整历史聚合。
 - 微博和小红书详情采集依赖本地登录态，且不绕过平台风控。
 - 当前版本不做事实核查、可信度评分、时间线生成或观点分析。
