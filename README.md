@@ -1,113 +1,283 @@
 # heatedTopics
 
-热点话题详情采集管道。从多个平台的热榜收集热点话题，去重后采集详情证据，生成 Markdown 报告。
+`heatedTopics` 是一个热点话题详情采集项目。它的目标不是只保存热榜标题，而是把当日或近 7 天出现的热点话题收集出来，去重后为每个话题生成可追溯的详情证据，并输出 JSON 数据和 Markdown 报告。
+
+当前版本聚焦第一阶段能力：
+
+- 获取近期热点话题。
+- 对热点标题做基础去重。
+- 为每个热点生成详情采集记录。
+- 将详情结果、失败状态和来源信息保存为结构化数据。
+- 生成便于人工阅读的热点详情报告。
+
+后续版本再扩展复杂检索词拆解、多来源事实核验、可信度评分、时间线分析和 skill/agent 封装。
+
+## 技术栈
+
+- **语言**：Python 3.10+
+- **测试框架**：Python 标准库 `unittest`
+- **数据格式**：JSON、Markdown
+- **热榜入口**：DailyHotApi HTTP JSON
+- **浏览器登录态**：本地浏览器 session 文件，供微博和小红书详情采集使用
+- **依赖策略**：当前核心管道尽量使用 Python 标准库，避免引入额外运行依赖
+- **命令入口**：`Makefile` 和 `python -m src.core_pipeline.run`
+
+## 项目流程
+
+核心流程如下：
+
+```text
+DailyHotApi 热榜采集
+  -> HotRecord 标准化
+  -> today / last_7_days 窗口处理
+  -> 热点标题基础去重
+  -> 详情证据采集
+     -> baidu 搜索详情接口
+     -> weibo 登录态详情接口
+     -> xiaohongshu 登录态详情接口
+  -> DetailEvidence 落盘
+  -> Markdown 报告渲染
+```
+
+### 1. 热榜采集
+
+`src/core_pipeline/dailyhot_client.py` 负责从 DailyHotApi 路由获取热榜数据，并归一化为 `HotRecord`。
+
+`HotRecord` 只表示“这个话题在某个平台热榜上出现过”，包含：
+
+- 平台和路由
+- 标题
+- 排名
+- 热度值
+- 原始 URL
+- 采集时间
+- 原始载荷
+- 采集状态
+
+注意：`HotRecord` 不是详情内容，不能单独作为完整话题详情。
+
+### 2. 近期窗口与去重
+
+`src/core_pipeline/recent_topics.py` 负责：
+
+- 支持 `today` 和 `last_7_days` 两种窗口。
+- 去除标题里的基础热榜装饰词，例如 `热`、`爆`、`新`、`荐`。
+- 对同一规范化标题进行合并。
+- 保留同一话题对应的多个平台来源和 `hot_record_ids`。
+
+### 3. 详情证据采集
+
+`src/core_pipeline/detail_collector.py` 负责把去重后的话题转换为详情采集任务，并输出 `DetailEvidence`。
+
+当前详情来源包括：
+
+- `baidu`：通过搜索结果接口生成详情证据。
+- `weibo`：通过登录态接口记录微博详情状态。
+- `xiaohongshu`：通过登录态接口记录小红书详情状态。
+
+每条 `DetailEvidence` 会记录：
+
+- 话题 key
+- 关联热榜记录 ID
+- 平台
+- 来源方式
+- 查询词
+- 标题
+- 正文或摘要内容
+- 结果 URL
+- 采集时间
+- `fetch_status`
+- `error_type`
+- 原始载荷
+
+当前命令行默认的搜索 provider 是空实现，因此直接运行 CLI 时，百度详情可能显示为 `empty_content`。真实搜索结果接入点已经预留在 `run_recent_detail_collection(..., search_provider=...)`，后续可以接入百度搜索 API、网页搜索服务或自建搜索 provider。
+
+### 4. 报告输出
+
+`src/core_pipeline/report_renderer.py` 负责生成 Markdown 报告。报告会展示：
+
+- 采集窗口
+- 去重后话题数量
+- 有详情话题数量
+- 缺失详情话题数量
+- 每个话题的热榜来源
+- 每个话题的详情内容摘要
+- 各平台详情采集状态
+
+## 目录结构
+
+```text
+heatedTopics/
+  Makefile
+  README.md
+  src/
+    core_pipeline/
+      run.py                 # 核心 CLI 入口
+      dailyhot_client.py     # DailyHotApi 热榜采集与标准化
+      recent_topics.py       # 窗口处理与基础去重
+      detail_collector.py    # 话题详情证据采集编排
+      json_store.py          # JSON 读写工具
+      report_renderer.py     # Markdown 报告渲染
+      types.py               # HotRecord / DetailEvidence 等数据结构
+      source_registry.py     # 热榜路由分组
+      session_gate.py        # 微博 / 小红书登录态检查
+      providers/
+        baidu.py
+        weibo.py
+        xiaohongshu.py
+        auxiliary.py
+    browser/
+      session_manager.py
+      page_guards.py
+  tests/
+    core_pipeline/
+  data/
+    raw/
+    processed/
+    evidence/
+  reports/
+  docs/
+    superpowers/
+      specs/
+      plans/
+```
 
 ## 快速开始
 
+在项目根目录运行：
+
 ```bash
-# 采集近期热点详情（默认 today 窗口）
+cd heatedTopics
+make test
+```
+
+如果当前环境没有 `make`，可以直接运行：
+
+```bash
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests/core_pipeline -v
+```
+
+采集今日热点详情：
+
+```bash
 make collect-recent-hot-details
+```
 
-# 指定窗口
+或直接调用 Python CLI：
+
+```bash
+python -m src.core_pipeline.run collect-recent-details --window today
+```
+
+采集近 7 天窗口：
+
+```bash
 python -m src.core_pipeline.run collect-recent-details --window last_7_days
+```
 
-# 查看输出
+查看生成报告：
+
+```bash
 cat reports/recent_hot_topics_digest.md
 ```
 
-## 命令
+## 常用命令
 
 | 命令 | 说明 |
-|------|------|
-| `make test` | 运行所有测试 |
-| `make collect-recent-hot-details` | 采集近期热点详情（today 窗口） |
-| `python -m src.core_pipeline.run collect-recent-details --window today` | 采集今日热点 |
-| `python -m src.core_pipeline.run collect-recent-details --window last_7_days` | 采集近7天热点 |
-| `python -m src.core_pipeline.run paths` | 查看输出路径 |
-| `python -m src.core_pipeline.run render-report` | 渲染报告 |
-| `make check-sessions` | 检查浏览器登录状态 |
-| `make login-weibo` | 登录微博 |
-| `make login-xiaohongshu` | 登录小红书 |
+| --- | --- |
+| `make test` | 运行 Makefile 中配置的测试入口 |
+| `make collect-recent-hot-details` | 采集今日热点并生成近期热点详情报告 |
+| `python -m src.core_pipeline.run collect-recent-details --window today` | 采集今日窗口 |
+| `python -m src.core_pipeline.run collect-recent-details --window last_7_days` | 采集近 7 天窗口 |
+| `python -m src.core_pipeline.run paths` | 写出核心输出路径到 `data/processed/pipeline_paths.json` |
+| `python -m src.core_pipeline.run render-report` | 基于 `topic_briefs.json` 渲染旧版核心平台报告 |
+| `make check-sessions` | 检查微博和小红书浏览器登录状态 |
+| `make login-weibo` | 初始化微博浏览器登录态 |
+| `make login-xiaohongshu` | 初始化小红书浏览器登录态 |
 
 ## 输出文件
 
 | 文件 | 说明 |
-|------|------|
-| `data/raw/dailyhot_records.json` | 采集的热榜原始记录 |
-| `data/processed/topic_clusters.json` | 去重后的话题集群 |
-| `data/evidence/detail_evidence.json` | 详情证据数据 |
-| `data/processed/topic_briefs.json` | 话题摘要 |
-| `reports/recent_hot_topics_digest.md` | Markdown 格式的热点详情报告 |
+| --- | --- |
+| `data/raw/dailyhot_records.json` | DailyHotApi 热榜记录，保存标准化后的 `HotRecord` |
+| `data/processed/topic_clusters.json` | 基础去重后的话题列表 |
+| `data/evidence/detail_evidence.json` | 各平台详情证据，保存 `DetailEvidence` |
+| `data/processed/topic_briefs.json` | 旧版摘要流程使用的话题摘要文件 |
+| `reports/recent_hot_topics_digest.md` | 当前第一版的近期热点详情报告 |
+| `reports/core_platform_topic_digest.md` | 旧版核心平台报告渲染输出 |
 
-## 支持的平台
+## 数据状态说明
 
-### 热榜来源（core_discovery）
-- `weibo` - 微博热搜
-- `baidu` - 百度热搜
-- `zhihu` - 知乎热榜
-- `toutiao` - 头条热榜
+详情证据使用 `fetch_status` 表示采集状态：
 
-### 详情采集
-- **baidu** - 通过搜索结果采集详情（无需登录）
-- **weibo** - 需要登录微博
-- **xiaohongshu** - 需要登录小红书
+| 状态 | 含义 |
+| --- | --- |
+| `ok` | 采集成功，且通常应有非空 `content` |
+| `empty_content` | 请求或流程执行了，但没有拿到可用详情正文 |
+| `login_required` | 该平台需要登录态 |
+| `captcha_required` | 遇到验证码或安全验证 |
+| `rate_limited` | 遇到限流或风控 |
+| `failed` | 采集失败 |
 
-## 架构
+第一版判断详情是否可用的核心标准是：`DetailEvidence.content` 非空。只有热榜标题、排名和热度不算有效详情。
 
-```
-热榜采集 (dailyhot_client.py)
-    ↓
-话题去重 (recent_topics.py)
-    ↓
-详情采集 (detail_collector.py)
-    ├── baidu 搜索
-    ├── weibo 详情 (需登录)
-    └── xiaohongshu 详情 (需登录)
-    ↓
-报告渲染 (report_renderer.py)
-    ↓
-Markdown 报告
+## 登录态与风控
+
+微博和小红书属于登录态平台。使用前可以运行：
+
+```bash
+make check-sessions
 ```
 
-## 数据类型
+如果提示缺少登录态，再运行：
 
-### HotRecord
-热榜记录，包含平台、排名、热度值、标题等。
-
-### DetailEvidence
-详情证据，包含平台、来源方式、查询词、内容、URL 等。
-
-## 目录结构
-
-```
-heatedTopics/
-├── src/
-│   ├── core_pipeline/       # 核心管道
-│   │   ├── run.py           # CLI 入口
-│   │   ├── dailyhot_client.py
-│   │   ├── recent_topics.py
-│   │   ├── detail_collector.py
-│   │   ├── report_renderer.py
-│   │   └── providers/       # 各平台详情采集
-│   │       ├── baidu.py
-│   │       ├── weibo.py
-│   │       └── xiaohongshu.py
-│   └── browser/             # 浏览器登录
-├── tests/                   # 测试
-├── data/                    # 数据输出
-│   ├── raw/
-│   ├── processed/
-│   └── evidence/
-└── reports/                 # 报告输出
+```bash
+make login-weibo
+make login-xiaohongshu
 ```
 
-## 配置
+登录态文件属于本地私有运行产物，不应提交到仓库。遇到验证码、滑块、登录失效或风控页时，采集逻辑应记录状态并停止对应平台，不做绕过。
 
-环境变量：
-- `DAILYHOT_API_BASE` - DailyHotApi 服务地址（默认 `https://dailyhotapi.now.sh`）
+## 当前限制
 
-## 依赖
+- 默认 CLI 已串起近期热点收集、去重、详情证据写入和报告输出，但真实网页搜索 provider 仍需接入。
+- `today` 和 `last_7_days` 当前共享同一套执行流程；近 7 天窗口需要结合已有缓存或后续的历史采集任务才能体现完整历史聚合。
+- 微博和小红书详情采集依赖本地登录态，且不绕过平台风控。
+- 当前版本不做事实核查、可信度评分、时间线生成或观点分析。
 
-- Python 3.10+
-- 无需额外依赖（使用标准库）
-- 详情采集需要浏览器登录（可选）
+## 开发与验证
+
+运行全部测试：
+
+```bash
+make test
+```
+
+在没有 `make` 的 Windows PowerShell 环境中，使用：
+
+```bash
+python -m unittest discover -s tests -v
+python -m unittest discover -s tests/core_pipeline -v
+```
+
+运行核心管道测试：
+
+```bash
+python -m unittest discover -s tests/core_pipeline -v
+```
+
+验证近期热点详情流程的关键测试包括：
+
+- `tests/core_pipeline/test_recent_topics.py`
+- `tests/core_pipeline/test_dailyhot_client.py`
+- `tests/core_pipeline/test_detail_collector.py`
+- `tests/core_pipeline/test_run.py`
+- `tests/core_pipeline/test_report_renderer.py`
+
+## 设计文档
+
+本阶段设计和执行计划保存在：
+
+- `docs/superpowers/specs/2026-06-22-hot-topic-detail-collection-design.md`
+- `docs/superpowers/plans/2026-06-22-hot-topic-detail-collection.md`
