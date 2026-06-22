@@ -1,5 +1,6 @@
 import json
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from src.core_pipeline.source_registry import route_role
@@ -52,3 +53,39 @@ def fetch_dailyhot_route(base_url: str, route: str, timeout_seconds: int = 15) -
     if not isinstance(data, dict):
         raise ValueError(f"DailyHotApi route {route} returned non-object JSON")
     return data
+
+
+def collect_dailyhot_records(
+    routes: tuple[str, ...],
+    captured_at: str,
+    fetcher: Callable[[str], dict[str, Any]],
+) -> list[HotRecord]:
+    records: list[HotRecord] = []
+    for route in routes:
+        try:
+            payload = fetcher(route)
+            records.extend(normalize_dailyhot_response(route, payload, captured_at))
+        except Exception as exc:
+            records.append(
+                HotRecord(
+                    id=f"hot_{route}_failed",
+                    source="dailyhotapi",
+                    platform=route,
+                    route=route,
+                    category=route_role(route),
+                    title=f"{route} route failed",
+                    rank=0,
+                    hot_value="",
+                    url="",
+                    mobile_url="",
+                    desc="",
+                    author="",
+                    cover="",
+                    timestamp="",
+                    captured_at=captured_at,
+                    raw_payload={},
+                    fetch_status="failed",
+                    error_type=type(exc).__name__,
+                )
+            )
+    return records

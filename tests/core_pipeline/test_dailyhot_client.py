@@ -38,5 +38,42 @@ class DailyHotClientTests(unittest.TestCase):
         self.assertEqual(records[0].fetch_status, "ok")
 
 
+from src.core_pipeline.dailyhot_client import collect_dailyhot_records
+
+
+class DailyHotCollectionTests(unittest.TestCase):
+    def test_collect_dailyhot_records_collects_multiple_routes(self):
+        payloads = {
+            "weibo": {"data": [{"title": "微博热点", "hot": "100"}]},
+            "baidu": {"data": [{"title": "百度热点", "hot": "90"}]},
+        }
+
+        def fetcher(route: str):
+            return payloads[route]
+
+        records = collect_dailyhot_records(
+            routes=("weibo", "baidu"),
+            captured_at="2026-06-22T20:00:00+08:00",
+            fetcher=fetcher,
+        )
+
+        self.assertEqual([record.title for record in records], ["微博热点", "百度热点"])
+
+    def test_collect_dailyhot_records_records_route_failures(self):
+        def fetcher(route: str):
+            raise RuntimeError("network down")
+
+        records = collect_dailyhot_records(
+            routes=("weibo",),
+            captured_at="2026-06-22T20:00:00+08:00",
+            fetcher=fetcher,
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].id, "hot_weibo_failed")
+        self.assertEqual(records[0].fetch_status, "failed")
+        self.assertEqual(records[0].error_type, "RuntimeError")
+
+
 if __name__ == "__main__":
     unittest.main()
