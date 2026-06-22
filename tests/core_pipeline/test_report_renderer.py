@@ -25,5 +25,69 @@ class ReportRendererTests(unittest.TestCase):
         self.assertIn("xiaohongshu", markdown)
 
 
+from src.core_pipeline.report_renderer import render_recent_hot_topics_report
+from src.core_pipeline.types import DetailEvidence, HotRecord
+
+
+class RecentHotTopicsReportTests(unittest.TestCase):
+    def test_recent_report_shows_detail_status_and_snippet(self):
+        record = HotRecord(
+            id="hot_weibo_001",
+            source="dailyhotapi",
+            platform="weibo",
+            route="weibo",
+            category="core_discovery",
+            title="某事件",
+            rank=1,
+            hot_value="100",
+            url="https://example.com/hot",
+            mobile_url="",
+            desc="",
+            author="",
+            cover="",
+            timestamp="",
+            captured_at="2026-06-22T20:00:00+08:00",
+            raw_payload={},
+            fetch_status="ok",
+            error_type=None,
+        )
+        evidence = DetailEvidence(
+            evidence_id="evidence_baidu_hot_weibo_001",
+            topic_key="某事件",
+            related_hot_record_ids=["hot_weibo_001"],
+            platform="baidu",
+            source_role="required",
+            source_method="search_results",
+            query="某事件 怎么回事",
+            url="https://example.com/detail",
+            title="某事件详情",
+            content="这里是详细内容",
+            author="",
+            published_at="",
+            metrics={},
+            comments_preview=[],
+            result_urls=["https://example.com/detail"],
+            raw_snapshot_path="",
+            screenshot_path="",
+            fetched_at="2026-06-22T20:10:00+08:00",
+            fetch_status="ok",
+            error_type=None,
+            confidence="medium",
+            raw_payload={},
+        )
+
+        markdown = render_recent_hot_topics_report(
+            topics=[{"topic_key": "某事件", "canonical_title": "某事件", "hot_record_ids": ["hot_weibo_001"], "records": [record]}],
+            evidence_rows=[evidence],
+            generated_at="2026-06-22T20:20:00+08:00",
+            window="today",
+        )
+
+        self.assertIn("# 近期热点详情汇总", markdown)
+        self.assertIn("采集窗口：`today`", markdown)
+        self.assertIn("这里是详细内容", markdown)
+        self.assertIn("baidu：`ok`", markdown)
+
+
 if __name__ == "__main__":
     unittest.main()

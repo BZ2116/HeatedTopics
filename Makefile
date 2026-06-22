@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: demo test check-sessions login-weibo login-xiaohongshu collect-dailyhot collect-core-details collect-aux-evidence cluster-topics generate-briefs render-report run-core-pipeline
+.PHONY: demo test check-sessions login-weibo login-xiaohongshu collect-dailyhot collect-core-details collect-aux-evidence cluster-topics generate-briefs render-report run-core-pipeline collect-recent-hot-details
 
 demo:
 	$(PYTHON) -m src.demo_collect_hot_topics
@@ -34,5 +34,8 @@ generate-briefs:
 
 render-report:
 	$(PYTHON) -m src.core_pipeline.run render-report
+
+collect-recent-hot-details:
+	$(PYTHON) -m src.core_pipeline.run collect-recent-details --window today
 
 run-core-pipeline: check-sessions collect-dailyhot collect-core-details collect-aux-evidence cluster-topics generate-briefs render-report
