@@ -189,6 +189,8 @@ def _read_detail_cache(cache_store: CacheStore | None, platform: str, topic_key:
 def _write_detail_cache(cache_store: CacheStore | None, evidence: DetailEvidence) -> None:
     if cache_store is None:
         return
+    if evidence.fetch_status != "ok":
+        return
     cache_store.write(_detail_cache_key(evidence.platform, evidence.topic_key), evidence.to_dict(), fetched_at=evidence.fetched_at)
 
 
@@ -247,21 +249,21 @@ def collect_topic_details(
                     except Exception as exc:
                         evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
         weibo_status = session_status.get("weibo", "login_required")
-        weibo_posts = _fetch_social_rows("weibo", representative.title, weibo_status, social_detail_fetcher)
         cached_weibo = _read_detail_cache(cache_store, "weibo", topic_key)
         if cached_weibo is not None:
             evidence_rows.append(cached_weibo)
         else:
+            weibo_posts = _fetch_social_rows("weibo", representative.title, weibo_status, social_detail_fetcher)
             weibo_evidence = collect_weibo_detail(representative, fetched_at, weibo_status, weibo_posts)
             object.__setattr__(weibo_evidence, "topic_key", topic_key)
             evidence_rows.append(weibo_evidence)
             _write_detail_cache(cache_store, weibo_evidence)
         xiaohongshu_status = session_status.get("xiaohongshu", "login_required")
-        xiaohongshu_notes = _fetch_social_rows("xiaohongshu", representative.title, xiaohongshu_status, social_detail_fetcher)
         cached_xiaohongshu = _read_detail_cache(cache_store, "xiaohongshu", topic_key)
         if cached_xiaohongshu is not None:
             evidence_rows.append(cached_xiaohongshu)
         else:
+            xiaohongshu_notes = _fetch_social_rows("xiaohongshu", representative.title, xiaohongshu_status, social_detail_fetcher)
             xiaohongshu_evidence = collect_xiaohongshu_detail(representative, fetched_at, xiaohongshu_status, xiaohongshu_notes)
             object.__setattr__(xiaohongshu_evidence, "topic_key", topic_key)
             evidence_rows.append(xiaohongshu_evidence)

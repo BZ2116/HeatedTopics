@@ -247,5 +247,80 @@ def test_collect_topic_details_reuses_detail_cache(tmp_path):
     assert any(row.platform == "baidu" and row.content == "cached detail body" for row in evidence)
 
 
+def test_collect_topic_details_reuses_xiaohongshu_cache(tmp_path):
+    cache = CacheStore(tmp_path, now=lambda: __import__("datetime").datetime(2026, 6, 23, tzinfo=__import__("datetime").timezone.utc))
+    # Pre-populate Baidu cache to prevent search_provider from being called
+    baidu_cached = {
+        "evidence_id": "evidence_baidu_hot_weibo_001",
+        "topic_key": "cachedtopic",
+        "related_hot_record_ids": ["hot_weibo_001"],
+        "platform": "baidu",
+        "source_role": "required",
+        "source_method": "search_results",
+        "query": "cached topic",
+        "url": "",
+        "title": "cached title",
+        "content": "cached detail body",
+        "author": "",
+        "published_at": "",
+        "metrics": {},
+        "comments_preview": [],
+        "result_urls": [],
+        "raw_snapshot_path": "",
+        "screenshot_path": "",
+        "fetched_at": "2026-06-23T00:00:00+00:00",
+        "fetch_status": "ok",
+        "error_type": None,
+        "confidence": "medium",
+        "raw_payload": {},
+    }
+    cache.write("detail:baidu:cachedtopic", baidu_cached, fetched_at="2026-06-23T00:00:00+00:00")
+    xiaohongshu_cached = {
+        "evidence_id": "evidence_xiaohongshu_topic_001",
+        "topic_key": "cachedtopic",
+        "related_hot_record_ids": ["hot_weibo_001"],
+        "platform": "xiaohongshu",
+        "source_role": "required",
+        "source_method": "social_detail",
+        "query": "cached topic",
+        "url": "https://example.com/xhs/123",
+        "title": "cached xhs title",
+        "content": "cached xhs content",
+        "author": "xhs_author",
+        "published_at": "2026-06-23T00:00:00+00:00",
+        "metrics": {},
+        "comments_preview": [],
+        "result_urls": [],
+        "raw_snapshot_path": "",
+        "screenshot_path": "",
+        "fetched_at": "2026-06-23T00:00:00+00:00",
+        "fetch_status": "ok",
+        "error_type": None,
+        "confidence": "medium",
+        "raw_payload": {},
+    }
+    cache.write("detail:xiaohongshu:cachedtopic", xiaohongshu_cached, fetched_at="2026-06-23T00:00:00+00:00")
+    topic = {
+        "topic_key": "cachedtopic",
+        "canonical_title": "cached topic",
+        "hot_record_ids": ["hot_weibo_001"],
+        "records": [hot_record("hot_weibo_001", "weibo", "cached topic")],
+    }
+
+    def social_detail_fetcher(platform: str, query: str):
+        raise AssertionError("social_detail_fetcher should not be called on cache hit")
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: (_ for _ in ()).throw(AssertionError("search should not run")),
+        session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+        cache_store=cache,
+    )
+
+    assert any(row.platform == "xiaohongshu" and row.content == "cached xhs content" for row in evidence)
+
+
 if __name__ == "__main__":
     unittest.main()
