@@ -6,11 +6,13 @@ from typing import Any
 from src.core_pipeline.providers.baidu import collect_baidu_detail, detail_queries_for_title
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
+from src.core_pipeline.source_registry import DETAIL_ENABLED_PLATFORMS
 from src.core_pipeline.types import DetailEvidence, HotRecord
 
 
 SearchProvider = Callable[[str], list[dict[str, str]]]
 PageFetcher = Callable[[str], str]
+SocialDetailFetcher = Callable[[str, str], list[dict[str, object]]]
 
 
 def html_to_text(page_html: str) -> str:
@@ -129,12 +131,55 @@ def failed_source_page_evidence(
     )
 
 
+def dailyhot_metadata_evidence(
+    record: HotRecord,
+    fetched_at: str,
+    related_hot_record_ids: list[str],
+    topic_key: str | None = None,
+) -> DetailEvidence:
+    content = "\n".join(
+        part
+        for part in [
+            f"Title: {record.title}",
+            f"Description: {record.desc}" if record.desc else "",
+            f"URL: {record.url or record.mobile_url}" if record.url or record.mobile_url else "",
+        ]
+        if part
+    )
+    return DetailEvidence(
+        evidence_id=f"evidence_metadata_{record.id}",
+        topic_key=topic_key or record.title,
+        related_hot_record_ids=related_hot_record_ids,
+        platform=record.platform,
+        source_role="auxiliary",
+        source_method="dailyhot_metadata",
+        query=record.title,
+        url=record.url or record.mobile_url,
+        title=f"{record.platform} DailyHot metadata: {record.title}",
+        content=content,
+        author=record.author,
+        published_at=record.timestamp,
+        metrics={"rank": record.rank, "hot_value": record.hot_value},
+        comments_preview=[],
+        result_urls=[record.url or record.mobile_url] if record.url or record.mobile_url else [],
+        raw_snapshot_path="",
+        screenshot_path="",
+        fetched_at=fetched_at,
+        fetch_status="ok" if content else "empty_content",
+        error_type=None if content else "empty_content",
+        confidence="low",
+        raw_payload={"record": record.to_dict()},
+    )
+
+
 def collect_topic_details(
     topics: list[dict[str, Any]],
     fetched_at: str,
     search_provider: SearchProvider,
     session_status: dict[str, str],
     page_fetcher: PageFetcher | None = None,
+    social_detail_fetcher: SocialDetailFetcher | None = None,
+    enabled_detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
 ) -> list[DetailEvidence]:
     evidence_rows: list[DetailEvidence] = []
     for topic in topics:
@@ -144,6 +189,11 @@ def collect_topic_details(
         representative = records[0]
         topic_key = str(topic.get("topic_key") or representative.title)
         related_ids = list(topic.get("hot_record_ids") or [representative.id])
+        topic_platforms = {record.platform for record in records}
+        if not topic_platforms.intersection(enabled_detail_platforms):
+            for record in records:
+                evidence_rows.append(dailyhot_metadata_evidence(record, fetched_at, related_ids, topic_key))
+            continue
         query_results: list[dict[str, str]] = []
         used_query = representative.title
         for query in detail_queries_for_title(representative.title):
@@ -164,20 +214,25 @@ def collect_topic_details(
                     evidence_rows.append(source_page_evidence(representative, fetched_at, related_ids, page_fetcher(representative.url), topic_key))
                 except Exception as exc:
                     evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
-        weibo_evidence = collect_weibo_detail(
-            representative,
-            fetched_at,
-            session_status.get("weibo", "login_required"),
-            [],
-        )
+        weibo_status = session_status.get("weibo", "login_required")
+        weibo_posts = _fetch_social_rows("weibo", representative.title, weibo_status, social_detail_fetcher)
+        weibo_evidence = collect_weibo_detail(representative, fetched_at, weibo_status, weibo_posts)
         object.__setattr__(weibo_evidence, "topic_key", topic_key)
         evidence_rows.append(weibo_evidence)
-        xiaohongshu_evidence = collect_xiaohongshu_detail(
-            representative,
-            fetched_at,
-            session_status.get("xiaohongshu", "login_required"),
-            [],
-        )
+        xiaohongshu_status = session_status.get("xiaohongshu", "login_required")
+        xiaohongshu_notes = _fetch_social_rows("xiaohongshu", representative.title, xiaohongshu_status, social_detail_fetcher)
+        xiaohongshu_evidence = collect_xiaohongshu_detail(representative, fetched_at, xiaohongshu_status, xiaohongshu_notes)
         object.__setattr__(xiaohongshu_evidence, "topic_key", topic_key)
         evidence_rows.append(xiaohongshu_evidence)
     return evidence_rows
+
+
+def _fetch_social_rows(
+    platform: str,
+    query: str,
+    session_status: str,
+    social_detail_fetcher: SocialDetailFetcher | None,
+) -> list[dict[str, object]]:
+    if session_status != "ok" or social_detail_fetcher is None:
+        return []
+    return social_detail_fetcher(platform, query)

@@ -141,5 +141,65 @@ class DetailCollectorTests(unittest.TestCase):
         self.assertEqual(video_rows[0].raw_payload["record"]["title"], "视频标题")
 
 
+    def test_collect_topic_details_fetches_weibo_and_xiaohongshu_when_sessions_are_ok(self):
+        topic = {
+            "topic_key": "realhotdetail",
+            "canonical_title": "real hot detail",
+            "hot_record_ids": ["hot_weibo_001"],
+            "records": [hot_record("hot_weibo_001", "weibo", "real hot detail")],
+        }
+        calls = []
+
+        def social_detail_fetcher(platform: str, query: str):
+            calls.append((platform, query))
+            if platform == "weibo":
+                return [{"content": "real weibo discussion body", "comments_preview": ["weibo comment"], "url": "https://weibo.example.com/a"}]
+            if platform == "xiaohongshu":
+                return [{"content": "real xiaohongshu note body", "comments_preview": ["xhs comment"], "url": "https://xhs.example.com/a"}]
+            raise AssertionError(platform)
+
+        evidence = collect_topic_details(
+            topics=[topic],
+            fetched_at="2026-06-22T20:10:00+08:00",
+            search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
+            session_status={"weibo": "ok", "xiaohongshu": "ok"},
+            social_detail_fetcher=social_detail_fetcher,
+        )
+
+        self.assertIn(("weibo", "real hot detail"), calls)
+        self.assertIn(("xiaohongshu", "real hot detail"), calls)
+        weibo_rows = [row for row in evidence if row.platform == "weibo"]
+        xhs_rows = [row for row in evidence if row.platform == "xiaohongshu"]
+        self.assertEqual(weibo_rows[0].fetch_status, "ok")
+        self.assertIn("real weibo discussion body", weibo_rows[0].content)
+        self.assertEqual(xhs_rows[0].fetch_status, "ok")
+        self.assertIn("real xiaohongshu note body", xhs_rows[0].content)
+
+
+def test_collect_topic_details_skips_social_fetch_for_non_detail_platform():
+    topic = {
+        "topic_key": "zhihutopic",
+        "canonical_title": "zhihu topic",
+        "hot_record_ids": ["hot_zhihu_001"],
+        "records": [hot_record("hot_zhihu_001", "zhihu", "zhihu topic")],
+    }
+
+    def social_detail_fetcher(platform: str, query: str):
+        raise AssertionError("non-detail platforms must not trigger social detail fetch")
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-22T20:10:00+08:00",
+        search_provider=lambda query: [],
+        session_status={"weibo": "ok", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+        enabled_detail_platforms=("baidu", "weibo", "xiaohongshu", "bilibili", "juejin"),
+    )
+
+    assert any(row.platform == "zhihu" and row.source_method == "dailyhot_metadata" for row in evidence)
+    assert not any(row.platform == "weibo" for row in evidence)
+    assert not any(row.platform == "xiaohongshu" for row in evidence)
+
+
 if __name__ == "__main__":
     unittest.main()
