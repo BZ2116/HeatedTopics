@@ -92,7 +92,7 @@ def run_recent_detail_collection(
     detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
 ) -> dict[str, int]:
     if cache_store is None:
-        cache_store = CacheStore(refresh=refresh)
+        cache_store = CacheStore(root / "data/cache", refresh=refresh)
     total_steps = 8
     report_progress(progress, 1, total_steps, "校验采集窗口")
     collection_window_days(window)

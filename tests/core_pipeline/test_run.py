@@ -137,7 +137,7 @@ class RecentDetailRunTests(unittest.TestCase):
 
         result = run_recent_detail_collection(
             window="today",
-            routes=("weibo",),
+            routes=("xiaohongshu",),
             route_fetcher=lambda route: {"data": [{"title": "single session topic", "hot": "100", "url": "https://example.com/hot"}]},
             search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
             session_status={"weibo": "login_required", "xiaohongshu": "ok"},

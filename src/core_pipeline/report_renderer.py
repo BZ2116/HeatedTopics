@@ -1,4 +1,5 @@
 from src.core_pipeline.completeness import evaluate_required_details
+from src.core_pipeline.source_registry import REQUIRED_DETAIL_PLATFORMS
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -93,8 +94,7 @@ def render_recent_hot_topics_report(
                 lines.append(f"  {snippet}")
         else:
             lines.append("- 未采集到非空详情。")
-        detail_platforms = {"weibo", "baidu", "xiaohongshu", "bilibili", "juejin"}
-        topic_has_required_platform = any(record.platform in detail_platforms for record in records)
+        topic_has_required_platform = any(record.platform in REQUIRED_DETAIL_PLATFORMS for record in records)
         if topic_has_required_platform and required_status.missing_required_details:
             status_pairs = [
                 f"weibo={required_status.weibo}",

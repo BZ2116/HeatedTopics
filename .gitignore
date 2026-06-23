@@ -7,6 +7,10 @@ AGENTS.md
 data/browser_state/
 data/snapshots/
 data/screenshots/
+data/cache/
+data/evidence/
+data/raw/
+data/processed/*.json
 
 # DailyHotApi clone (run tools/run-demo.sh instead)
 tools/DailyHotApi/
@@ -19,3 +23,10 @@ data/*.json
 reports/daily_digest_demo.md
 reports/daily_digest_demo.html
 reports/hot_topic_cards.md
+reports/recent_hot_topics_digest.md
+
+# Local smoke-test and build artifacts
+tmp/
+dailyhot/
+detail/
+*.egg-info/

@@ -150,5 +150,42 @@ def test_collect_dailyhot_records_reuses_route_cache(tmp_path):
     assert records[0].title == "cached weibo topic"
 
 
+def test_collect_dailyhot_records_caches_final_baidu_fallback_records(tmp_path):
+    cache = CacheStore(tmp_path, now=lambda: __import__("datetime").datetime(2026, 6, 23, tzinfo=__import__("datetime").timezone.utc))
+    html = """
+    <div class="category-wrap_iQLoo">
+      <a class="img-wrapper_29V76" href="https://www.baidu.com/s?wd=fallback"></a>
+      <div class="hot-index_1Bl1a"> 9000 </div>
+      <div class="content_1YWBm">
+        <a href="https://www.baidu.com/s?wd=fallback" class="title_dIF3B">
+          <div class="c-single-text-ellipsis"> cached baidu fallback topic </div>
+        </a>
+        <div class="hot-desc_1m_jR large_nSuFU"> fallback summary </div>
+      </div>
+    </div>
+    """
+
+    first = collect_dailyhot_records(
+        routes=("baidu",),
+        captured_at="2026-06-23T08:00:00+08:00",
+        fetcher=lambda route: {"data": [{"url": "https://www.baidu.com/s?wd=undefined"}]},
+        baidu_html_fetcher=lambda: html,
+        cache_store=cache,
+        cache_window="today",
+    )
+    second = collect_dailyhot_records(
+        routes=("baidu",),
+        captured_at="2026-06-23T09:00:00+08:00",
+        fetcher=lambda route: (_ for _ in ()).throw(AssertionError("DailyHot fetch should use cache")),
+        baidu_html_fetcher=lambda: (_ for _ in ()).throw(AssertionError("Baidu fallback should use cache")),
+        cache_store=cache,
+        cache_window="today",
+    )
+
+    assert first[0].source == "baidu_top"
+    assert second[0].source == "baidu_top"
+    assert second[0].title == "cached baidu fallback topic"
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -156,15 +156,17 @@ def collect_dailyhot_records(
             cache_key = f"dailyhot:{route}:{cache_window}"
             cached_rows = cache_store.read(cache_key) if cache_store is not None else None
             if cached_rows is not None:
+                if all(isinstance(row, dict) and "record" in row for row in cached_rows):
+                    records.extend(HotRecord(**row["record"]) for row in cached_rows)
+                    continue
                 payload = {"data": [row.get("data", row) for row in cached_rows]}
             else:
                 payload = fetcher(route)
-                if cache_store is not None:
-                    rows = payload.get("data", []) if isinstance(payload, dict) else []
-                    cache_store.write(cache_key, [{"data": row} for row in rows], fetched_at=captured_at)
             route_records = normalize_dailyhot_response(route, payload, captured_at)
             if not _dailyhot_records_are_useful(route, route_records):
                 route_records = _collect_baidu_fallback(captured_at, baidu_html_fetcher)
+            if cache_store is not None and cached_rows is None:
+                cache_store.write(cache_key, [{"record": record.to_dict()} for record in route_records], fetched_at=captured_at)
             records.extend(route_records)
         except Exception as exc:
             if route == "baidu":

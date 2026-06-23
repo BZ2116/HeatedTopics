@@ -33,8 +33,8 @@ class DetailCollectorTests(unittest.TestCase):
         topic = {
             "topic_key": "某事件",
             "canonical_title": "某事件",
-            "hot_record_ids": ["hot_weibo_001"],
-            "records": [hot_record("hot_weibo_001", "weibo", "某事件")],
+            "hot_record_ids": ["hot_baidu_001"],
+            "records": [hot_record("hot_baidu_001", "baidu", "某事件")],
         }
 
         def search_provider(query: str):
@@ -57,8 +57,8 @@ class DetailCollectorTests(unittest.TestCase):
         topic = {
             "topic_key": "某事件",
             "canonical_title": "某事件",
-            "hot_record_ids": ["hot_weibo_001"],
-            "records": [hot_record("hot_weibo_001", "weibo", "某事件")],
+            "hot_record_ids": ["hot_baidu_001"],
+            "records": [hot_record("hot_baidu_001", "baidu", "某事件")],
         }
 
         evidence = collect_topic_details(
@@ -69,14 +69,14 @@ class DetailCollectorTests(unittest.TestCase):
         )
 
         self.assertTrue(any(row.fetch_status == "empty_content" for row in evidence if row.platform == "baidu"))
-        self.assertTrue(any(row.fetch_status == "login_required" for row in evidence if row.platform == "weibo"))
+        self.assertFalse(any(row.platform == "weibo" for row in evidence))
 
     def test_collect_topic_details_uses_source_url_when_search_has_no_detail(self):
         topic = {
             "topic_key": "某事件",
             "canonical_title": "某事件",
-            "hot_record_ids": ["hot_weibo_001"],
-            "records": [hot_record("hot_weibo_001", "weibo", "某事件")],
+            "hot_record_ids": ["hot_baidu_001"],
+            "records": [hot_record("hot_baidu_001", "baidu", "某事件")],
         }
 
         evidence = collect_topic_details(
@@ -96,8 +96,8 @@ class DetailCollectorTests(unittest.TestCase):
         topic = {
             "topic_key": "testhottopic",
             "canonical_title": "test hot topic",
-            "hot_record_ids": ["hot_weibo_001"],
-            "records": [hot_record("hot_weibo_001", "weibo", "test hot topic")],
+            "hot_record_ids": ["hot_baidu_001"],
+            "records": [hot_record("hot_baidu_001", "baidu", "test hot topic")],
         }
 
         evidence = collect_topic_details(
@@ -146,8 +146,11 @@ class DetailCollectorTests(unittest.TestCase):
         topic = {
             "topic_key": "realhotdetail",
             "canonical_title": "real hot detail",
-            "hot_record_ids": ["hot_weibo_001"],
-            "records": [hot_record("hot_weibo_001", "weibo", "real hot detail")],
+            "hot_record_ids": ["hot_weibo_001", "hot_xiaohongshu_001"],
+            "records": [
+                hot_record("hot_weibo_001", "weibo", "real hot detail"),
+                hot_record("hot_xiaohongshu_001", "xiaohongshu", "real hot detail"),
+            ],
         }
         calls = []
 
@@ -207,7 +210,7 @@ def test_collect_topic_details_reuses_detail_cache(tmp_path):
     cached = {
         "evidence_id": "evidence_baidu_hot_weibo_001",
         "topic_key": "cachedtopic",
-        "related_hot_record_ids": ["hot_weibo_001"],
+        "related_hot_record_ids": ["hot_baidu_001"],
         "platform": "baidu",
         "source_role": "required",
         "source_method": "search_results",
@@ -232,8 +235,8 @@ def test_collect_topic_details_reuses_detail_cache(tmp_path):
     topic = {
         "topic_key": "cachedtopic",
         "canonical_title": "cached topic",
-        "hot_record_ids": ["hot_weibo_001"],
-        "records": [hot_record("hot_weibo_001", "weibo", "cached topic")],
+        "hot_record_ids": ["hot_baidu_001"],
+        "records": [hot_record("hot_baidu_001", "baidu", "cached topic")],
     }
 
     evidence = collect_topic_details(
@@ -249,36 +252,10 @@ def test_collect_topic_details_reuses_detail_cache(tmp_path):
 
 def test_collect_topic_details_reuses_xiaohongshu_cache(tmp_path):
     cache = CacheStore(tmp_path, now=lambda: __import__("datetime").datetime(2026, 6, 23, tzinfo=__import__("datetime").timezone.utc))
-    # Pre-populate Baidu cache to prevent search_provider from being called
-    baidu_cached = {
-        "evidence_id": "evidence_baidu_hot_weibo_001",
-        "topic_key": "cachedtopic",
-        "related_hot_record_ids": ["hot_weibo_001"],
-        "platform": "baidu",
-        "source_role": "required",
-        "source_method": "search_results",
-        "query": "cached topic",
-        "url": "",
-        "title": "cached title",
-        "content": "cached detail body",
-        "author": "",
-        "published_at": "",
-        "metrics": {},
-        "comments_preview": [],
-        "result_urls": [],
-        "raw_snapshot_path": "",
-        "screenshot_path": "",
-        "fetched_at": "2026-06-23T00:00:00+00:00",
-        "fetch_status": "ok",
-        "error_type": None,
-        "confidence": "medium",
-        "raw_payload": {},
-    }
-    cache.write("detail:baidu:cachedtopic", baidu_cached, fetched_at="2026-06-23T00:00:00+00:00")
     xiaohongshu_cached = {
         "evidence_id": "evidence_xiaohongshu_topic_001",
         "topic_key": "cachedtopic",
-        "related_hot_record_ids": ["hot_weibo_001"],
+        "related_hot_record_ids": ["hot_xiaohongshu_001"],
         "platform": "xiaohongshu",
         "source_role": "required",
         "source_method": "social_detail",
@@ -303,8 +280,8 @@ def test_collect_topic_details_reuses_xiaohongshu_cache(tmp_path):
     topic = {
         "topic_key": "cachedtopic",
         "canonical_title": "cached topic",
-        "hot_record_ids": ["hot_weibo_001"],
-        "records": [hot_record("hot_weibo_001", "weibo", "cached topic")],
+        "hot_record_ids": ["hot_xiaohongshu_001"],
+        "records": [hot_record("hot_xiaohongshu_001", "xiaohongshu", "cached topic")],
     }
 
     def social_detail_fetcher(platform: str, query: str):
@@ -320,6 +297,78 @@ def test_collect_topic_details_reuses_xiaohongshu_cache(tmp_path):
     )
 
     assert any(row.platform == "xiaohongshu" and row.content == "cached xhs content" for row in evidence)
+
+
+def test_collect_topic_details_dispatches_only_platforms_present_in_topic():
+    topic = {
+        "topic_key": "weiboonlytopic",
+        "canonical_title": "weibo only topic",
+        "hot_record_ids": ["hot_weibo_001"],
+        "records": [hot_record("hot_weibo_001", "weibo", "weibo only topic")],
+    }
+    calls = []
+
+    def social_detail_fetcher(platform: str, query: str):
+        calls.append((platform, query))
+        return [{"content": f"{platform} detail body", "comments_preview": [], "url": f"https://example.com/{platform}"}]
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: (_ for _ in ()).throw(AssertionError("baidu search must not run for weibo-only topic")),
+        session_status={"weibo": "ok", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+    )
+
+    assert calls == [("weibo", "weibo only topic")]
+    assert {row.platform for row in evidence} == {"weibo"}
+
+
+def test_collect_topic_details_dispatches_baidu_only_for_baidu_topic():
+    topic = {
+        "topic_key": "baiduonlytopic",
+        "canonical_title": "baidu only topic",
+        "hot_record_ids": ["hot_baidu_001"],
+        "records": [hot_record("hot_baidu_001", "baidu", "baidu only topic")],
+    }
+
+    def social_detail_fetcher(platform: str, query: str):
+        raise AssertionError("social fetch must not run for baidu-only topic")
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: [{"title": "baidu title", "snippet": "baidu body", "url": "https://example.com/baidu"}],
+        session_status={"weibo": "ok", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+    )
+
+    assert {row.platform for row in evidence} == {"baidu"}
+    assert evidence[0].fetch_status == "ok"
+
+
+def test_collect_topic_details_dispatches_juejin_as_metadata_detail():
+    record = hot_record("hot_juejin_001", "juejin", "juejin article topic")
+    object.__setattr__(record, "desc", "juejin article summary")
+    topic = {
+        "topic_key": "juejinarticletopic",
+        "canonical_title": "juejin article topic",
+        "hot_record_ids": ["hot_juejin_001"],
+        "records": [record],
+    }
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: (_ for _ in ()).throw(AssertionError("baidu search must not run for juejin topic")),
+        session_status={"weibo": "ok", "xiaohongshu": "ok"},
+        social_detail_fetcher=lambda platform, query: (_ for _ in ()).throw(AssertionError("social fetch must not run for juejin topic")),
+    )
+
+    assert len(evidence) == 1
+    assert evidence[0].platform == "juejin"
+    assert evidence[0].source_method == "juejin_metadata"
+    assert "juejin article summary" in evidence[0].content
 
 
 if __name__ == "__main__":
