@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 from unittest.mock import patch
 
+from src.core_pipeline.cache_store import CacheStore
 from src.core_pipeline.run import output_paths, print_progress, rooted_output_paths
 from src.core_pipeline.run import run_recent_detail_collection
 
@@ -82,6 +83,85 @@ class RecentDetailRunTests(unittest.TestCase):
         self.assertIn((2, 8, "采集热榜：weibo"), events)
         self.assertTrue(any("去重生成话题" in message for _, _, message in events))
         self.assertTrue(any("写入 JSON / JSONL" in message for _, _, message in events))
+
+
+    def test_run_recent_detail_collection_defaults_to_all_registered_dailyhot_routes(self):
+        called_routes = []
+
+        def route_fetcher(route: str):
+            called_routes.append(route)
+            return {"data": []}
+
+        run_recent_detail_collection(
+            window="today",
+            route_fetcher=route_fetcher,
+            search_provider=lambda query: [],
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            page_fetcher=None,
+            now=lambda: "2026-06-22T20:00:00+08:00",
+        )
+
+        self.assertIn("weibo", called_routes)
+        self.assertIn("baidu", called_routes)
+        self.assertIn("zhihu", called_routes)
+        self.assertIn("sina-news", called_routes)
+        self.assertIn("github", called_routes)
+
+    def test_run_recent_detail_collection_continues_when_browser_sessions_are_missing(self):
+        events = []
+
+        with patch(
+            "src.core_pipeline.run.check_required_sessions",
+            return_value={"weibo": "login_required", "xiaohongshu": "login_required"},
+        ):
+            result = run_recent_detail_collection(
+                window="today",
+                route_fetcher=lambda route: {"data": [{"title": "partial session topic", "hot": "100", "url": "https://example.com/hot"}]},
+                search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
+                page_fetcher=None,
+                now=lambda: "2026-06-22T20:00:00+08:00",
+                progress=lambda current, total, message: events.append((current, total, message)),
+            )
+
+        self.assertGreater(result["topics_count"], 0)
+        self.assertEqual(result["missing_browser_sessions_count"], 2)
+        self.assertTrue(any("weibo" in message and "xiaohongshu" in message for _, _, message in events))
+
+    def test_run_recent_detail_collection_uses_available_single_browser_session(self):
+        calls = []
+
+        def social_detail_fetcher(platform: str, query: str):
+            calls.append((platform, query))
+            return [{"content": f"{platform} real detail", "comments_preview": [], "url": f"https://example.com/{platform}"}]
+
+        result = run_recent_detail_collection(
+            window="today",
+            routes=("weibo",),
+            route_fetcher=lambda route: {"data": [{"title": "single session topic", "hot": "100", "url": "https://example.com/hot"}]},
+            search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
+            session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+            social_detail_fetcher=social_detail_fetcher,
+            page_fetcher=None,
+            now=lambda: "2026-06-22T20:00:00+08:00",
+        )
+
+        self.assertEqual(result["missing_browser_sessions_count"], 1)
+        self.assertEqual(calls, [("xiaohongshu", "single session topic")])
+
+    def test_run_recent_detail_collection_passes_cache_to_dailyhot_and_details(self):
+        cache = CacheStore(tmp_path := Path(tempfile.mkdtemp()))
+        result = run_recent_detail_collection(
+            window="today",
+            root=tmp_path,
+            routes=("weibo",),
+            route_fetcher=lambda route: {"data": [{"title": "cache wire topic", "hot": "100"}]},
+            search_provider=lambda query: [{"title": "detail", "snippet": "body", "url": "https://example.com"}],
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            cache_store=cache,
+            now=lambda: "2026-06-23T08:00:00+08:00",
+        )
+
+        assert result["topics_count"] == 1
 
 
 if __name__ == "__main__":
