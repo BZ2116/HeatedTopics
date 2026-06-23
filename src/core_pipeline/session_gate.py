@@ -25,3 +25,14 @@ def check_required_sessions(browser_state_dir: str | Path = "data/browser_state"
         platform: "ok" if _state_file_has_cookies(root / file_name) else "login_required"
         for platform, file_name in REQUIRED_SESSION_FILES.items()
     }
+
+
+def summarize_session_status(status: dict[str, str]) -> dict[str, object]:
+    ok = [platform for platform, value in status.items() if value == "ok"]
+    missing = [platform for platform, value in status.items() if value != "ok"]
+    commands = [f"uv run python -m src.browser.session_manager login {platform}" for platform in missing]
+    return {
+        "ok": ok,
+        "missing": missing,
+        "login_commands": commands,
+    }

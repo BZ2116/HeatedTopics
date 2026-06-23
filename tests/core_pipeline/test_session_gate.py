@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.core_pipeline.session_gate import check_required_sessions
+from src.core_pipeline.session_gate import check_required_sessions, summarize_session_status
 
 
 class SessionGateTests(unittest.TestCase):
@@ -23,6 +23,27 @@ class SessionGateTests(unittest.TestCase):
 
             self.assertEqual(result["weibo"], "ok")
             self.assertEqual(result["xiaohongshu"], "ok")
+
+    def test_summarize_session_status_lists_missing_platforms(self):
+        summary = summarize_session_status({"weibo": "login_required", "xiaohongshu": "ok"})
+
+        assert summary["ok"] == ["xiaohongshu"]
+        assert summary["missing"] == ["weibo"]
+        assert "uv run python -m src.browser.session_manager login weibo" in summary["login_commands"]
+
+    def test_summarize_session_status_handles_all_ok(self):
+        summary = summarize_session_status({"weibo": "ok", "xiaohongshu": "ok"})
+
+        assert summary["ok"] == ["weibo", "xiaohongshu"]
+        assert summary["missing"] == []
+        assert summary["login_commands"] == []
+
+    def test_summarize_session_status_handles_empty(self):
+        summary = summarize_session_status({})
+
+        assert summary["ok"] == []
+        assert summary["missing"] == []
+        assert summary["login_commands"] == []
 
 
 if __name__ == "__main__":
