@@ -27,7 +27,7 @@ def check_required_sessions(browser_state_dir: str | Path = "data/browser_state"
     }
 
 
-def summarize_session_status(status: dict[str, str]) -> dict[str, object]:
+def summarize_session_status(status: dict[str, str]) -> dict[str, list[str]]:
     ok = [platform for platform, value in status.items() if value == "ok"]
     missing = [platform for platform, value in status.items() if value != "ok"]
     commands = [f"uv run python -m src.browser.session_manager login {platform}" for platform in missing]

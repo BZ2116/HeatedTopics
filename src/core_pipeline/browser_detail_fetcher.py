@@ -6,6 +6,8 @@ from src.core_pipeline.providers.weibo import extract_weibo_posts_from_text
 from src.core_pipeline.providers.xiaohongshu import extract_xiaohongshu_notes_from_text
 
 
+DEFAULT_SETTLE_DELAY_MS = 2500
+
 SEARCH_URLS = {
     "weibo": "https://s.weibo.com/weibo?q={query}",
     "xiaohongshu": "https://www.xiaohongshu.com/search_result?keyword={query}",
@@ -28,8 +30,10 @@ def fetch_social_details_with_browser(
     query: str,
     browser_state_dir: str | Path = "data/browser_state",
     timeout_ms: int = 20000,
-    settle_delay_ms: int = 2500,
+    settle_delay_ms: int = DEFAULT_SETTLE_DELAY_MS,
 ) -> list[dict[str, object]]:
+    if settle_delay_ms < 0:
+        raise ValueError("settle_delay_ms must be non-negative")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -100,3 +104,4 @@ def _extract_dom_rows(page, platform: str) -> list[dict[str, object]]:
         if rows:
             return rows[:5]
     return []
+
