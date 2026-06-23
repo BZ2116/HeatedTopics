@@ -1,7 +1,9 @@
 import argparse
 import urllib.request
+from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any
 
 from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_dailyhot_route
 from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
@@ -49,23 +51,42 @@ def rooted_output_paths(root: Path) -> dict[str, Path]:
     }
 
 
+ProgressReporter = Callable[[int, int, str], None]
+
+
+def report_progress(progress: ProgressReporter | None, current: int, total: int, message: str) -> None:
+    if progress is not None:
+        progress(current, total, message)
+
+
+def print_progress(current: int, total: int, message: str) -> None:
+    print(f"[{current}/{total}] {message}")
+
+
 def run_recent_detail_collection(
     window: str,
     root: Path = Path("."),
     routes: tuple[str, ...] = PRIMARY_HOT_ROUTES,
-    route_fetcher=None,
+    route_fetcher: Callable[[str], dict[str, Any]] | None = None,
     search_provider=default_search_provider,
     page_fetcher=fetch_url_text,
     session_status: dict[str, str] | None = None,
     now=now_shanghai_iso,
+    progress: ProgressReporter | None = None,
 ) -> dict[str, int]:
+    total_steps = 8
+    report_progress(progress, 1, total_steps, "校验采集窗口")
     collection_window_days(window)
     captured_at = now()
     if route_fetcher is None:
         route_fetcher = lambda route: fetch_dailyhot_route("https://dailyhotapi.now.sh", route)
+    report_progress(progress, 2, total_steps, f"采集热榜：{', '.join(routes)}")
     records = collect_dailyhot_records(routes=routes, captured_at=captured_at, fetcher=route_fetcher)
+    report_progress(progress, 3, total_steps, f"去重生成话题：{len(records)} 条热榜记录")
     topics = deduplicate_hot_records([record for record in records if record.fetch_status == "ok"])
+    report_progress(progress, 4, total_steps, "检查登录态")
     status = session_status if session_status is not None else check_required_sessions()
+    report_progress(progress, 5, total_steps, f"采集详情证据：{len(topics)} 个话题")
     evidence_rows = collect_topic_details(
         topics=topics,
         fetched_at=captured_at,
@@ -73,6 +94,7 @@ def run_recent_detail_collection(
         session_status=status,
         page_fetcher=page_fetcher,
     )
+    report_progress(progress, 6, total_steps, "写入 JSON / JSONL")
     paths = rooted_output_paths(root)
     write_json_list(paths["hot_records"], [record.to_dict() for record in records])
     serializable_topics = [
@@ -88,6 +110,7 @@ def run_recent_detail_collection(
     write_json_list(paths["topic_clusters"], serializable_topics)
     write_json_list(paths["detail_evidence"], [row.to_dict() for row in evidence_rows])
     write_jsonl(paths["raw_detail_evidence"], [row.to_dict() for row in evidence_rows])
+    report_progress(progress, 7, total_steps, "生成 Markdown 报告")
     report = render_recent_hot_topics_report(
         topics=topics,
         evidence_rows=evidence_rows,
@@ -96,6 +119,12 @@ def run_recent_detail_collection(
     )
     paths["recent_markdown_report"].parent.mkdir(parents=True, exist_ok=True)
     paths["recent_markdown_report"].write_text(report, encoding="utf-8")
+    report_progress(
+        progress,
+        8,
+        total_steps,
+        f"完成：{len(records)} 条热榜记录，{len(topics)} 个话题，{len(evidence_rows)} 条详情证据",
+    )
     return {
         "hot_records_count": len(records),
         "topics_count": len(topics),
@@ -146,7 +175,7 @@ def main() -> None:
     if args.command == "collect-core-details":
         collect_core_details_command()
     if args.command == "collect-recent-details":
-        run_recent_detail_collection(window=args.window)
+        run_recent_detail_collection(window=args.window, progress=print_progress)
 
 
 if __name__ == "__main__":
