@@ -99,6 +99,7 @@ class RecentDetailRunTests(unittest.TestCase):
             session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
             page_fetcher=None,
             now=lambda: "2026-06-22T20:00:00+08:00",
+            cache_store=CacheStore(Path(tempfile.mkdtemp()), refresh=True),
         )
 
         self.assertIn("weibo", called_routes)
@@ -143,6 +144,7 @@ class RecentDetailRunTests(unittest.TestCase):
             social_detail_fetcher=social_detail_fetcher,
             page_fetcher=None,
             now=lambda: "2026-06-22T20:00:00+08:00",
+            cache_store=CacheStore(Path(tempfile.mkdtemp()), refresh=True),
         )
 
         self.assertEqual(result["missing_browser_sessions_count"], 1)
