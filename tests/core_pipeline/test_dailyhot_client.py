@@ -1,5 +1,8 @@
 import unittest
 
+import pytest
+
+from src.core_pipeline.cache_store import CacheStore
 from src.core_pipeline.dailyhot_client import collect_dailyhot_records, normalize_dailyhot_response, parse_baidu_top_html
 
 
@@ -124,6 +127,27 @@ class DailyHotCollectionTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].source, "baidu_top")
         self.assertEqual(records[0].title, "百度兜底热点")
+
+
+def test_collect_dailyhot_records_reuses_route_cache(tmp_path):
+    cache = CacheStore(tmp_path, now=lambda: __import__("datetime").datetime(2026, 6, 23, tzinfo=__import__("datetime").timezone.utc))
+    cache.write(
+        "dailyhot:weibo:today",
+        [{"data": {"title": "cached weibo topic", "hot": "100"}}],
+        fetched_at="2026-06-23T00:00:00+00:00",
+    )
+    calls = []
+
+    records = collect_dailyhot_records(
+        routes=("weibo",),
+        captured_at="2026-06-23T08:00:00+08:00",
+        fetcher=lambda route: calls.append(route) or {"data": [{"title": "fresh topic"}]},
+        cache_store=cache,
+        cache_window="today",
+    )
+
+    assert calls == []
+    assert records[0].title == "cached weibo topic"
 
 
 if __name__ == "__main__":
