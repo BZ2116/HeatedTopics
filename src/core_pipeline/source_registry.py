@@ -65,3 +65,18 @@ def route_role(route: str) -> str:
         if route in routes:
             return group_name
     return "unknown"
+
+
+DETAIL_ENABLED_PLATFORMS = ("weibo", "baidu", "xiaohongshu", "bilibili", "juejin")
+
+DETAIL_PLATFORM_LIMITS = {
+    "weibo": 20,
+    "xiaohongshu": 20,
+    "baidu": 80,
+    "bilibili": 80,
+    "juejin": 30,
+}
+
+
+def platform_detail_enabled(platform: str, enabled_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS) -> bool:
+    return platform in enabled_platforms

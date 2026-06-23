@@ -6,6 +6,9 @@ from src.core_pipeline.source_registry import (
     FAILED_DEFAULT_ROUTES,
     PRIMARY_HOT_ROUTES,
     REQUIRED_DETAIL_PLATFORMS,
+    DETAIL_ENABLED_PLATFORMS,
+    DETAIL_PLATFORM_LIMITS,
+    platform_detail_enabled,
     route_role,
 )
 
@@ -32,6 +35,23 @@ class SourceRegistryTests(unittest.TestCase):
     def test_route_role_returns_auxiliary_for_news(self):
         self.assertEqual(route_role("sina-news"), "auxiliary_news")
         self.assertEqual(route_role("unknown-route"), "unknown")
+
+    def test_detail_enabled_platforms_are_limited_to_expensive_sources(self):
+        assert DETAIL_ENABLED_PLATFORMS == ("weibo", "baidu", "xiaohongshu", "bilibili", "juejin")
+
+    def test_platform_detail_enabled_uses_allowlist(self):
+        assert platform_detail_enabled("weibo") is True
+        assert platform_detail_enabled("baidu") is True
+        assert platform_detail_enabled("xiaohongshu") is True
+        assert platform_detail_enabled("bilibili") is True
+        assert platform_detail_enabled("juejin") is True
+        assert platform_detail_enabled("zhihu") is False
+        assert platform_detail_enabled("github") is False
+
+    def test_detail_platform_limits_are_conservative(self):
+        assert DETAIL_PLATFORM_LIMITS["weibo"] <= 20
+        assert DETAIL_PLATFORM_LIMITS["xiaohongshu"] <= 20
+        assert DETAIL_PLATFORM_LIMITS["baidu"] <= 80
 
 
 if __name__ == "__main__":
