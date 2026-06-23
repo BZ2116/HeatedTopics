@@ -1,8 +1,11 @@
 REQUIRED_DETAIL_PLATFORMS = ("weibo", "xiaohongshu", "baidu")
 
+PRIMARY_HOT_ROUTES = ("weibo", "xiaohongshu", "baidu")
+
 DAILYHOT_ROUTE_GROUPS = {
     "core_discovery": (
         "weibo",
+        "xiaohongshu",
         "baidu",
         "zhihu",
         "toutiao",

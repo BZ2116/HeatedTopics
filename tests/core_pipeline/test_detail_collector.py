@@ -109,6 +109,37 @@ class DetailCollectorTests(unittest.TestCase):
 
         self.assertEqual({row.topic_key for row in evidence}, {"testhottopic"})
 
+    def test_collect_topic_details_uses_video_metadata_for_bilibili_without_fetching_page(self):
+        record = hot_record("hot_bilibili_001", "bilibili", "视频标题")
+        object.__setattr__(record, "url", "https://www.bilibili.com/video/BV123")
+        object.__setattr__(record, "desc", "视频简介内容")
+        object.__setattr__(record, "raw_payload", {"title": "视频标题", "desc": "视频简介内容", "url": record.url})
+        topic = {
+            "topic_key": "视频标题",
+            "canonical_title": "视频标题",
+            "hot_record_ids": ["hot_bilibili_001"],
+            "records": [record],
+        }
+
+        def page_fetcher(url: str) -> str:
+            raise AssertionError("Bilibili video detail should use metadata instead of fetching noisy page HTML")
+
+        evidence = collect_topic_details(
+            topics=[topic],
+            fetched_at="2026-06-22T20:10:00+08:00",
+            search_provider=lambda query: [],
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            page_fetcher=page_fetcher,
+        )
+
+        video_rows = [row for row in evidence if row.platform == "bilibili" and row.source_method == "video_metadata"]
+        self.assertEqual(video_rows[0].fetch_status, "ok")
+        self.assertIn("视频标题", video_rows[0].content)
+        self.assertIn("视频简介内容", video_rows[0].content)
+        self.assertIn("https://www.bilibili.com/video/BV123", video_rows[0].content)
+        self.assertNotIn("\ufffd", video_rows[0].content)
+        self.assertEqual(video_rows[0].raw_payload["record"]["title"], "视频标题")
+
 
 if __name__ == "__main__":
     unittest.main()

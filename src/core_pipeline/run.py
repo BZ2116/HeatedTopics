@@ -5,14 +5,14 @@ from pathlib import Path
 
 from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_dailyhot_route
 from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
-from src.core_pipeline.json_store import read_json_list, write_json_list
+from src.core_pipeline.json_store import read_json_list, write_json_list, write_jsonl
 from src.core_pipeline.providers.baidu import collect_baidu_detail
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
 from src.core_pipeline.recent_topics import collection_window_days, deduplicate_hot_records
 from src.core_pipeline.report_renderer import render_markdown_report, render_recent_hot_topics_report
 from src.core_pipeline.session_gate import check_required_sessions
-from src.core_pipeline.source_registry import ALL_DAILYHOT_ROUTES
+from src.core_pipeline.source_registry import PRIMARY_HOT_ROUTES
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -24,6 +24,7 @@ def output_paths() -> dict[str, Path]:
     return {
         "hot_records": Path("data/raw/dailyhot_records.json"),
         "detail_evidence": Path("data/evidence/detail_evidence.json"),
+        "raw_detail_evidence": Path("data/evidence/detail_evidence_raw.jsonl"),
         "topic_clusters": Path("data/processed/topic_clusters.json"),
         "topic_briefs": Path("data/processed/topic_briefs.json"),
         "markdown_report": Path("reports/core_platform_topic_digest.md"),
@@ -51,7 +52,7 @@ def rooted_output_paths(root: Path) -> dict[str, Path]:
 def run_recent_detail_collection(
     window: str,
     root: Path = Path("."),
-    routes: tuple[str, ...] = ALL_DAILYHOT_ROUTES,
+    routes: tuple[str, ...] = PRIMARY_HOT_ROUTES,
     route_fetcher=None,
     search_provider=default_search_provider,
     page_fetcher=fetch_url_text,
@@ -86,6 +87,7 @@ def run_recent_detail_collection(
     ]
     write_json_list(paths["topic_clusters"], serializable_topics)
     write_json_list(paths["detail_evidence"], [row.to_dict() for row in evidence_rows])
+    write_jsonl(paths["raw_detail_evidence"], [row.to_dict() for row in evidence_rows])
     report = render_recent_hot_topics_report(
         topics=topics,
         evidence_rows=evidence_rows,
@@ -129,6 +131,7 @@ def collect_core_details_command() -> None:
 
     paths["detail_evidence"].parent.mkdir(parents=True, exist_ok=True)
     write_json_list(paths["detail_evidence"], [ev.to_dict() for ev in evidence_list])
+    write_jsonl(paths["raw_detail_evidence"], [ev.to_dict() for ev in evidence_list])
 
 
 def main() -> None:

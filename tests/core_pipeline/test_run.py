@@ -1,6 +1,9 @@
 import unittest
+from pathlib import Path
+import tempfile
 
-from src.core_pipeline.run import output_paths
+from src.core_pipeline.run import output_paths, rooted_output_paths
+from src.core_pipeline.run import run_recent_detail_collection
 
 
 class RunTests(unittest.TestCase):
@@ -11,12 +14,12 @@ class RunTests(unittest.TestCase):
         self.assertEqual(paths["detail_evidence"].as_posix(), "data/evidence/detail_evidence.json")
         self.assertEqual(paths["topic_briefs"].as_posix(), "data/processed/topic_briefs.json")
         self.assertEqual(paths["markdown_report"].as_posix(), "reports/core_platform_topic_digest.md")
+        self.assertEqual(paths["raw_detail_evidence"].as_posix(), "data/evidence/detail_evidence_raw.jsonl")
 
+    def test_rooted_output_paths_include_raw_jsonl(self):
+        paths = rooted_output_paths(Path("tmp-root"))
 
-from pathlib import Path
-import tempfile
-
-from src.core_pipeline.run import run_recent_detail_collection
+        self.assertEqual(paths["raw_detail_evidence"].as_posix(), "tmp-root/data/evidence/detail_evidence_raw.jsonl")
 
 
 class RecentDetailRunTests(unittest.TestCase):
@@ -43,6 +46,7 @@ class RecentDetailRunTests(unittest.TestCase):
             self.assertEqual(result["topics_count"], 1)
             self.assertTrue((root / "data/raw/dailyhot_records.json").exists())
             self.assertTrue((root / "data/evidence/detail_evidence.json").exists())
+            self.assertTrue((root / "data/evidence/detail_evidence_raw.jsonl").exists())
             self.assertTrue((root / "reports/recent_hot_topics_digest.md").exists())
 
 

@@ -52,7 +52,47 @@ def source_page_evidence(
         fetch_status=status,
         error_type=None if status == "ok" else status,
         confidence="medium" if status == "ok" else "low",
-        raw_payload={"source_url": record.url},
+        raw_payload={"source_url": record.url, "raw_page_text": page_text, "record": record.to_dict()},
+    )
+
+
+def video_metadata_evidence(
+    record: HotRecord,
+    fetched_at: str,
+    related_hot_record_ids: list[str],
+    topic_key: str | None = None,
+) -> DetailEvidence:
+    link = record.url or record.mobile_url
+    content_parts = [
+        f"视频标题：{record.title}",
+        f"视频简介：{record.desc}" if record.desc else "",
+        f"视频链接：{link}" if link else "",
+    ]
+    content = "\n".join(part for part in content_parts if part).strip()
+    status = "ok" if content else "empty_content"
+    return DetailEvidence(
+        evidence_id=f"evidence_video_{record.id}",
+        topic_key=topic_key or record.title,
+        related_hot_record_ids=related_hot_record_ids,
+        platform=record.platform,
+        source_role="required",
+        source_method="video_metadata",
+        query=record.title,
+        url=link,
+        title=f"{record.platform} 视频详情：{record.title}",
+        content=content,
+        author=record.author,
+        published_at=record.timestamp,
+        metrics={"rank": record.rank, "hot_value": record.hot_value},
+        comments_preview=[],
+        result_urls=[link] if link else [],
+        raw_snapshot_path="",
+        screenshot_path="",
+        fetched_at=fetched_at,
+        fetch_status=status,
+        error_type=None if status == "ok" else status,
+        confidence="medium" if status == "ok" else "low",
+        raw_payload={"record": record.to_dict()},
     )
 
 
@@ -117,10 +157,13 @@ def collect_topic_details(
         object.__setattr__(baidu_evidence, "related_hot_record_ids", related_ids)
         evidence_rows.append(baidu_evidence)
         if baidu_evidence.fetch_status != "ok" and representative.url and page_fetcher is not None:
-            try:
-                evidence_rows.append(source_page_evidence(representative, fetched_at, related_ids, page_fetcher(representative.url), topic_key))
-            except Exception as exc:
-                evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
+            if representative.platform == "bilibili":
+                evidence_rows.append(video_metadata_evidence(representative, fetched_at, related_ids, topic_key))
+            else:
+                try:
+                    evidence_rows.append(source_page_evidence(representative, fetched_at, related_ids, page_fetcher(representative.url), topic_key))
+                except Exception as exc:
+                    evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
         weibo_evidence = collect_weibo_detail(
             representative,
             fetched_at,

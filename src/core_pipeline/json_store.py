@@ -20,3 +20,12 @@ def write_json_list(path: str | Path, rows: list[dict[str, Any]]) -> None:
     with file_path.open("w", encoding="utf-8") as f:
         json.dump(rows, f, ensure_ascii=False, indent=2, sort_keys=True)
         f.write("\n")
+
+
+def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with file_path.open("w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
+            f.write("\n")

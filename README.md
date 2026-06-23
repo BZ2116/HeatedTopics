@@ -34,15 +34,26 @@ DailyHotApi 热榜采集
   -> 详情证据采集
      -> baidu 搜索详情接口
      -> source_url 原始页面详情兜底
+     -> bilibili 视频元信息兜底
      -> weibo 登录态详情接口
      -> xiaohongshu 登录态详情接口
-  -> DetailEvidence 落盘
+  -> DetailEvidence JSON / JSONL 落盘
   -> Markdown 报告渲染
 ```
 
 ### 1. 热榜采集
 
 `src/core_pipeline/dailyhot_client.py` 负责从 DailyHotApi 路由获取热榜数据，并归一化为 `HotRecord`。
+
+默认采集路由优先聚焦核心平台：
+
+- `weibo`
+- `xiaohongshu`
+- `baidu`
+
+其中 `baidu` 会优先尝试 DailyHotApi；如果接口返回空列表、异常或 `undefined` 这类不可用记录，会自动兜底读取 `https://top.baidu.com/board?tab=realtime`，解析标题、摘要、链接、热搜指数，并把原始 HTML 片段保存在 `HotRecord.raw_payload`。
+
+其他平台仍可通过代码调用 `run_recent_detail_collection(..., routes=(...))` 显式传入。
 
 `HotRecord` 只表示“这个话题在某个平台热榜上出现过”，包含：
 
@@ -74,6 +85,7 @@ DailyHotApi 热榜采集
 
 - `baidu`：通过搜索结果接口生成详情证据。
 - `source_url`：当搜索结果为空时，直接读取热榜记录自带的原始 URL，并从页面中提取文本作为详情兜底。
+- `bilibili`：视频类内容不再抓整页噪声文本，改为保存视频标题、简介和链接。
 - `weibo`：通过登录态接口记录微博详情状态。
 - `xiaohongshu`：通过登录态接口记录小红书详情状态。
 
@@ -90,9 +102,11 @@ DailyHotApi 热榜采集
 - 采集时间
 - `fetch_status`
 - `error_type`
-- 原始载荷
+- 原始载荷和原始页面文本
 
 当前命令行默认的搜索 provider 是空实现，因此百度搜索详情可能显示为 `empty_content`。不过主流程会继续尝试读取热榜记录自带的原始 URL，并以 `source_method = source_url` 保存页面文本。真实搜索结果接入点仍然预留在 `run_recent_detail_collection(..., search_provider=...)`，后续可以接入百度搜索 API、网页搜索服务或自建搜索 provider。
+
+Bilibili 视频页会使用 `source_method = video_metadata` 保存标题、简介和链接，避免整页抓取时出现乱码或大量脚本噪声。
 
 ### 4. 报告输出
 
@@ -190,6 +204,7 @@ cat reports/recent_hot_topics_digest.md
 | `data/raw/dailyhot_records.json` | DailyHotApi 热榜记录，保存标准化后的 `HotRecord` |
 | `data/processed/topic_clusters.json` | 基础去重后的话题列表 |
 | `data/evidence/detail_evidence.json` | 各平台详情证据，保存 `DetailEvidence` |
+| `data/evidence/detail_evidence_raw.jsonl` | 每行一条详情证据，保留 raw payload 和原始页面文本，方便后续流式筛选 |
 | `data/processed/topic_briefs.json` | 旧版摘要流程使用的话题摘要文件 |
 | `reports/recent_hot_topics_digest.md` | 当前第一版的近期热点详情报告 |
 | `reports/core_platform_topic_digest.md` | 旧版核心平台报告渲染输出 |
@@ -229,6 +244,8 @@ python -m src.browser.session_manager login xiaohongshu
 ## 当前限制
 
 - 默认 CLI 已串起近期热点收集、去重、详情证据写入和报告输出；搜索 provider 仍需接入，但原始 URL 页面读取已经作为详情兜底。
+- 默认热点路由聚焦 `weibo`、`xiaohongshu`、`baidu`；其中百度带有官方热榜页兜底采集，微博和小红书如果 DailyHotApi 当前不支持，会在热榜记录中保留失败状态。
+- Bilibili 详情使用视频元信息，不抓整页 HTML 内容。
 - `today` 和 `last_7_days` 当前共享同一套执行流程；近 7 天窗口需要结合已有缓存或后续的历史采集任务才能体现完整历史聚合。
 - 微博和小红书详情采集依赖本地登录态，且不绕过平台风控。
 - 当前版本不做事实核查、可信度评分、时间线生成或观点分析。
