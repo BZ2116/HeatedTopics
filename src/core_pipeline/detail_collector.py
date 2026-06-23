@@ -3,6 +3,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from src.core_pipeline.cache_store import CacheStore
 from src.core_pipeline.providers.baidu import collect_baidu_detail, detail_queries_for_title
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
@@ -172,6 +173,25 @@ def dailyhot_metadata_evidence(
     )
 
 
+def _detail_cache_key(platform: str, topic_key: str) -> str:
+    return f"detail:{platform}:{topic_key}"
+
+
+def _read_detail_cache(cache_store: CacheStore | None, platform: str, topic_key: str) -> DetailEvidence | None:
+    if cache_store is None:
+        return None
+    row = cache_store.read(_detail_cache_key(platform, topic_key))
+    if row is None:
+        return None
+    return DetailEvidence(**row)
+
+
+def _write_detail_cache(cache_store: CacheStore | None, evidence: DetailEvidence) -> None:
+    if cache_store is None:
+        return
+    cache_store.write(_detail_cache_key(evidence.platform, evidence.topic_key), evidence.to_dict(), fetched_at=evidence.fetched_at)
+
+
 def collect_topic_details(
     topics: list[dict[str, Any]],
     fetched_at: str,
@@ -180,6 +200,7 @@ def collect_topic_details(
     page_fetcher: PageFetcher | None = None,
     social_detail_fetcher: SocialDetailFetcher | None = None,
     enabled_detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
+    cache_store: CacheStore | None = None,
 ) -> list[DetailEvidence]:
     evidence_rows: list[DetailEvidence] = []
     for topic in topics:
@@ -194,36 +215,57 @@ def collect_topic_details(
             for record in records:
                 evidence_rows.append(dailyhot_metadata_evidence(record, fetched_at, related_ids, topic_key))
             continue
-        query_results: list[dict[str, str]] = []
-        used_query = representative.title
-        for query in detail_queries_for_title(representative.title):
-            results = search_provider(query)
-            if results:
-                query_results = results
-                used_query = query
-                break
-        baidu_evidence = collect_baidu_detail(representative, fetched_at, query_results)
-        object.__setattr__(baidu_evidence, "topic_key", topic_key)
-        object.__setattr__(baidu_evidence, "related_hot_record_ids", related_ids)
-        evidence_rows.append(baidu_evidence)
-        if baidu_evidence.fetch_status != "ok" and representative.url and page_fetcher is not None:
-            if representative.platform == "bilibili":
-                evidence_rows.append(video_metadata_evidence(representative, fetched_at, related_ids, topic_key))
-            else:
-                try:
-                    evidence_rows.append(source_page_evidence(representative, fetched_at, related_ids, page_fetcher(representative.url), topic_key))
-                except Exception as exc:
-                    evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
+        cached_baidu = _read_detail_cache(cache_store, "baidu", topic_key)
+        if cached_baidu is not None:
+            evidence_rows.append(cached_baidu)
+        else:
+            query_results: list[dict[str, str]] = []
+            used_query = representative.title
+            for query in detail_queries_for_title(representative.title):
+                results = search_provider(query)
+                if results:
+                    query_results = results
+                    used_query = query
+                    break
+            baidu_evidence = collect_baidu_detail(representative, fetched_at, query_results)
+            object.__setattr__(baidu_evidence, "topic_key", topic_key)
+            object.__setattr__(baidu_evidence, "related_hot_record_ids", related_ids)
+            evidence_rows.append(baidu_evidence)
+            _write_detail_cache(cache_store, baidu_evidence)
+            if baidu_evidence.fetch_status != "ok" and representative.url and page_fetcher is not None:
+                if representative.platform == "bilibili":
+                    cached_bilibili = _read_detail_cache(cache_store, "bilibili", topic_key)
+                    if cached_bilibili is not None:
+                        evidence_rows.append(cached_bilibili)
+                    else:
+                        bilibili_evidence = video_metadata_evidence(representative, fetched_at, related_ids, topic_key)
+                        evidence_rows.append(bilibili_evidence)
+                        _write_detail_cache(cache_store, bilibili_evidence)
+                else:
+                    try:
+                        evidence_rows.append(source_page_evidence(representative, fetched_at, related_ids, page_fetcher(representative.url), topic_key))
+                    except Exception as exc:
+                        evidence_rows.append(failed_source_page_evidence(representative, fetched_at, related_ids, type(exc).__name__, topic_key))
         weibo_status = session_status.get("weibo", "login_required")
         weibo_posts = _fetch_social_rows("weibo", representative.title, weibo_status, social_detail_fetcher)
-        weibo_evidence = collect_weibo_detail(representative, fetched_at, weibo_status, weibo_posts)
-        object.__setattr__(weibo_evidence, "topic_key", topic_key)
-        evidence_rows.append(weibo_evidence)
+        cached_weibo = _read_detail_cache(cache_store, "weibo", topic_key)
+        if cached_weibo is not None:
+            evidence_rows.append(cached_weibo)
+        else:
+            weibo_evidence = collect_weibo_detail(representative, fetched_at, weibo_status, weibo_posts)
+            object.__setattr__(weibo_evidence, "topic_key", topic_key)
+            evidence_rows.append(weibo_evidence)
+            _write_detail_cache(cache_store, weibo_evidence)
         xiaohongshu_status = session_status.get("xiaohongshu", "login_required")
         xiaohongshu_notes = _fetch_social_rows("xiaohongshu", representative.title, xiaohongshu_status, social_detail_fetcher)
-        xiaohongshu_evidence = collect_xiaohongshu_detail(representative, fetched_at, xiaohongshu_status, xiaohongshu_notes)
-        object.__setattr__(xiaohongshu_evidence, "topic_key", topic_key)
-        evidence_rows.append(xiaohongshu_evidence)
+        cached_xiaohongshu = _read_detail_cache(cache_store, "xiaohongshu", topic_key)
+        if cached_xiaohongshu is not None:
+            evidence_rows.append(cached_xiaohongshu)
+        else:
+            xiaohongshu_evidence = collect_xiaohongshu_detail(representative, fetched_at, xiaohongshu_status, xiaohongshu_notes)
+            object.__setattr__(xiaohongshu_evidence, "topic_key", topic_key)
+            evidence_rows.append(xiaohongshu_evidence)
+            _write_detail_cache(cache_store, xiaohongshu_evidence)
     return evidence_rows
 
 

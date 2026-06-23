@@ -1,5 +1,6 @@
 import unittest
 
+from src.core_pipeline.cache_store import CacheStore
 from src.core_pipeline.detail_collector import collect_topic_details
 from src.core_pipeline.types import HotRecord
 
@@ -199,6 +200,51 @@ def test_collect_topic_details_skips_social_fetch_for_non_detail_platform():
     assert any(row.platform == "zhihu" and row.source_method == "dailyhot_metadata" for row in evidence)
     assert not any(row.platform == "weibo" for row in evidence)
     assert not any(row.platform == "xiaohongshu" for row in evidence)
+
+
+def test_collect_topic_details_reuses_detail_cache(tmp_path):
+    cache = CacheStore(tmp_path, now=lambda: __import__("datetime").datetime(2026, 6, 23, tzinfo=__import__("datetime").timezone.utc))
+    cached = {
+        "evidence_id": "evidence_baidu_hot_weibo_001",
+        "topic_key": "cachedtopic",
+        "related_hot_record_ids": ["hot_weibo_001"],
+        "platform": "baidu",
+        "source_role": "required",
+        "source_method": "search_results",
+        "query": "cached topic",
+        "url": "",
+        "title": "cached title",
+        "content": "cached detail body",
+        "author": "",
+        "published_at": "",
+        "metrics": {},
+        "comments_preview": [],
+        "result_urls": [],
+        "raw_snapshot_path": "",
+        "screenshot_path": "",
+        "fetched_at": "2026-06-23T00:00:00+00:00",
+        "fetch_status": "ok",
+        "error_type": None,
+        "confidence": "medium",
+        "raw_payload": {},
+    }
+    cache.write("detail:baidu:cachedtopic", cached, fetched_at="2026-06-23T00:00:00+00:00")
+    topic = {
+        "topic_key": "cachedtopic",
+        "canonical_title": "cached topic",
+        "hot_record_ids": ["hot_weibo_001"],
+        "records": [hot_record("hot_weibo_001", "weibo", "cached topic")],
+    }
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: (_ for _ in ()).throw(AssertionError("search should not run")),
+        session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+        cache_store=cache,
+    )
+
+    assert any(row.platform == "baidu" and row.content == "cached detail body" for row in evidence)
 
 
 if __name__ == "__main__":
