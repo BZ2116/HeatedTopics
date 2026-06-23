@@ -145,5 +145,121 @@ class RecentHotTopicsReportTests(unittest.TestCase):
         self.assertIn("按规范化 topic_key 关联到的详情内容", markdown)
 
 
+    def test_recent_report_alerts_missing_required_detail_sources(self):
+        record = HotRecord(
+            id="hot_baidu_001",
+            source="baidu_top",
+            platform="baidu",
+            route="baidu",
+            category="core_discovery",
+            title="missing source topic",
+            rank=1,
+            hot_value="100",
+            url="https://www.baidu.com/s?wd=missing",
+            mobile_url="",
+            desc="",
+            author="",
+            cover="",
+            timestamp="",
+            captured_at="2026-06-22T20:00:00+08:00",
+            raw_payload={},
+            fetch_status="ok",
+            error_type=None,
+        )
+        evidence = DetailEvidence(
+            evidence_id="evidence_weibo_hot_baidu_001",
+            topic_key="missingsourcetopic",
+            related_hot_record_ids=["hot_baidu_001"],
+            platform="weibo",
+            source_role="required",
+            source_method="browser_session",
+            query="missing source topic",
+            url="",
+            title="",
+            content="",
+            author="",
+            published_at="",
+            metrics={},
+            comments_preview=[],
+            result_urls=[],
+            raw_snapshot_path="",
+            screenshot_path="",
+            fetched_at="2026-06-22T20:10:00+08:00",
+            fetch_status="login_required",
+            error_type="login_required",
+            confidence="low",
+            raw_payload={},
+        )
+
+        markdown = render_recent_hot_topics_report(
+            topics=[{"topic_key": "missingsourcetopic", "canonical_title": "missing source topic", "hot_record_ids": ["hot_baidu_001"], "records": [record]}],
+            evidence_rows=[evidence],
+            generated_at="2026-06-22T20:20:00+08:00",
+            window="today",
+        )
+
+        self.assertIn("Required detail alerts", markdown)
+        self.assertIn("weibo=login_required", markdown)
+        self.assertIn("xiaohongshu=failed", markdown)
+        self.assertIn("baidu=failed", markdown)
+
+
+def test_recent_report_shows_dailyhot_metadata_without_missing_detail_warning():
+    record = HotRecord(
+        id="hot_zhihu_001",
+        source="dailyhotapi",
+        platform="zhihu",
+        route="zhihu",
+        category="core_discovery",
+        title="zhihu metadata topic",
+        rank=1,
+        hot_value="100",
+        url="https://example.com/zhihu",
+        mobile_url="",
+        desc="DailyHot summary only",
+        author="",
+        cover="",
+        timestamp="",
+        captured_at="2026-06-23T08:00:00+08:00",
+        raw_payload={},
+        fetch_status="ok",
+        error_type=None,
+    )
+    evidence = DetailEvidence(
+        evidence_id="evidence_metadata_hot_zhihu_001",
+        topic_key="zhihumetadatatopic",
+        related_hot_record_ids=["hot_zhihu_001"],
+        platform="zhihu",
+        source_role="auxiliary",
+        source_method="dailyhot_metadata",
+        query="zhihu metadata topic",
+        url="https://example.com/zhihu",
+        title="zhihu DailyHot metadata",
+        content="DailyHot summary only",
+        author="",
+        published_at="",
+        metrics={},
+        comments_preview=[],
+        result_urls=["https://example.com/zhihu"],
+        raw_snapshot_path="",
+        screenshot_path="",
+        fetched_at="2026-06-23T08:10:00+08:00",
+        fetch_status="ok",
+        error_type=None,
+        confidence="low",
+        raw_payload={},
+    )
+
+    markdown = render_recent_hot_topics_report(
+        topics=[{"topic_key": "zhihumetadatatopic", "canonical_title": "zhihu metadata topic", "hot_record_ids": ["hot_zhihu_001"], "records": [record]}],
+        evidence_rows=[evidence],
+        generated_at="2026-06-23T08:20:00+08:00",
+        window="today",
+    )
+
+    assert "dailyhot_metadata" in markdown
+    assert "Required detail alerts" not in markdown
+
+
 if __name__ == "__main__":
     unittest.main()

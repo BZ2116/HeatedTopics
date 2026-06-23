@@ -1,3 +1,4 @@
+from src.core_pipeline.completeness import evaluate_required_details
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -75,6 +76,7 @@ def render_recent_hot_topics_report(
         topic_key = str(topic.get("topic_key", title))
         records = [record for record in topic.get("records", []) if isinstance(record, HotRecord)]
         evidence_for_topic = evidence_by_topic.get(topic_key, [])
+        required_status = evaluate_required_details(topic_key, evidence_for_topic)
         lines.extend([f"## {index}. {title}", "", "### 热榜来源", ""])
         if records:
             for record in records:
@@ -87,10 +89,21 @@ def render_recent_hot_topics_report(
             for row in ok_rows:
                 snippet = row.content.strip().replace("\n", " ")[:240]
                 url = row.result_urls[0] if row.result_urls else row.url
-                lines.append(f"- `{row.platform}` / `{row.query}` / {url}")
+                lines.append(f"- `{row.platform}` / `{row.source_method}` / {url}")
                 lines.append(f"  {snippet}")
         else:
             lines.append("- 未采集到非空详情。")
+        detail_platforms = {"weibo", "baidu", "xiaohongshu", "bilibili", "juejin"}
+        topic_has_required_platform = any(record.platform in detail_platforms for record in records)
+        if topic_has_required_platform and required_status.missing_required_details:
+            status_pairs = [
+                f"weibo={required_status.weibo}",
+                f"xiaohongshu={required_status.xiaohongshu}",
+                f"baidu={required_status.baidu}",
+            ]
+            lines.extend(["", "### Required detail alerts", ""])
+            lines.append(f"- Missing required sources: `{', '.join(required_status.missing_required_details)}`")
+            lines.append(f"- Required source status: `{', '.join(status_pairs)}`")
         lines.extend(["", "### 平台详情状态", ""])
         if evidence_for_topic:
             for row in evidence_for_topic:
