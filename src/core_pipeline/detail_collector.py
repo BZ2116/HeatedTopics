@@ -6,14 +6,15 @@ from typing import Any
 from src.core_pipeline.cache_store import CacheStore
 from src.core_pipeline.providers.baidu import collect_baidu_detail, detail_queries_for_title
 from src.core_pipeline.providers.weibo import collect_weibo_detail
-from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
+from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail, collect_xiaohongshu_placeholder_detail
 from src.core_pipeline.source_registry import DETAIL_ENABLED_PLATFORMS
 from src.core_pipeline.types import DetailEvidence, HotRecord
 
 
 SearchProvider = Callable[[str], list[dict[str, str]]]
 PageFetcher = Callable[[str], str]
-SocialDetailFetcher = Callable[[str, str], list[dict[str, object]]]
+SocialDetailFetcher = Callable[[str, str], list[dict[str, object]] | dict[str, object]]
+ProgressCallback = Callable[[int, int, str], None]
 
 
 def html_to_text(page_html: str) -> str:
@@ -132,6 +133,41 @@ def failed_source_page_evidence(
     )
 
 
+def failed_social_evidence(
+    record: HotRecord,
+    fetched_at: str,
+    related_hot_record_ids: list[str],
+    platform: str,
+    query: str,
+    error_type: str,
+    topic_key: str | None = None,
+) -> DetailEvidence:
+    return DetailEvidence(
+        evidence_id=f"evidence_{platform}_{record.id}",
+        topic_key=topic_key or record.title,
+        related_hot_record_ids=related_hot_record_ids,
+        platform=platform,
+        source_role="required",
+        source_method="browser_session",
+        query=query,
+        url=record.url,
+        title=f"{platform} browser detail failed: {query}",
+        content="",
+        author="",
+        published_at="",
+        metrics={},
+        comments_preview=[],
+        result_urls=[],
+        raw_snapshot_path="",
+        screenshot_path="",
+        fetched_at=fetched_at,
+        fetch_status="failed",
+        error_type=error_type,
+        confidence="low",
+        raw_payload={"platform": platform, "query": query, "error_type": error_type, "record": record.to_dict()},
+    )
+
+
 def dailyhot_metadata_evidence(
     record: HotRecord,
     fetched_at: str,
@@ -218,9 +254,12 @@ def collect_topic_details(
     social_detail_fetcher: SocialDetailFetcher | None = None,
     enabled_detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
     cache_store: CacheStore | None = None,
+    supplemental_social_platforms: tuple[str, ...] = (),
+    progress: ProgressCallback | None = None,
 ) -> list[DetailEvidence]:
     evidence_rows: list[DetailEvidence] = []
-    for topic in topics:
+    total = len(topics)
+    for idx, topic in enumerate(topics, start=1):
         records = [record for record in topic.get("records", []) if isinstance(record, HotRecord)]
         if not records:
             continue
@@ -243,14 +282,9 @@ def collect_topic_details(
                 evidence = _collect_baidu_record_detail(record, topic_key, related_ids, fetched_at, search_provider, page_fetcher)
             elif record.platform == "weibo":
                 status = session_status.get("weibo", "login_required")
-                posts = _fetch_social_rows("weibo", record.title, status, social_detail_fetcher)
-                evidence = collect_weibo_detail(record, fetched_at, status, posts)
-                object.__setattr__(evidence, "topic_key", topic_key)
-                object.__setattr__(evidence, "related_hot_record_ids", related_ids)
+                evidence = _collect_social_record_detail(record, topic_key, related_ids, fetched_at, "weibo", status, social_detail_fetcher)
             elif record.platform == "xiaohongshu":
-                status = session_status.get("xiaohongshu", "login_required")
-                notes = _fetch_social_rows("xiaohongshu", record.title, status, social_detail_fetcher)
-                evidence = collect_xiaohongshu_detail(record, fetched_at, status, notes)
+                evidence = collect_xiaohongshu_placeholder_detail(record, fetched_at)
                 object.__setattr__(evidence, "topic_key", topic_key)
                 object.__setattr__(evidence, "related_hot_record_ids", related_ids)
             elif record.platform == "bilibili":
@@ -261,7 +295,54 @@ def collect_topic_details(
                 evidence = dailyhot_metadata_evidence(record, fetched_at, related_ids, topic_key)
             evidence_rows.append(evidence)
             _write_detail_cache(cache_store, evidence)
+        present_platforms = {record.platform for record in records}
+        for platform in supplemental_social_platforms:
+            if platform in present_platforms or platform != "weibo":
+                continue
+            if platform not in enabled_detail_platforms or session_status.get(platform) != "ok":
+                continue
+            cached = _read_detail_cache(cache_store, platform, topic_key)
+            if cached is not None:
+                evidence_rows.append(cached)
+                continue
+            synthetic_record = _synthetic_social_record(platform, representative, topic_key)
+            evidence = _collect_social_record_detail(
+                synthetic_record,
+                topic_key,
+                related_ids,
+                fetched_at,
+                platform,
+                "ok",
+                social_detail_fetcher,
+            )
+            evidence_rows.append(evidence)
+            _write_detail_cache(cache_store, evidence)
+        if progress is not None:
+            progress(idx, total, f"采集详情证据：{topic_key}")
     return evidence_rows
+
+
+def _synthetic_social_record(platform: str, seed_record: HotRecord, topic_key: str) -> HotRecord:
+    return HotRecord(
+        id=f"hot_{platform}_supplemental_{topic_key}",
+        source="browser_search",
+        platform=platform,
+        route=platform,
+        category=seed_record.category,
+        title=seed_record.title,
+        rank=seed_record.rank,
+        hot_value=seed_record.hot_value,
+        url="",
+        mobile_url="",
+        desc=seed_record.desc,
+        author="",
+        cover="",
+        timestamp="",
+        captured_at=seed_record.captured_at,
+        raw_payload={"seed_record": seed_record.to_dict(), "supplemental_platform": platform},
+        fetch_status="ok",
+        error_type=None,
+    )
 
 
 def _collect_baidu_record_detail(
@@ -273,14 +354,18 @@ def _collect_baidu_record_detail(
     page_fetcher: PageFetcher | None,
 ) -> DetailEvidence:
     query_results: list[dict[str, str]] = []
+    query_attempts: list[dict[str, object]] = []
     for query in detail_queries_for_title(record.title):
         results = search_provider(query)
+        query_attempts.append({"query": query, "result_count": len(results), "results": results})
         if results:
             query_results = results
             break
-    evidence = collect_baidu_detail(record, fetched_at, query_results)
+    content_pages = _collect_baidu_content_pages(query_results, page_fetcher)
+    evidence = collect_baidu_detail(record, fetched_at, query_results, content_pages)
     object.__setattr__(evidence, "topic_key", topic_key)
     object.__setattr__(evidence, "related_hot_record_ids", related_ids)
+    object.__setattr__(evidence, "raw_payload", {**evidence.raw_payload, "query_attempts": query_attempts})
     if evidence.fetch_status == "ok" or not record.url or page_fetcher is None:
         return evidence
     try:
@@ -289,12 +374,93 @@ def _collect_baidu_record_detail(
         return failed_source_page_evidence(record, fetched_at, related_ids, type(exc).__name__, topic_key)
 
 
+def _collect_baidu_content_pages(
+    search_results: list[dict[str, str]],
+    page_fetcher: PageFetcher | None,
+    max_pages: int = 3,
+) -> list[dict[str, object]]:
+    if page_fetcher is None:
+        return []
+    pages: list[dict[str, object]] = []
+    seen_urls: set[str] = set()
+    for index, result in enumerate(search_results, start=1):
+        if len(pages) >= max_pages:
+            break
+        url = str(result.get("url", "")).strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        try:
+            content = html_to_text(page_fetcher(url))
+        except Exception as exc:
+            pages.append(
+                {
+                    "index": index,
+                    "url": url,
+                    "title": str(result.get("title", "")),
+                    "content": "",
+                    "raw_text": "",
+                    "fetch_status": "failed",
+                    "error_type": type(exc).__name__,
+                }
+            )
+            continue
+        if not content:
+            continue
+        pages.append(
+            {
+                "index": index,
+                "url": url,
+                "title": str(result.get("title", "")),
+                "content": content,
+                "raw_text": content,
+                "fetch_status": "ok",
+                "error_type": "",
+            }
+        )
+    return pages
+
+
+def _collect_social_record_detail(
+    record: HotRecord,
+    topic_key: str,
+    related_ids: list[str],
+    fetched_at: str,
+    platform: str,
+    status: str,
+    social_detail_fetcher: SocialDetailFetcher | None,
+) -> DetailEvidence:
+    try:
+        rows, browser_raw = _fetch_social_rows(platform, record.title, status, social_detail_fetcher)
+    except Exception as exc:
+        error_type = str(exc) or type(exc).__name__
+        return failed_social_evidence(record, fetched_at, related_ids, platform, record.title, error_type, topic_key)
+    if platform == "weibo":
+        evidence = collect_weibo_detail(record, fetched_at, status, rows)
+    else:
+        evidence = collect_xiaohongshu_detail(record, fetched_at, status, rows)
+    object.__setattr__(evidence, "topic_key", topic_key)
+    object.__setattr__(evidence, "related_hot_record_ids", related_ids)
+    if browser_raw:
+        object.__setattr__(evidence, "raw_payload", {**evidence.raw_payload, "browser_raw": browser_raw})
+    return evidence
+
+
 def _fetch_social_rows(
     platform: str,
     query: str,
     session_status: str,
     social_detail_fetcher: SocialDetailFetcher | None,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], dict[str, object]]:
     if session_status != "ok" or social_detail_fetcher is None:
-        return []
-    return social_detail_fetcher(platform, query)
+        return [], {}
+    result = social_detail_fetcher(platform, query)
+    if isinstance(result, dict):
+        raw = result.get("raw")
+        rows = result.get("rows")
+        if rows is None:
+            rows = result.get("posts") if platform == "weibo" else result.get("notes")
+        if not isinstance(rows, list):
+            rows = []
+        return [row for row in rows if isinstance(row, dict)], raw if isinstance(raw, dict) else result
+    return [row for row in result if isinstance(row, dict)], {"rows": result}

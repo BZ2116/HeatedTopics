@@ -13,11 +13,23 @@ from src.core_pipeline.json_store import read_json_list, write_json_list, write_
 from src.core_pipeline.providers.baidu import collect_baidu_detail, search_baidu_details
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
+from src.core_pipeline.providers.xiaohongshu_hot import fetch_xiaohongshu_hot_records
 from src.core_pipeline.recent_topics import collection_window_days, deduplicate_hot_records
 from src.core_pipeline.report_renderer import render_markdown_report, render_recent_hot_topics_report
 from src.core_pipeline.session_gate import check_required_sessions
 from src.core_pipeline.source_registry import ALL_DAILYHOT_ROUTES, DETAIL_ENABLED_PLATFORMS
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
+
+
+CORE_HOT_DETAIL_PLATFORMS = ("baidu", "weibo", "xiaohongshu")
+PLATFORM_RAW_OUTPUTS = {
+    "xiaohongshu_topics": "xiaohongshu_topics.jsonl",
+    "xiaohongshu_notes": "xiaohongshu_notes.jsonl",
+    "baidu_topics": "baidu_topics.jsonl",
+    "baidu_details": "baidu_details.jsonl",
+    "weibo_topics": "weibo_topics.jsonl",
+    "weibo_posts": "weibo_posts.jsonl",
+}
 
 
 def now_shanghai_iso() -> str:
@@ -39,6 +51,12 @@ def default_search_provider(query: str) -> list[dict[str, str]]:
     return search_baidu_details(query)
 
 
+def default_social_detail_fetcher(platform: str, query: str) -> dict[str, object]:
+    if platform == "xiaohongshu":
+        return fetch_social_details_with_browser(platform, query, max_items=20)
+    return fetch_social_details_with_browser(platform, query)
+
+
 def fetch_url_text(url: str, timeout_seconds: int = 15) -> str:
     request = urllib.request.Request(url, headers={"User-Agent": "heatedTopics/0.1"})
     with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -51,6 +69,183 @@ def rooted_output_paths(root: Path) -> dict[str, Path]:
     return {key: root / value for key, value in output_paths().items()} | {
         "recent_markdown_report": root / "reports/recent_hot_topics_digest.md"
     }
+
+
+def platform_raw_paths(root: Path = Path(".")) -> dict[str, Path]:
+    raw_dir = root / "data/raw/platforms"
+    return {key: raw_dir / filename for key, filename in PLATFORM_RAW_OUTPUTS.items()}
+
+
+def raw_detail_rows(evidence_rows: list[DetailEvidence], records: list[HotRecord]) -> list[dict[str, Any]]:
+    records_by_id = {record.id: record for record in records}
+    rows = []
+    for evidence in evidence_rows:
+        record = _record_for_evidence(evidence, records_by_id)
+        rows.append(
+            {
+                "source": evidence.platform,
+                "url": _raw_detail_url(evidence, record),
+                "title": record.title if record is not None else evidence.query or evidence.title,
+                "content": _raw_detail_content(evidence),
+                "cover": record.cover if record is not None else "",
+                "hotvalue": record.hot_value if record is not None else str(evidence.metrics.get("hot_value", "")),
+                "rank": record.rank if record is not None else evidence.metrics.get("rank", ""),
+            }
+        )
+    return rows
+
+
+def _record_for_evidence(evidence: DetailEvidence, records_by_id: dict[str, HotRecord]) -> HotRecord | None:
+    for record_id in evidence.related_hot_record_ids:
+        record = records_by_id.get(record_id)
+        if record is not None:
+            return record
+    return None
+
+
+def _raw_detail_url(evidence: DetailEvidence, record: HotRecord | None) -> str:
+    for url in evidence.result_urls:
+        if url:
+            return url
+    if evidence.url:
+        return evidence.url
+    if record is None:
+        return ""
+    return record.url or record.mobile_url
+
+
+def _raw_detail_content(evidence: DetailEvidence) -> str:
+    raw_payload = evidence.raw_payload
+    raw_page_text = raw_payload.get("raw_page_text")
+    if isinstance(raw_page_text, str) and raw_page_text:
+        return raw_page_text
+    browser_raw = raw_payload.get("browser_raw")
+    if isinstance(browser_raw, dict):
+        page_text = browser_raw.get("page_text")
+        if isinstance(page_text, str) and page_text:
+            return page_text
+    content_pages = raw_payload.get("content_pages")
+    if isinstance(content_pages, list) and content_pages:
+        return _join_raw_result_rows(content_pages)
+    search_results = raw_payload.get("search_results")
+    if isinstance(search_results, list) and search_results:
+        return _join_raw_result_rows(search_results)
+    for key in ("posts", "notes"):
+        rows = raw_payload.get(key)
+        if isinstance(rows, list) and rows:
+            return _join_raw_result_rows(rows)
+    return evidence.content
+
+
+def _join_raw_result_rows(rows: list[object]) -> str:
+    parts = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row_parts = [
+            str(row.get("title", "")).strip(),
+            str(row.get("content", "")).strip(),
+            str(row.get("snippet", "")).strip(),
+            str(row.get("url", "")).strip(),
+        ]
+        parts.append("\n".join(part for part in row_parts if part))
+    return "\n\n".join(part for part in parts if part)
+
+
+def write_platform_raw_outputs(root: Path, records: list[HotRecord], evidence_rows: list[DetailEvidence]) -> None:
+    paths = platform_raw_paths(root)
+    for platform, detail_key in (
+        ("xiaohongshu", "notes"),
+        ("baidu", "details"),
+        ("weibo", "posts"),
+    ):
+        write_jsonl(paths[f"{platform}_topics"], platform_topic_raw_rows(records, platform))
+        write_jsonl(paths[f"{platform}_{detail_key}"], platform_detail_raw_rows(evidence_rows, records, platform))
+
+
+def platform_topic_raw_rows(records: list[HotRecord], platform: str) -> list[dict[str, Any]]:
+    rows = []
+    for record in records:
+        if record.platform != platform:
+            continue
+        rows.append(
+            {
+                "platform": platform,
+                "kind": "topic",
+                "topic": record.title,
+                "title": record.title,
+                "hot_value": record.hot_value,
+                "rank": record.rank,
+                "url": record.url or record.mobile_url,
+                "captured_at": record.captured_at,
+                "source": record.source,
+                "fetch_status": record.fetch_status,
+                "error_type": record.error_type,
+                "record": record.to_dict(),
+                "raw_payload": record.raw_payload,
+            }
+        )
+    return rows
+
+
+def platform_detail_raw_rows(
+    evidence_rows: list[DetailEvidence],
+    records: list[HotRecord],
+    platform: str,
+) -> list[dict[str, Any]]:
+    records_by_id = {record.id: record for record in records}
+    rows = []
+    for evidence in evidence_rows:
+        if evidence.platform != platform:
+            continue
+        record = _record_for_evidence(evidence, records_by_id)
+        row = {
+            "platform": platform,
+            "kind": _platform_detail_kind(platform),
+            "topic_key": evidence.topic_key,
+            "query": evidence.query,
+            "title": evidence.title,
+            "url": _raw_detail_url(evidence, record),
+            "fetched_at": evidence.fetched_at,
+            "fetch_status": evidence.fetch_status,
+            "error_type": evidence.error_type,
+            "metrics": evidence.metrics,
+            "comments_preview": evidence.comments_preview,
+            "result_urls": evidence.result_urls,
+            "hot_record": record.to_dict() if record is not None else None,
+            "evidence": evidence.to_dict(),
+            "raw_payload": evidence.raw_payload,
+        }
+        row.update(_platform_specific_raw_fields(platform, evidence.raw_payload))
+        rows.append(row)
+    return rows
+
+
+def _platform_detail_kind(platform: str) -> str:
+    return {
+        "xiaohongshu": "notes",
+        "baidu": "details",
+        "weibo": "posts",
+    }.get(platform, "details")
+
+
+def _platform_specific_raw_fields(platform: str, raw_payload: dict[str, Any]) -> dict[str, Any]:
+    browser_raw = raw_payload.get("browser_raw")
+    fields: dict[str, Any] = {}
+    if isinstance(browser_raw, dict):
+        fields["browser_raw"] = browser_raw
+    if platform == "xiaohongshu":
+        fields["notes"] = raw_payload.get("notes", []) if isinstance(raw_payload.get("notes"), list) else []
+        fields["external_detail_status"] = str(raw_payload.get("external_detail_status", ""))
+        fields["external_detail_source"] = str(raw_payload.get("external_detail_source", ""))
+        fields["placeholder_reason"] = str(raw_payload.get("placeholder_reason", ""))
+    elif platform == "weibo":
+        fields["posts"] = raw_payload.get("posts", []) if isinstance(raw_payload.get("posts"), list) else []
+    elif platform == "baidu":
+        fields["search_results"] = raw_payload.get("search_results", []) if isinstance(raw_payload.get("search_results"), list) else []
+        fields["content_pages"] = raw_payload.get("content_pages", []) if isinstance(raw_payload.get("content_pages"), list) else []
+        fields["query_attempts"] = raw_payload.get("query_attempts", []) if isinstance(raw_payload.get("query_attempts"), list) else []
+    return fields
 
 
 ProgressReporter = Callable[[int, int, str], None]
@@ -76,6 +271,26 @@ def missing_session_message(missing: list[str]) -> str:
     return f"未登录平台将跳过详情采集：{', '.join(missing)}；可执行：{commands}"
 
 
+def has_ok_platform_record(records: list[HotRecord], platform: str) -> bool:
+    return any(record.platform == platform and record.fetch_status == "ok" for record in records)
+
+
+def cached_xiaohongshu_hot_records(
+    captured_at: str,
+    cache_window: str,
+    cache_store,
+    fetcher: Callable[[str], list[HotRecord]],
+) -> list[HotRecord]:
+    cache_key = f"hot:xiaohongshu:{cache_window}"
+    cached_rows = cache_store.read(cache_key) if cache_store is not None else None
+    if cached_rows is not None:
+        return [HotRecord(**row["record"]) for row in cached_rows if isinstance(row, dict) and "record" in row]
+    records = fetcher(captured_at)
+    if cache_store is not None:
+        cache_store.write(cache_key, [{"record": record.to_dict()} for record in records], fetched_at=captured_at)
+    return records
+
+
 def run_recent_detail_collection(
     window: str,
     root: Path = Path("."),
@@ -84,12 +299,14 @@ def run_recent_detail_collection(
     search_provider=default_search_provider,
     page_fetcher=fetch_url_text,
     session_status: dict[str, str] | None = None,
-    social_detail_fetcher=fetch_social_details_with_browser,
+    social_detail_fetcher=default_social_detail_fetcher,
     now=now_shanghai_iso,
     progress: ProgressReporter | None = None,
     cache_store=None,
     refresh: bool = False,
     detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
+    supplemental_social_platforms: tuple[str, ...] = (),
+    xiaohongshu_hot_fetcher: Callable[[str], list[HotRecord]] = fetch_xiaohongshu_hot_records,
 ) -> dict[str, int]:
     if cache_store is None:
         cache_store = CacheStore(root / "data/cache", refresh=refresh)
@@ -114,6 +331,15 @@ def run_recent_detail_collection(
     missing_sessions = missing_browser_sessions(status)
     if missing_sessions:
         report_progress(progress, 4, total_steps, missing_session_message(missing_sessions))
+    if "xiaohongshu" in routes and not has_ok_platform_record(records, "xiaohongshu") and status.get("xiaohongshu") == "ok":
+        try:
+            xiaohongshu_records = cached_xiaohongshu_hot_records(captured_at, window, cache_store, xiaohongshu_hot_fetcher)
+            records.extend(xiaohongshu_records)
+            if xiaohongshu_records:
+                report_progress(progress, 4, total_steps, f"小红书 DailyHot 无数据，已从登录态网页补采 {len(xiaohongshu_records)} 条")
+        except Exception as exc:
+            report_progress(progress, 4, total_steps, f"小红书网页热点补采失败：{type(exc).__name__}")
+    topics = deduplicate_hot_records([record for record in records if record.fetch_status == "ok"])
     report_progress(progress, 5, total_steps, f"采集详情证据：{len(topics)} 个话题")
     evidence_rows = collect_topic_details(
         topics=topics,
@@ -124,6 +350,8 @@ def run_recent_detail_collection(
         social_detail_fetcher=social_detail_fetcher,
         cache_store=cache_store,
         enabled_detail_platforms=detail_platforms,
+        supplemental_social_platforms=supplemental_social_platforms,
+        progress=lambda current, total, message: report_progress(progress, 5, total_steps, message),
     )
     report_progress(progress, 6, total_steps, "写入 JSON / JSONL")
     paths = rooted_output_paths(root)
@@ -140,7 +368,8 @@ def run_recent_detail_collection(
     ]
     write_json_list(paths["topic_clusters"], serializable_topics)
     write_json_list(paths["detail_evidence"], [row.to_dict() for row in evidence_rows])
-    write_jsonl(paths["raw_detail_evidence"], [row.to_dict() for row in evidence_rows])
+    write_jsonl(paths["raw_detail_evidence"], raw_detail_rows(evidence_rows, records))
+    write_platform_raw_outputs(root, records, evidence_rows)
     report_progress(progress, 7, total_steps, "生成 Markdown 报告")
     report = render_recent_hot_topics_report(
         topics=topics,
@@ -192,12 +421,16 @@ def collect_core_details_command() -> None:
 
     paths["detail_evidence"].parent.mkdir(parents=True, exist_ok=True)
     write_json_list(paths["detail_evidence"], [ev.to_dict() for ev in evidence_list])
-    write_jsonl(paths["raw_detail_evidence"], [ev.to_dict() for ev in evidence_list])
+    write_jsonl(paths["raw_detail_evidence"], raw_detail_rows(evidence_list, records))
+    write_platform_raw_outputs(Path("."), records, evidence_list)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("paths", "render-report", "collect-core-details", "collect-recent-details"))
+    parser.add_argument(
+        "command",
+        choices=("paths", "render-report", "collect-core-details", "collect-recent-details", "collect-core-hot-details"),
+    )
     parser.add_argument("--window", choices=("today", "last_7_days"), default="today")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--detail-platforms", default="")
@@ -215,6 +448,15 @@ def main() -> None:
             progress=print_progress,
             refresh=args.refresh,
             detail_platforms=detail_platforms,
+        )
+    if args.command == "collect-core-hot-details":
+        run_recent_detail_collection(
+            window=args.window,
+            routes=CORE_HOT_DETAIL_PLATFORMS,
+            progress=print_progress,
+            refresh=args.refresh,
+            detail_platforms=CORE_HOT_DETAIL_PLATFORMS,
+            supplemental_social_platforms=("weibo", "xiaohongshu"),
         )
 
 
