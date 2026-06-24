@@ -315,3 +315,23 @@ def _unique_limited(values: list[str], limit: int) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def build_creator_topic_index(
+    topics: list[dict[str, Any]],
+    hot_records: list[dict[str, Any]],
+    detail_rows: list[dict[str, Any]],
+    generated_at: str,
+    source_files: list[str],
+) -> dict[str, Any]:
+    topic_records = []
+    for index, topic in enumerate(topics, start=1):
+        enriched_topic = dict(topic)
+        enriched_topic.setdefault("topic_id", f"topic_{index:03d}")
+        topic_records.append(classify_topic(enriched_topic, hot_records, detail_rows))
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "generated_at": generated_at,
+        "source_files": source_files,
+        "topics": topic_records,
+    }
