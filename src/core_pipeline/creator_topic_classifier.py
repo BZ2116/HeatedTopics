@@ -2,6 +2,9 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from src.core_pipeline.topic_content_cleaner import clean_topic_content
+from src.core_pipeline.topic_summary import generate_rule_summary
+
 
 SCHEMA_VERSION = "1.0"
 
@@ -70,6 +73,8 @@ def classify_topic(
     topic: dict[str, Any],
     hot_records: list[dict[str, Any]],
     detail_rows: list[dict[str, Any]],
+    manual_summaries: dict[str, dict[str, str]] | None = None,
+    model_summaries: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     title = str(topic.get("canonical_title") or topic.get("title") or topic.get("topic_key") or "")
     topic_key = str(topic.get("topic_key") or title)
@@ -89,7 +94,19 @@ def classify_topic(
     freshness = _freshness(text)
     risk_level = _risk_level(text, domain_path)
     creator_fit_score = _creator_fit_score(hotness, traceability, content_modes, confidence, risk_level)
-    detail = _detail_text(related_details)
+    raw_detail = _detail_text(related_details)
+    cleaned = clean_topic_content(title, raw_detail)
+    summary_topic = {
+        "title": title,
+        "domain_path": domain_path,
+        "content_modes": content_modes,
+        "audience_tags": audience_tags,
+        "traceability": traceability,
+        "risk_level": risk_level,
+    }
+    rule_summary = generate_rule_summary(summary_topic, cleaned.clean_content)
+    manual_summary = (manual_summaries or {}).get(title) or (manual_summaries or {}).get(topic_key)
+    model_summary = (model_summaries or {}).get(title) or (model_summaries or {}).get(topic_key)
     platforms = hotness.platforms or list(topic.get("platforms", []))
     return {
         "topic_id": str(topic.get("topic_id") or topic_key),
@@ -115,8 +132,15 @@ def classify_topic(
         },
         "card": {
             "source_platforms": platforms,
-            "summary": _summary(title, domain_path, content_modes),
-            "detail": detail,
+            "hotness_label": _hotness_label(hotness),
+            "raw_content_preview": cleaned.raw_content_preview,
+            "clean_content": cleaned.clean_content,
+            "summary": rule_summary,
+            "manual_summary": manual_summary,
+            "model_summary": model_summary,
+            "risk_note": _risk_note(risk_level, domain_path),
+            "content_quality": cleaned.content_quality,
+            "removed_line_count": cleaned.removed_line_count,
             "evidence_urls": _evidence_urls(related_details),
         },
     }
@@ -135,13 +159,16 @@ def _select_domain_path(text: str, title: str) -> tuple[list[str], list[str], st
     normalized_title = normalize_text(title)
     best_rule = None
     best_score = 0
+    best_title_score = 0
     best_terms: list[str] = []
     for rule in DOMAIN_RULES:
         score = 0
+        title_score = 0
         terms = []
         for term in rule["terms"]:
             normalized_term = normalize_text(term)
             if normalized_term in normalized_title:
+                title_score += 5
                 score += 5
                 terms.append(term)
             elif normalized_term in normalized_text:
@@ -150,8 +177,9 @@ def _select_domain_path(text: str, title: str) -> tuple[list[str], list[str], st
         if score > best_score:
             best_rule = rule
             best_score = score
+            best_title_score = title_score
             best_terms = terms
-    if best_rule is None or best_score < 2:
+    if best_rule is None or best_score < 2 or (best_title_score == 0 and best_score < 8):
         return ["未分类", "待人工确认"], [], "low"
     confidence = "high" if best_score >= 5 else "medium"
     return list(best_rule["path"]), best_terms[:5], confidence
@@ -297,10 +325,24 @@ def _evidence_urls(detail_rows: list[dict[str, Any]]) -> list[str]:
     return _unique_limited(urls, 5)
 
 
-def _summary(title: str, domain_path: list[str], content_modes: list[str]) -> str:
-    domain = " > ".join(domain_path)
-    modes = "、".join(content_modes) if content_modes else "话题跟进"
-    return f"{title} 归入 {domain}，适合做{modes}。"
+def _hotness_label(hotness: TopicHotness) -> str:
+    rank = f"排名 {hotness.best_rank}" if hotness.best_rank is not None else "排名未知"
+    values = [
+        f"{row['platform']}热度 {row['value']}"
+        for row in hotness.hot_values
+        if row.get("platform") or row.get("value")
+    ]
+    return "；".join([rank] + values)
+
+
+def _risk_note(risk_level: str, domain_path: list[str]) -> str:
+    if risk_level == "high":
+        return "高风险话题，发布前需核对权威来源并谨慎表达。"
+    if risk_level == "medium":
+        return "存在争议或专业风险，建议补充可靠来源和上下文。"
+    if "教育升学" in domain_path:
+        return "教育信息需核对官方来源。"
+    return "常规风险，注意核对来源。"
 
 
 def _unique_limited(values: list[str], limit: int) -> list[str]:
@@ -323,12 +365,22 @@ def build_creator_topic_index(
     detail_rows: list[dict[str, Any]],
     generated_at: str,
     source_files: list[str],
+    manual_summaries: dict[str, dict[str, str]] | None = None,
+    model_summaries: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     topic_records = []
     for index, topic in enumerate(topics, start=1):
         enriched_topic = dict(topic)
         enriched_topic.setdefault("topic_id", f"topic_{index:03d}")
-        topic_records.append(classify_topic(enriched_topic, hot_records, detail_rows))
+        topic_records.append(
+            classify_topic(
+                enriched_topic,
+                hot_records,
+                detail_rows,
+                manual_summaries=manual_summaries,
+                model_summaries=model_summaries,
+            )
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated_at,
