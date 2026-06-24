@@ -31,9 +31,12 @@ def fetch_social_details_with_browser(
     browser_state_dir: str | Path = "data/browser_state",
     timeout_ms: int = 20000,
     settle_delay_ms: int = DEFAULT_SETTLE_DELAY_MS,
-) -> list[dict[str, object]]:
+    max_items: int = 50,
+) -> dict[str, object]:
     if settle_delay_ms < 0:
         raise ValueError("settle_delay_ms must be non-negative")
+    if max_items < 1:
+        raise ValueError("max_items must be positive")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
@@ -54,21 +57,36 @@ def fetch_social_details_with_browser(
             context.close()
             browser.close()
             raise RuntimeError(guard)
-        dom_rows = _extract_dom_rows(page, platform)
+        dom_rows = _extract_dom_rows(page, platform, max_items=max_items)
         page_text = page.locator("body").inner_text(timeout=timeout_ms)
         current_url = page.url
+        search_url = build_platform_search_url(platform, query)
         context.close()
         browser.close()
 
     if dom_rows:
-        return [_with_url(row, current_url) for row in dom_rows]
-    if platform == "weibo":
-        rows = extract_weibo_posts_from_text(page_text)
-    elif platform == "xiaohongshu":
-        rows = extract_xiaohongshu_notes_from_text(page_text)
+        rows = [_with_url(row, current_url) for row in dom_rows]
+        text_rows: list[dict[str, object]] = []
     else:
-        raise ValueError(f"Unsupported detail platform: {platform}")
-    return [_with_url(row, current_url) for row in rows]
+        if platform == "weibo":
+            text_rows = extract_weibo_posts_from_text(page_text, max_items=max_items)
+        elif platform == "xiaohongshu":
+            text_rows = extract_xiaohongshu_notes_from_text(page_text, max_items=max_items)
+        else:
+            raise ValueError(f"Unsupported detail platform: {platform}")
+        rows = [_with_url(row, current_url) for row in text_rows]
+    return {
+        "rows": rows,
+        "raw": {
+            "platform": platform,
+            "query": query,
+            "search_url": search_url,
+            "current_url": current_url,
+            "page_text": page_text,
+            "dom_rows": dom_rows,
+            "text_rows": text_rows,
+        },
+    }
 
 
 def _with_url(row: dict[str, object], url: str) -> dict[str, object]:
@@ -77,7 +95,7 @@ def _with_url(row: dict[str, object], url: str) -> dict[str, object]:
     return {**row, "url": url}
 
 
-def _extract_dom_rows(page, platform: str) -> list[dict[str, object]]:
+def _extract_dom_rows(page, platform: str, max_items: int = 50) -> list[dict[str, object]]:
     selectors = {
         "weibo": [
             'div.card-wrap[action-type="feed_list_item"]',
@@ -93,15 +111,15 @@ def _extract_dom_rows(page, platform: str) -> list[dict[str, object]]:
     for selector in selectors:
         rows = page.locator(selector).evaluate_all(
             """
-            elements => elements.slice(0, 8).map(element => {
+            (elements, maxItems) => elements.slice(0, maxItems).map(element => {
               const text = (element.innerText || '').replace(/\\s+/g, ' ').trim();
               const link = element.querySelector('a[href]');
               const href = link ? link.href : '';
               return { content: text, comments_preview: [], url: href };
             }).filter(row => row.content.length > 20)
-            """
+            """,
+            max_items,
         )
         if rows:
-            return rows[:5]
+            return rows[:max_items]
     return []
-
