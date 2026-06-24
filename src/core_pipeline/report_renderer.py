@@ -1,5 +1,6 @@
 from src.core_pipeline.completeness import evaluate_required_details
 from src.core_pipeline.source_registry import REQUIRED_DETAIL_PLATFORMS
+from src.core_pipeline.topic_summary import select_display_summary
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -134,32 +135,34 @@ def render_creator_topic_cards(index: dict[str, object]) -> str:
     for domain in sorted(grouped):
         lines.extend([f"## {domain}", ""])
         for topic in grouped[domain]:
-            hotness = topic.get("hotness", {}) if isinstance(topic.get("hotness"), dict) else {}
             card = topic.get("card", {}) if isinstance(topic.get("card"), dict) else {}
-            hot_values = hotness.get("hot_values", [])
-            hot_value_text = _format_hot_values(hot_values if isinstance(hot_values, list) else [])
+            summary = select_display_summary(card)
+            source_platforms = card.get("source_platforms", [])
             lines.extend(
                 [
                     f"### {topic.get('title', '未命名话题')}",
                     "",
-                    f"- 话题热度：排名 `{hotness.get('best_rank', '')}`；热度 `{hot_value_text}`",
-                    f"- 来源平台：`{', '.join(str(item) for item in card.get('source_platforms', hotness.get('platforms', [])))}`",
-                    f"- 领域路径：`{' > '.join(str(item) for item in topic.get('domain_path', []))}`",
-                    f"- 创作方式：`{', '.join(str(item) for item in topic.get('content_modes', []))}`",
-                    f"- 目标受众：`{', '.join(str(item) for item in topic.get('audience_tags', []))}`",
-                    f"- 可追踪度：`{topic.get('traceability', '')}`",
-                    f"- 新鲜度：`{topic.get('freshness', '')}`",
-                    f"- 风险等级：`{topic.get('risk_level', '')}`",
-                    f"- 创作者适配分：`{topic.get('creator_fit_score', '')}`",
-                    f"- 关键词：`{', '.join(str(item) for item in topic.get('match_terms', []))}`",
+                    f"热度与平台：{card.get('hotness_label', '')}；来源 {', '.join(str(item) for item in source_platforms)}",
+                    f"分类与受众：{' > '.join(str(item) for item in topic.get('domain_path', []))}；{'、'.join(str(item) for item in topic.get('audience_tags', []))}",
+                    f"适合创作：{'、'.join(str(item) for item in topic.get('content_modes', []))}",
+                    "",
+                    f"一句话：{summary.get('what_happened', '')}",
                     "",
                     "具体内容：",
                     "",
-                    str(card.get("detail", "")),
+                    str(card.get("clean_content", "")),
                     "",
-                    "推荐摘要：",
+                    "创作者角度：",
                     "",
-                    str(card.get("summary", "")),
+                    summary.get("creator_angle", ""),
+                    "",
+                    "可追踪点：",
+                    "",
+                    summary.get("tracking_hint", ""),
+                    "",
+                    "风险提示：",
+                    "",
+                    str(card.get("risk_note", "")),
                     "",
                 ]
             )

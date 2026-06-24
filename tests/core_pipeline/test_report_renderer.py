@@ -264,7 +264,7 @@ def test_recent_report_shows_dailyhot_metadata_without_missing_detail_warning():
 from src.core_pipeline.report_renderer import render_creator_topic_cards
 
 
-def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
+def test_render_creator_topic_cards_uses_structured_summary_layout():
     index = {
         "generated_at": "2026-06-24T16:00:00+08:00",
         "topics": [
@@ -273,9 +273,6 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
                 "domain_path": ["教育升学", "高考", "分数线"],
                 "content_modes": ["数据整理", "经验攻略"],
                 "audience_tags": ["学生", "家长"],
-                "entity_keywords": ["河北", "2026高考"],
-                "event_keywords": ["分数线公布"],
-                "match_terms": ["河北高考分数线"],
                 "hotness": {
                     "best_rank": 1,
                     "platforms": ["weibo"],
@@ -287,8 +284,18 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
                 "creator_fit_score": 88,
                 "card": {
                     "source_platforms": ["weibo"],
-                    "summary": "适合做高考数据整理。",
-                    "detail": "河北公布 2026 年高考分数线。",
+                    "hotness_label": "排名 1；weibo热度 1784276",
+                    "clean_content": "河北公布 2026 年高考分数线。",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "河北公布 2026 年高考分数线。",
+                        "why_it_matters": "影响学生和家长志愿填报。",
+                        "creator_angle": "适合做分数线汇总。",
+                        "tracking_hint": "后续可追踪志愿填报时间。",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "教育信息需核对官方来源。",
                     "evidence_urls": ["https://example.com/weibo"],
                 },
             }
@@ -300,10 +307,13 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
     assert "# 创作者热点卡片" in markdown
     assert "## 教育升学" in markdown
     assert "### 河北高考分数线" in markdown
-    assert "话题热度" in markdown
-    assert "来源平台" in markdown
-    assert "可追踪度" in markdown
-    assert "河北公布 2026 年高考分数线。" in markdown
+    assert "热度与平台：排名 1；weibo热度 1784276；来源 weibo" in markdown
+    assert "分类与受众：教育升学 > 高考 > 分数线；学生、家长" in markdown
+    assert "一句话：河北公布 2026 年高考分数线。" in markdown
+    assert "具体内容：" in markdown
+    assert "创作者角度：" in markdown
+    assert "可追踪点：" in markdown
+    assert "风险提示：" in markdown
 
 
 if __name__ == "__main__":
