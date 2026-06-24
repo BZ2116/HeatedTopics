@@ -261,5 +261,50 @@ def test_recent_report_shows_dailyhot_metadata_without_missing_detail_warning():
     assert "Required detail alerts" not in markdown
 
 
+from src.core_pipeline.report_renderer import render_creator_topic_cards
+
+
+def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
+    index = {
+        "generated_at": "2026-06-24T16:00:00+08:00",
+        "topics": [
+            {
+                "title": "河北高考分数线",
+                "domain_path": ["教育升学", "高考", "分数线"],
+                "content_modes": ["数据整理", "经验攻略"],
+                "audience_tags": ["学生", "家长"],
+                "entity_keywords": ["河北", "2026高考"],
+                "event_keywords": ["分数线公布"],
+                "match_terms": ["河北高考分数线"],
+                "hotness": {
+                    "best_rank": 1,
+                    "platforms": ["weibo"],
+                    "hot_values": [{"platform": "weibo", "value": "1784276"}],
+                },
+                "traceability": "high",
+                "freshness": "breaking",
+                "risk_level": "low",
+                "creator_fit_score": 88,
+                "card": {
+                    "source_platforms": ["weibo"],
+                    "summary": "适合做高考数据整理。",
+                    "detail": "河北公布 2026 年高考分数线。",
+                    "evidence_urls": ["https://example.com/weibo"],
+                },
+            }
+        ],
+    }
+
+    markdown = render_creator_topic_cards(index)
+
+    assert "# 创作者热点卡片" in markdown
+    assert "## 教育升学" in markdown
+    assert "### 河北高考分数线" in markdown
+    assert "话题热度" in markdown
+    assert "来源平台" in markdown
+    assert "可追踪度" in markdown
+    assert "河北公布 2026 年高考分数线。" in markdown
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -112,3 +112,73 @@ def render_recent_hot_topics_report(
             lines.append("- 未生成详情证据。")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_creator_topic_cards(index: dict[str, object]) -> str:
+    topics = [topic for topic in index.get("topics", []) if isinstance(topic, dict)]
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for topic in topics:
+        domain_path = topic.get("domain_path", [])
+        domain = "未分类"
+        if isinstance(domain_path, list) and domain_path:
+            domain = str(domain_path[0])
+        grouped.setdefault(domain, []).append(topic)
+
+    lines = [
+        "# 创作者热点卡片",
+        "",
+        f"- 生成时间：`{index.get('generated_at', '')}`",
+        f"- 话题数量：`{len(topics)}`",
+        "",
+    ]
+    for domain in sorted(grouped):
+        lines.extend([f"## {domain}", ""])
+        for topic in grouped[domain]:
+            hotness = topic.get("hotness", {}) if isinstance(topic.get("hotness"), dict) else {}
+            card = topic.get("card", {}) if isinstance(topic.get("card"), dict) else {}
+            hot_values = hotness.get("hot_values", [])
+            hot_value_text = _format_hot_values(hot_values if isinstance(hot_values, list) else [])
+            lines.extend(
+                [
+                    f"### {topic.get('title', '未命名话题')}",
+                    "",
+                    f"- 话题热度：排名 `{hotness.get('best_rank', '')}`；热度 `{hot_value_text}`",
+                    f"- 来源平台：`{', '.join(str(item) for item in card.get('source_platforms', hotness.get('platforms', [])))}`",
+                    f"- 领域路径：`{' > '.join(str(item) for item in topic.get('domain_path', []))}`",
+                    f"- 创作方式：`{', '.join(str(item) for item in topic.get('content_modes', []))}`",
+                    f"- 目标受众：`{', '.join(str(item) for item in topic.get('audience_tags', []))}`",
+                    f"- 可追踪度：`{topic.get('traceability', '')}`",
+                    f"- 新鲜度：`{topic.get('freshness', '')}`",
+                    f"- 风险等级：`{topic.get('risk_level', '')}`",
+                    f"- 创作者适配分：`{topic.get('creator_fit_score', '')}`",
+                    f"- 关键词：`{', '.join(str(item) for item in topic.get('match_terms', []))}`",
+                    "",
+                    "具体内容：",
+                    "",
+                    str(card.get("detail", "")),
+                    "",
+                    "推荐摘要：",
+                    "",
+                    str(card.get("summary", "")),
+                    "",
+                ]
+            )
+            evidence_urls = card.get("evidence_urls", [])
+            if isinstance(evidence_urls, list) and evidence_urls:
+                lines.append("证据链接：")
+                lines.append("")
+                lines.extend(f"- {url}" for url in evidence_urls)
+                lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _format_hot_values(hot_values: list[object]) -> str:
+    parts = []
+    for row in hot_values:
+        if not isinstance(row, dict):
+            continue
+        platform = str(row.get("platform", "")).strip()
+        value = str(row.get("value", "")).strip()
+        if platform or value:
+            parts.append(f"{platform}:{value}" if platform else value)
+    return ", ".join(parts)
