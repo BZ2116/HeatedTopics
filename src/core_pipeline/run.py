@@ -1,6 +1,7 @@
 import argparse
 import inspect
 import json
+import sys
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
@@ -527,6 +528,23 @@ def build_creator_topic_index_command(
     records = read_json_list(hot_records_path)
     detail_rows = read_jsonl(raw_detail_path)
     topics = read_json_list(topic_clusters_path)
+    missing_inputs = [
+        (label, str(path))
+        for label, path, rows in (
+            ("热榜记录", hot_records_path, records),
+            ("详情证据 JSONL", raw_detail_path, detail_rows),
+            ("话题聚类", topic_clusters_path, topics),
+        )
+        if not rows and not path.exists()
+    ]
+    if missing_inputs:
+        print("[警告] 以下输入文件不存在，将生成空索引：", file=sys.stderr)
+        for label, path in missing_inputs:
+            print(f"  - {label}: {path}", file=sys.stderr)
+        print(
+            "请先在项目根目录运行采集命令：uv run python -m src.core_pipeline.run collect-recent-details --window today",
+            file=sys.stderr,
+        )
     index = build_creator_topic_index(
         topics=topics,
         hot_records=records,
@@ -547,6 +565,10 @@ def build_creator_topic_index_command(
         report = render_creator_topic_cards(index)
         paths["creator_topic_cards"].parent.mkdir(parents=True, exist_ok=True)
         paths["creator_topic_cards"].write_text(report, encoding="utf-8")
+    print(f"生成创作者索引：{len(index['topics'])} 个话题")
+    print(f"  索引文件：{paths['creator_topic_index'].resolve()}")
+    if render_report:
+        print(f"  卡片报告：{paths['creator_topic_cards'].resolve()}")
     return {"topics_count": len(index["topics"])}
 
 
