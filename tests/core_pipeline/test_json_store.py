@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.core_pipeline.json_store import read_json_list, write_json_list, write_jsonl
+from src.core_pipeline.json_store import read_json_list, read_jsonl, write_json_list, write_jsonl
 
 
 class JsonStoreTests(unittest.TestCase):
@@ -27,6 +27,22 @@ class JsonStoreTests(unittest.TestCase):
             write_jsonl(path, [{"id": "one"}, {"id": "two"}])
 
             self.assertEqual(path.read_text(encoding="utf-8").splitlines(), ['{"id": "one"}', '{"id": "two"}'])
+
+
+def test_read_jsonl_reads_one_object_per_line():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "data" / "records.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"id": "one"}\n{"id": "two"}\n', encoding="utf-8")
+
+        assert read_jsonl(path) == [{"id": "one"}, {"id": "two"}]
+
+
+def test_read_jsonl_returns_empty_list_for_missing_file():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "missing.jsonl"
+
+        assert read_jsonl(path) == []
 
 
 if __name__ == "__main__":
