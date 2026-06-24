@@ -1,4 +1,6 @@
 import argparse
+import inspect
+import json
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
@@ -6,16 +8,22 @@ from pathlib import Path
 from typing import Any
 
 from src.core_pipeline.cache_store import CacheStore
+from src.core_pipeline.creator_topic_classifier import build_creator_topic_index
 from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_dailyhot_route
 from src.core_pipeline.browser_detail_fetcher import fetch_social_details_with_browser
 from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
-from src.core_pipeline.json_store import read_json_list, write_json_list, write_jsonl
+from src.core_pipeline.json_store import read_json_list, read_jsonl, write_json_list, write_jsonl
 from src.core_pipeline.providers.baidu import collect_baidu_detail, search_baidu_details
 from src.core_pipeline.providers.weibo import collect_weibo_detail
+from src.core_pipeline.providers.weibo_hot import fetch_weibo_hot_records_with_browser
 from src.core_pipeline.providers.xiaohongshu import collect_xiaohongshu_detail
 from src.core_pipeline.providers.xiaohongshu_hot import fetch_xiaohongshu_hot_records
 from src.core_pipeline.recent_topics import collection_window_days, deduplicate_hot_records
-from src.core_pipeline.report_renderer import render_markdown_report, render_recent_hot_topics_report
+from src.core_pipeline.report_renderer import (
+    render_creator_topic_cards,
+    render_markdown_report,
+    render_recent_hot_topics_report,
+)
 from src.core_pipeline.session_gate import check_required_sessions
 from src.core_pipeline.source_registry import ALL_DAILYHOT_ROUTES, DETAIL_ENABLED_PLATFORMS
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
@@ -44,6 +52,8 @@ def output_paths() -> dict[str, Path]:
         "topic_clusters": Path("data/processed/topic_clusters.json"),
         "topic_briefs": Path("data/processed/topic_briefs.json"),
         "markdown_report": Path("reports/core_platform_topic_digest.md"),
+        "creator_topic_index": Path("data/processed/creator_topic_index.json"),
+        "creator_topic_cards": Path("reports/creator_topic_cards.md"),
     }
 
 
@@ -275,20 +285,74 @@ def has_ok_platform_record(records: list[HotRecord], platform: str) -> bool:
     return any(record.platform == platform and record.fetch_status == "ok" for record in records)
 
 
+def limit_hot_records_per_platform(records: list[HotRecord], max_per_platform: int | None) -> list[HotRecord]:
+    if max_per_platform is None:
+        return records
+    if max_per_platform < 1:
+        raise ValueError("max_per_platform must be positive")
+    counts: dict[str, int] = {}
+    limited: list[HotRecord] = []
+    for record in records:
+        if record.fetch_status != "ok":
+            limited.append(record)
+            continue
+        count = counts.get(record.platform, 0)
+        if count >= max_per_platform:
+            continue
+        counts[record.platform] = count + 1
+        limited.append(record)
+    return limited
+
+
+def replace_failed_platform_records(records: list[HotRecord], platform: str, replacement: list[HotRecord]) -> list[HotRecord]:
+    if not replacement:
+        return records
+    return [record for record in records if not (record.platform == platform and record.fetch_status != "ok")] + replacement
+
+
 def cached_xiaohongshu_hot_records(
     captured_at: str,
     cache_window: str,
     cache_store,
     fetcher: Callable[[str], list[HotRecord]],
+    max_items: int = 20,
 ) -> list[HotRecord]:
-    cache_key = f"hot:xiaohongshu:{cache_window}"
+    cache_key = f"hot:xiaohongshu:{cache_window}:{max_items}"
     cached_rows = cache_store.read(cache_key) if cache_store is not None else None
     if cached_rows is not None:
         return [HotRecord(**row["record"]) for row in cached_rows if isinstance(row, dict) and "record" in row]
-    records = fetcher(captured_at)
+    records = _call_hot_fetcher(fetcher, captured_at, max_items)
     if cache_store is not None:
         cache_store.write(cache_key, [{"record": record.to_dict()} for record in records], fetched_at=captured_at)
     return records
+
+
+def cached_weibo_hot_records(
+    captured_at: str,
+    cache_window: str,
+    cache_store,
+    fetcher: Callable[..., list[HotRecord]],
+    max_items: int = 50,
+) -> list[HotRecord]:
+    cache_key = f"hot:weibo:{cache_window}:{max_items}"
+    cached_rows = cache_store.read(cache_key) if cache_store is not None else None
+    if cached_rows is not None:
+        return [HotRecord(**row["record"]) for row in cached_rows if isinstance(row, dict) and "record" in row]
+    records = _call_hot_fetcher(fetcher, captured_at, max_items)
+    if cache_store is not None:
+        cache_store.write(cache_key, [{"record": record.to_dict()} for record in records], fetched_at=captured_at)
+    return records
+
+
+def _call_hot_fetcher(
+    fetcher: Callable[..., list[HotRecord]],
+    captured_at: str,
+    max_items: int,
+) -> list[HotRecord]:
+    signature = inspect.signature(fetcher)
+    if "max_items" in signature.parameters:
+        return fetcher(captured_at, max_items=max_items)
+    return fetcher(captured_at)
 
 
 def run_recent_detail_collection(
@@ -306,7 +370,9 @@ def run_recent_detail_collection(
     refresh: bool = False,
     detail_platforms: tuple[str, ...] = DETAIL_ENABLED_PLATFORMS,
     supplemental_social_platforms: tuple[str, ...] = (),
-    xiaohongshu_hot_fetcher: Callable[[str], list[HotRecord]] = fetch_xiaohongshu_hot_records,
+    xiaohongshu_hot_fetcher: Callable[..., list[HotRecord]] = fetch_xiaohongshu_hot_records,
+    weibo_hot_fetcher: Callable[..., list[HotRecord]] = fetch_weibo_hot_records_with_browser,
+    max_hot_per_platform: int | None = None,
 ) -> dict[str, int]:
     if cache_store is None:
         cache_store = CacheStore(root / "data/cache", refresh=refresh)
@@ -324,6 +390,7 @@ def run_recent_detail_collection(
         cache_store=cache_store,
         cache_window=window,
     )
+    records = limit_hot_records_per_platform(records, max_hot_per_platform)
     report_progress(progress, 3, total_steps, f"去重生成话题：{len(records)} 条热榜记录")
     topics = deduplicate_hot_records([record for record in records if record.fetch_status == "ok"])
     report_progress(progress, 4, total_steps, "检查登录态")
@@ -331,14 +398,36 @@ def run_recent_detail_collection(
     missing_sessions = missing_browser_sessions(status)
     if missing_sessions:
         report_progress(progress, 4, total_steps, missing_session_message(missing_sessions))
-    if "xiaohongshu" in routes and not has_ok_platform_record(records, "xiaohongshu") and status.get("xiaohongshu") == "ok":
+    if "xiaohongshu" in routes and not has_ok_platform_record(records, "xiaohongshu"):
         try:
-            xiaohongshu_records = cached_xiaohongshu_hot_records(captured_at, window, cache_store, xiaohongshu_hot_fetcher)
-            records.extend(xiaohongshu_records)
+            xiaohongshu_records = cached_xiaohongshu_hot_records(
+                captured_at,
+                window,
+                cache_store,
+                xiaohongshu_hot_fetcher,
+                max_items=max_hot_per_platform or 20,
+            )
+            records = replace_failed_platform_records(records, "xiaohongshu", xiaohongshu_records)
+            records = limit_hot_records_per_platform(records, max_hot_per_platform)
             if xiaohongshu_records:
-                report_progress(progress, 4, total_steps, f"小红书 DailyHot 无数据，已从登录态网页补采 {len(xiaohongshu_records)} 条")
+                report_progress(progress, 4, total_steps, f"小红书 DailyHot 无数据，已从外部热榜补采 {len(xiaohongshu_records)} 条")
         except Exception as exc:
             report_progress(progress, 4, total_steps, f"小红书网页热点补采失败：{type(exc).__name__}")
+    if "weibo" in routes and not has_ok_platform_record(records, "weibo") and status.get("weibo") == "ok":
+        try:
+            weibo_records = cached_weibo_hot_records(
+                captured_at,
+                window,
+                cache_store,
+                weibo_hot_fetcher,
+                max_items=max_hot_per_platform or 50,
+            )
+            records = replace_failed_platform_records(records, "weibo", weibo_records)
+            records = limit_hot_records_per_platform(records, max_hot_per_platform)
+            if weibo_records:
+                report_progress(progress, 4, total_steps, f"微博 DailyHot 无数据，已从登录态热搜页补采 {len(weibo_records)} 条")
+        except Exception as exc:
+            report_progress(progress, 4, total_steps, f"微博热搜页补采失败：{type(exc).__name__}")
     topics = deduplicate_hot_records([record for record in records if record.fetch_status == "ok"])
     report_progress(progress, 5, total_steps, f"采集详情证据：{len(topics)} 个话题")
     evidence_rows = collect_topic_details(
@@ -425,15 +514,53 @@ def collect_core_details_command() -> None:
     write_platform_raw_outputs(Path("."), records, evidence_list)
 
 
+def build_creator_topic_index_command(
+    root: Path = Path("."),
+    generated_at: str | None = None,
+    render_report: bool = False,
+) -> dict[str, int]:
+    paths = rooted_output_paths(root)
+    generated = generated_at or now_shanghai_iso()
+    hot_records_path = paths["hot_records"]
+    raw_detail_path = paths["raw_detail_evidence"]
+    topic_clusters_path = paths["topic_clusters"]
+    records = read_json_list(hot_records_path)
+    detail_rows = read_jsonl(raw_detail_path)
+    topics = read_json_list(topic_clusters_path)
+    index = build_creator_topic_index(
+        topics=topics,
+        hot_records=records,
+        detail_rows=detail_rows,
+        generated_at=generated,
+        source_files=[
+            hot_records_path.as_posix(),
+            raw_detail_path.as_posix(),
+            topic_clusters_path.as_posix(),
+        ],
+    )
+    paths["creator_topic_index"].parent.mkdir(parents=True, exist_ok=True)
+    paths["creator_topic_index"].write_text(
+        json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if render_report:
+        report = render_creator_topic_cards(index)
+        paths["creator_topic_cards"].parent.mkdir(parents=True, exist_ok=True)
+        paths["creator_topic_cards"].write_text(report, encoding="utf-8")
+    return {"topics_count": len(index["topics"])}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "command",
-        choices=("paths", "render-report", "collect-core-details", "collect-recent-details", "collect-core-hot-details"),
+        choices=("paths", "render-report", "collect-core-details", "collect-recent-details", "collect-core-hot-details", "build-creator-topic-index"),
     )
     parser.add_argument("--window", choices=("today", "last_7_days"), default="today")
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--detail-platforms", default="")
+    parser.add_argument("--max-hot-per-platform", type=int, default=10)
+    parser.add_argument("--render-report", action="store_true")
     args = parser.parse_args()
     if args.command == "paths":
         write_json_list("data/processed/pipeline_paths.json", [{key: str(value) for key, value in output_paths().items()}])
@@ -448,6 +575,7 @@ def main() -> None:
             progress=print_progress,
             refresh=args.refresh,
             detail_platforms=detail_platforms,
+            max_hot_per_platform=args.max_hot_per_platform,
         )
     if args.command == "collect-core-hot-details":
         run_recent_detail_collection(
@@ -457,6 +585,12 @@ def main() -> None:
             refresh=args.refresh,
             detail_platforms=CORE_HOT_DETAIL_PLATFORMS,
             supplemental_social_platforms=("weibo", "xiaohongshu"),
+            max_hot_per_platform=args.max_hot_per_platform,
+        )
+    if args.command == "build-creator-topic-index":
+        build_creator_topic_index_command(
+            root=Path("."),
+            render_report=args.render_report,
         )
 
 
