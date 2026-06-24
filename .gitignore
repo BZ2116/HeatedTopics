@@ -27,6 +27,7 @@ reports/recent_hot_topics_digest.md
 
 # Local smoke-test and build artifacts
 tmp/
+local_archive/
 dailyhot/
 detail/
 *.egg-info/
