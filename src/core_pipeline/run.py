@@ -27,6 +27,7 @@ from src.core_pipeline.report_renderer import (
 )
 from src.core_pipeline.session_gate import check_required_sessions
 from src.core_pipeline.source_registry import ALL_DAILYHOT_ROUTES, DETAIL_ENABLED_PLATFORMS
+from src.core_pipeline.topic_summary import load_manual_summaries
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -268,7 +269,13 @@ def report_progress(progress: ProgressReporter | None, current: int, total: int,
 
 
 def print_progress(current: int, total: int, message: str) -> None:
-    print(f"[{current}/{total}] {message}")
+    line = f"[{current}/{total}] {message}"
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe_line = line.encode(encoding, errors="replace").decode(encoding)
+        print(safe_line)
 
 
 def missing_browser_sessions(status: dict[str, str]) -> list[str]:
@@ -519,6 +526,8 @@ def build_creator_topic_index_command(
     root: Path = Path("."),
     generated_at: str | None = None,
     render_report: bool = False,
+    manual_summaries_path: Path | None = None,
+    summary_mode: str = "rule",
 ) -> dict[str, int]:
     paths = rooted_output_paths(root)
     generated = generated_at or now_shanghai_iso()
@@ -545,6 +554,9 @@ def build_creator_topic_index_command(
             "请先在项目根目录运行采集命令：uv run python -m src.core_pipeline.run collect-recent-details --window today",
             file=sys.stderr,
         )
+    manual_summaries = load_manual_summaries(manual_summaries_path) if manual_summaries_path is not None else {}
+    if summary_mode == "model":
+        print("[提示] model summary mode is reserved; using rule/manual summaries in this build.", file=sys.stderr)
     index = build_creator_topic_index(
         topics=topics,
         hot_records=records,
@@ -555,6 +567,8 @@ def build_creator_topic_index_command(
             raw_detail_path.as_posix(),
             topic_clusters_path.as_posix(),
         ],
+        manual_summaries=manual_summaries,
+        model_summaries={},
     )
     paths["creator_topic_index"].parent.mkdir(parents=True, exist_ok=True)
     paths["creator_topic_index"].write_text(
@@ -583,6 +597,8 @@ def main() -> None:
     parser.add_argument("--detail-platforms", default="")
     parser.add_argument("--max-hot-per-platform", type=int, default=10)
     parser.add_argument("--render-report", action="store_true")
+    parser.add_argument("--manual-summaries", default="")
+    parser.add_argument("--summary-mode", choices=("rule", "model"), default="rule")
     args = parser.parse_args()
     if args.command == "paths":
         write_json_list("data/processed/pipeline_paths.json", [{key: str(value) for key, value in output_paths().items()}])
@@ -610,9 +626,12 @@ def main() -> None:
             max_hot_per_platform=args.max_hot_per_platform,
         )
     if args.command == "build-creator-topic-index":
+        manual_summaries_path = Path(args.manual_summaries) if args.manual_summaries else None
         build_creator_topic_index_command(
             root=Path("."),
             render_report=args.render_report,
+            manual_summaries_path=manual_summaries_path,
+            summary_mode=args.summary_mode,
         )
 
 
