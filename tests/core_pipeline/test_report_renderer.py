@@ -307,13 +307,92 @@ def test_render_creator_topic_cards_uses_structured_summary_layout():
     assert "# 创作者热点卡片" in markdown
     assert "## 教育升学" in markdown
     assert "### 河北高考分数线" in markdown
-    assert "热度与平台：排名 1；weibo热度 1784276；来源 weibo" in markdown
-    assert "分类与受众：教育升学 > 高考 > 分数线；学生、家长" in markdown
-    assert "一句话：河北公布 2026 年高考分数线。" in markdown
-    assert "具体内容：" in markdown
-    assert "创作者角度：" in markdown
-    assert "可追踪点：" in markdown
-    assert "风险提示：" in markdown
+    assert "- **热度与平台**：排名 1；weibo热度 1784276" in markdown
+    assert "- **分类与受众**：教育升学 > 高考 > 分数线；学生、家长" in markdown
+    assert "- **适合创作**：数据整理、经验攻略" in markdown
+    assert "**一句话**：河北公布 2026 年高考分数线。" in markdown
+    assert "**创作者角度**：适合做分数线汇总。" in markdown
+    assert "**可追踪点**：后续可追踪志愿填报时间。" in markdown
+    assert "**风险提示**：教育信息需核对官方来源。" in markdown
+    assert "**具体内容**：" in markdown
+    assert "> 河北公布 2026 年高考分数线。" in markdown
+    assert "**证据链接**：" in markdown
+    assert "- https://example.com/weibo" in markdown
+
+
+def test_render_creator_topic_cards_wraps_multiline_content_in_blockquote():
+    index = {
+        "generated_at": "2026-06-25T10:00:00+08:00",
+        "topics": [
+            {
+                "title": "多行内容话题",
+                "domain_path": ["未分类", "待人工确认"],
+                "content_modes": ["数据整理"],
+                "audience_tags": ["泛大众"],
+                "card": {
+                    "source_platforms": ["weibo"],
+                    "hotness_label": "排名 2",
+                    "clean_content": "第一行内容。\n第二行内容。\n第三行内容。",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "一句话",
+                        "creator_angle": "创作角度",
+                        "tracking_hint": "追踪点",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "常规风险",
+                    "evidence_urls": [],
+                },
+            }
+        ],
+    }
+
+    markdown = render_creator_topic_cards(index)
+
+    assert "**具体内容**：" in markdown
+    assert "> 第一行内容。" in markdown
+    assert "> 第二行内容。" in markdown
+    assert "> 第三行内容。" in markdown
+    assert "**证据链接**：" not in markdown
+
+
+def test_render_creator_topic_cards_handles_missing_metadata():
+    index = {
+        "generated_at": "2026-06-25T10:00:00+08:00",
+        "topics": [
+            {
+                "title": "裸数据话题",
+                "domain_path": [],
+                "content_modes": [],
+                "audience_tags": [],
+                "card": {
+                    "source_platforms": [],
+                    "hotness_label": "",
+                    "clean_content": "",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "",
+                        "creator_angle": "",
+                        "tracking_hint": "",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "",
+                    "evidence_urls": [],
+                },
+            }
+        ],
+    }
+
+    markdown = render_creator_topic_cards(index)
+
+    assert "### 裸数据话题" in markdown
+    assert "- **热度与平台**：" in markdown
+    assert "- **分类与受众**：" in markdown
+    assert "- **适合创作**：" in markdown
+    assert "**一句话**：" in markdown
+    assert "**具体内容**：" in markdown
 
 
 if __name__ == "__main__":

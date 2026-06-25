@@ -137,42 +137,63 @@ def render_creator_topic_cards(index: dict[str, object]) -> str:
         for topic in grouped[domain]:
             card = topic.get("card", {}) if isinstance(topic.get("card"), dict) else {}
             summary = select_display_summary(card)
-            source_platforms = card.get("source_platforms", [])
+            title = topic.get("title", "未命名话题")
             lines.extend(
                 [
-                    f"### {topic.get('title', '未命名话题')}",
+                    f"### {title}",
                     "",
-                    f"热度与平台：{card.get('hotness_label', '')}；来源 {', '.join(str(item) for item in source_platforms)}",
-                    f"分类与受众：{' > '.join(str(item) for item in topic.get('domain_path', []))}；{'、'.join(str(item) for item in topic.get('audience_tags', []))}",
-                    f"适合创作：{'、'.join(str(item) for item in topic.get('content_modes', []))}",
+                    f"- {_bullet('热度与平台', _format_hotness(card))}",
+                    f"- {_bullet('分类与受众', _format_classification(topic))}",
+                    f"- {_bullet('适合创作', _format_modes(topic))}",
                     "",
-                    f"一句话：{summary.get('what_happened', '')}",
+                    f"**一句话**：{summary.get('what_happened', '')}",
                     "",
-                    "具体内容：",
+                    "**具体内容**：",
                     "",
-                    str(card.get("clean_content", "")),
+                    _blockquote(card.get("clean_content", "")),
                     "",
-                    "创作者角度：",
+                    f"**创作者角度**：{summary.get('creator_angle', '')}",
                     "",
-                    summary.get("creator_angle", ""),
+                    f"**可追踪点**：{summary.get('tracking_hint', '')}",
                     "",
-                    "可追踪点：",
-                    "",
-                    summary.get("tracking_hint", ""),
-                    "",
-                    "风险提示：",
-                    "",
-                    str(card.get("risk_note", "")),
+                    f"**风险提示**：{card.get('risk_note', '')}",
                     "",
                 ]
             )
             evidence_urls = card.get("evidence_urls", [])
             if isinstance(evidence_urls, list) and evidence_urls:
-                lines.append("证据链接：")
+                lines.append("**证据链接**：")
                 lines.append("")
                 lines.extend(f"- {url}" for url in evidence_urls)
                 lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _bullet(label: str, value: str) -> str:
+    return f"**{label}**：{value}"
+
+
+def _format_hotness(card: dict[str, object]) -> str:
+    return str(card.get("hotness_label", "")).strip()
+
+
+def _format_classification(topic: dict[str, object]) -> str:
+    domain_path = " > ".join(str(item) for item in topic.get("domain_path", []))
+    audience = "、".join(str(item) for item in topic.get("audience_tags", []))
+    if domain_path and audience:
+        return f"{domain_path}；{audience}"
+    return domain_path or audience
+
+
+def _format_modes(topic: dict[str, object]) -> str:
+    return "、".join(str(item) for item in topic.get("content_modes", []))
+
+
+def _blockquote(text: object) -> str:
+    stripped = str(text or "").rstrip()
+    if not stripped:
+        return ">"
+    return "\n".join(f"> {line}" if line else ">" for line in stripped.splitlines())
 
 
 def _format_hot_values(hot_values: list[object]) -> str:
