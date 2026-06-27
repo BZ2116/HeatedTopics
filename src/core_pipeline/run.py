@@ -14,6 +14,12 @@ from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_da
 from src.core_pipeline.browser_detail_fetcher import fetch_social_details_with_browser
 from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
 from src.core_pipeline.json_store import read_json_list, read_jsonl, write_json_list, write_jsonl
+from src.core_pipeline.model_topic_summarizer import (
+    DEFAULT_MODEL,
+    build_creator_topic_synthesis,
+    build_model_summaries,
+    call_openai_compatible_chat,
+)
 from src.core_pipeline.providers.baidu import collect_baidu_detail, search_baidu_details
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.weibo_hot import fetch_weibo_hot_records_with_browser
@@ -55,6 +61,7 @@ def output_paths() -> dict[str, Path]:
         "topic_briefs": Path("data/processed/topic_briefs.json"),
         "markdown_report": Path("reports/core_platform_topic_digest.md"),
         "creator_topic_index": Path("data/processed/creator_topic_index.json"),
+        "creator_topic_synthesis_dir": Path("data/processed/creator_topic_syntheses"),
         "creator_topic_cards": Path("reports/creator_topic_cards.md"),
     }
 
@@ -81,6 +88,29 @@ def rooted_output_paths(root: Path) -> dict[str, Path]:
     return {key: root / value for key, value in output_paths().items()} | {
         "recent_markdown_report": root / "reports/recent_hot_topics_digest.md"
     }
+
+
+def unique_creator_topic_synthesis_path(root: Path, generated_at: str) -> Path:
+    directory = root / output_paths()["creator_topic_synthesis_dir"]
+    timestamp = _filename_safe_timestamp(generated_at)
+    base = directory / f"creator_topic_synthesis_{timestamp}.json"
+    if not base.exists():
+        return base
+    for index in range(2, 1000):
+        candidate = directory / f"creator_topic_synthesis_{timestamp}_{index:03d}.json"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"Unable to find available synthesis output path in {directory}")
+
+
+def _filename_safe_timestamp(value: str) -> str:
+    return (
+        value.strip()
+        .replace(":", "")
+        .replace("+", "p")
+        .replace("-", "")
+        .replace(".", "")
+    )
 
 
 def platform_raw_paths(root: Path = Path(".")) -> dict[str, Path]:
@@ -528,6 +558,8 @@ def build_creator_topic_index_command(
     render_report: bool = False,
     manual_summaries_path: Path | None = None,
     summary_mode: str = "rule",
+    model_call: Callable[[list[dict[str, str]]], dict[str, Any]] | None = None,
+    model_name: str = DEFAULT_MODEL,
 ) -> dict[str, int]:
     paths = rooted_output_paths(root)
     generated = generated_at or now_shanghai_iso()
@@ -555,8 +587,6 @@ def build_creator_topic_index_command(
             file=sys.stderr,
         )
     manual_summaries = load_manual_summaries(manual_summaries_path) if manual_summaries_path is not None else {}
-    if summary_mode == "model":
-        print("[提示] model summary mode is reserved; using rule/manual summaries in this build.", file=sys.stderr)
     index = build_creator_topic_index(
         topics=topics,
         hot_records=records,
@@ -570,6 +600,37 @@ def build_creator_topic_index_command(
         manual_summaries=manual_summaries,
         model_summaries={},
     )
+    synthesis_topic_count = 0
+    if summary_mode == "model":
+        call = model_call or (lambda messages: call_openai_compatible_chat(messages, model=model_name))
+        synthesis = build_creator_topic_synthesis(
+            index=index,
+            model_call=call,
+            generated_at=generated,
+            model=model_name,
+        )
+        synthesis_path = unique_creator_topic_synthesis_path(root, generated)
+        synthesis_path.parent.mkdir(parents=True, exist_ok=True)
+        synthesis_path.write_text(
+            json.dumps(synthesis, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        model_summaries = build_model_summaries(synthesis)
+        synthesis_topic_count = len(model_summaries)
+        index = build_creator_topic_index(
+            topics=topics,
+            hot_records=records,
+            detail_rows=detail_rows,
+            generated_at=generated,
+            source_files=[
+                hot_records_path.as_posix(),
+                raw_detail_path.as_posix(),
+                topic_clusters_path.as_posix(),
+                synthesis_path.as_posix(),
+            ],
+            manual_summaries=manual_summaries,
+            model_summaries=model_summaries,
+        )
     paths["creator_topic_index"].parent.mkdir(parents=True, exist_ok=True)
     paths["creator_topic_index"].write_text(
         json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -581,9 +642,11 @@ def build_creator_topic_index_command(
         paths["creator_topic_cards"].write_text(report, encoding="utf-8")
     print(f"生成创作者索引：{len(index['topics'])} 个话题")
     print(f"  索引文件：{paths['creator_topic_index'].resolve()}")
+    if summary_mode == "model":
+        print(f"  模型归纳文件：{synthesis_path.resolve()}")
     if render_report:
         print(f"  卡片报告：{paths['creator_topic_cards'].resolve()}")
-    return {"topics_count": len(index["topics"])}
+    return {"topics_count": len(index["topics"]), "synthesis_topic_count": synthesis_topic_count}
 
 
 def main() -> None:

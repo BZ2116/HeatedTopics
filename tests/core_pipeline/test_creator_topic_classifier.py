@@ -204,3 +204,54 @@ def test_build_creator_topic_index_applies_manual_summary_override():
     )
 
     assert index["topics"][0]["card"]["manual_summary"]["what_happened"] == "人工摘要：河北分数线公布。"
+
+
+def test_classify_topic_card_contains_per_platform_cleaned_cards():
+    topic = {
+        "topic_id": "topic_001",
+        "topic_key": "江苏2026高考分数线公布",
+        "canonical_title": "江苏2026高考分数线公布",
+        "hot_record_ids": ["hot_weibo_001", "hot_baidu_001"],
+        "platforms": ["weibo", "baidu"],
+        "best_rank": 1,
+    }
+    records = [
+        {
+            "id": "hot_weibo_001",
+            "platform": "weibo",
+            "title": "江苏2026高考分数线公布",
+            "rank": 2,
+            "hot_value": "888",
+        },
+        {
+            "id": "hot_baidu_001",
+            "platform": "baidu",
+            "title": "江苏2026高考分数线公布",
+            "rank": 1,
+            "hot_value": "999",
+        },
+    ]
+    details = [
+        {
+            "source": "weibo",
+            "title": "江苏2026高考分数线公布",
+            "content": "微博正文：江苏分数线公布，本科历史484/物理456。 https://video.weibo.com/show?id=1",
+            "url": "https://example.com/weibo",
+        },
+        {
+            "source": "baidu",
+            "title": "江苏2026高考分数线公布",
+            "content": "江苏2026高考分数线公布 百度首页 登录 江苏2026高考分数线公布 更新至2026年6月24日 17:20 发表\n刚刚，特殊类历史532/物理513。",
+            "url": "https://example.com/baidu",
+        },
+    ]
+
+    result = classify_topic(topic, records, details)
+    platform_cards = result["card"]["platform_cards"]
+
+    assert [card["platform"] for card in platform_cards] == ["weibo", "baidu"]
+    assert platform_cards[0]["url"] == "https://example.com/weibo"
+    assert "video.weibo.com" not in platform_cards[0]["clean_content"]
+    assert "本科历史484/物理456" in platform_cards[0]["clean_content"]
+    assert "百度首页 登录" not in platform_cards[1]["clean_content"]
+    assert "特殊类历史532/物理513" in platform_cards[1]["clean_content"]

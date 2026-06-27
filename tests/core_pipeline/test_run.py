@@ -6,7 +6,7 @@ import tempfile
 from unittest.mock import patch
 
 from src.core_pipeline.cache_store import CacheStore
-from src.core_pipeline.run import build_creator_topic_index_command, default_social_detail_fetcher, main, output_paths, platform_raw_paths, print_progress, rooted_output_paths
+from src.core_pipeline.run import build_creator_topic_index_command, default_social_detail_fetcher, main, output_paths, platform_raw_paths, print_progress, rooted_output_paths, unique_creator_topic_synthesis_path
 from src.core_pipeline.run import run_recent_detail_collection
 
 
@@ -92,6 +92,19 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(paths["creator_topic_index"].as_posix(), "data/processed/creator_topic_index.json")
         self.assertEqual(paths["creator_topic_cards"].as_posix(), "reports/creator_topic_cards.md")
+        self.assertEqual(paths["creator_topic_synthesis_dir"].as_posix(), "data/processed/creator_topic_syntheses")
+
+    def test_unique_creator_topic_synthesis_path_does_not_overwrite_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = unique_creator_topic_synthesis_path(root, "2026-06-24T16:00:00+08:00")
+            first.parent.mkdir(parents=True)
+            first.write_text("{}", encoding="utf-8")
+
+            second = unique_creator_topic_synthesis_path(root, "2026-06-24T16:00:00+08:00")
+
+            self.assertNotEqual(first, second)
+            self.assertEqual(second.name, "creator_topic_synthesis_20260624T160000p0800_002.json")
 
     def test_build_creator_topic_index_command_writes_json_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,6 +254,99 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["manual_summaries_path"], Path("data/manual/topic_summaries.json"))
         self.assertEqual(calls[0]["summary_mode"], "model")
+
+    def test_build_creator_topic_index_command_model_mode_writes_synthesis_and_model_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data/raw").mkdir(parents=True)
+            (root / "data/evidence").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "data/raw/dailyhot_records.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "hot_weibo_001",
+                            "platform": "weibo",
+                            "title": "model-topic",
+                            "rank": 1,
+                            "hot_value": "1784276",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (root / "data/evidence/detail_evidence_raw.jsonl").write_text(
+                json.dumps(
+                    {
+                        "source": "weibo",
+                        "title": "model-topic",
+                        "content": "model-topic happened with enough evidence for a concise model summary.",
+                        "url": "https://example.com/weibo",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "data/processed/topic_clusters.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "topic_key": "model-topic",
+                            "canonical_title": "model-topic",
+                            "hot_record_ids": ["hot_weibo_001"],
+                            "platforms": ["weibo"],
+                            "best_rank": 1,
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_model_call(messages):
+                self.assertIn("topics", messages[1]["content"])
+                return {
+                    "overall_summary": {
+                        "core_conclusion": "model overall conclusion",
+                        "topic_landscape": "model topic landscape",
+                        "creator_strategy": "model creator strategy",
+                        "risk_and_verification": "model verification note",
+                    },
+                    "theme_clusters": [],
+                    "topic_summaries": {
+                        "model-topic": {
+                            "what_happened": "model summary happened",
+                            "why_it_matters": "model summary matters",
+                            "creator_angle": "model summary creator angle",
+                            "tracking_hint": "model summary tracking hint",
+                            "confidence": "high",
+                        }
+                    },
+                }
+
+            result = build_creator_topic_index_command(
+                root=root,
+                generated_at="2026-06-24T16:00:00+08:00",
+                render_report=True,
+                summary_mode="model",
+                model_call=fake_model_call,
+                model_name="gpt-test",
+            )
+
+            index = json.loads((root / "data/processed/creator_topic_index.json").read_text(encoding="utf-8"))
+            synthesis_files = sorted((root / "data/processed/creator_topic_syntheses").glob("creator_topic_synthesis_*.json"))
+            self.assertEqual(len(synthesis_files), 1)
+            self.assertFalse((root / "data/processed/creator_topic_synthesis.json").exists())
+            synthesis = json.loads(synthesis_files[0].read_text(encoding="utf-8"))
+            card = index["topics"][0]["card"]
+            self.assertEqual(result["topics_count"], 1)
+            self.assertEqual(result["synthesis_topic_count"], 1)
+            self.assertEqual(card["model_summary"]["what_happened"], "model summary happened")
+            self.assertEqual(synthesis["overall_summary"]["core_conclusion"], "model overall conclusion")
+            self.assertIn(synthesis_files[0].as_posix(), index["source_files"])
+            self.assertIn("model summary happened", (root / "reports/creator_topic_cards.md").read_text(encoding="utf-8"))
 
 
 class RecentDetailRunTests(unittest.TestCase):

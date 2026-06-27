@@ -96,6 +96,7 @@ def classify_topic(
     creator_fit_score = _creator_fit_score(hotness, traceability, content_modes, confidence, risk_level)
     raw_detail = _detail_text(related_details)
     cleaned = clean_topic_content(title, raw_detail)
+    platform_cards = _platform_cards(title, related_details)
     summary_topic = {
         "title": title,
         "domain_path": domain_path,
@@ -142,6 +143,7 @@ def classify_topic(
             "content_quality": cleaned.content_quality,
             "removed_line_count": cleaned.removed_line_count,
             "evidence_urls": _evidence_urls(related_details),
+            "platform_cards": platform_cards,
         },
     }
 
@@ -318,6 +320,27 @@ def _detail_text(detail_rows: list[dict[str, Any]]) -> str:
         if content:
             return content[:500]
     return "暂无可用详情，已根据热榜标题和元数据生成基础卡片。"
+
+
+def _platform_cards(title: str, detail_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    for row in detail_rows:
+        content = str(row.get("content", "")).strip()
+        if not content:
+            continue
+        cleaned = clean_topic_content(title, content, max_clean_chars=600)
+        cards.append(
+            {
+                "platform": str(row.get("source") or row.get("platform") or "unknown"),
+                "title": str(row.get("title") or title),
+                "url": str(row.get("url", "")),
+                "raw_content_preview": cleaned.raw_content_preview,
+                "clean_content": cleaned.clean_content,
+                "content_quality": cleaned.content_quality,
+                "removed_line_count": cleaned.removed_line_count,
+            }
+        )
+    return cards
 
 
 def _evidence_urls(detail_rows: list[dict[str, Any]]) -> list[str]:

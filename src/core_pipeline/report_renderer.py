@@ -132,40 +132,70 @@ def render_creator_topic_cards(index: dict[str, object]) -> str:
         f"- 话题数量：`{len(topics)}`",
         "",
     ]
+    card_index = 0
     for domain in sorted(grouped):
         lines.extend([f"## {domain}", ""])
         for topic in grouped[domain]:
+            card_index += 1
             card = topic.get("card", {}) if isinstance(topic.get("card"), dict) else {}
             summary = select_display_summary(card)
             title = topic.get("title", "未命名话题")
+            overview = _format_overview(card, topic)
             lines.extend(
                 [
-                    f"### {title}",
+                    "---",
                     "",
-                    f"- {_bullet('热度与平台', _format_hotness(card))}",
-                    f"- {_bullet('分类与受众', _format_classification(topic))}",
-                    f"- {_bullet('适合创作', _format_modes(topic))}",
+                    f"### {card_index:02d}. {title}",
                     "",
-                    f"**一句话**：{summary.get('what_happened', '')}",
+                    f"**概览**：{overview}",
                     "",
-                    "**具体内容**：",
+                    "#### 一句话结论",
                     "",
-                    _blockquote(card.get("clean_content", "")),
+                    str(summary.get("what_happened", "")),
                     "",
-                    f"**创作者角度**：{summary.get('creator_angle', '')}",
+                    "#### 核心内容",
                     "",
-                    f"**可追踪点**：{summary.get('tracking_hint', '')}",
+                    _blockquote(_content_excerpt(card.get("clean_content", ""))),
                     "",
-                    f"**风险提示**：{card.get('risk_note', '')}",
+                    "#### 创作参考",
+                    "",
+                    _reference_table(
+                        summary.get("creator_angle", ""),
+                        summary.get("tracking_hint", ""),
+                        card.get("risk_note", ""),
+                    ),
                     "",
                 ]
             )
+            platform_cards = card.get("platform_cards", [])
+            if isinstance(platform_cards, list) and platform_cards:
+                lines.append("#### 平台数据整理")
+                lines.append("")
+                for platform_index, platform_card in enumerate(platform_cards, start=1):
+                    if not isinstance(platform_card, dict):
+                        continue
+                    platform = str(platform_card.get("platform", "unknown"))
+                    lines.append(f"##### 平台 {platform_index}: {platform}")
+                    lines.append("")
+                    meta_parts = [
+                        f"质量：`{platform_card.get('content_quality', '')}`",
+                        f"移除噪声：`{platform_card.get('removed_line_count', 0)}`",
+                    ]
+                    url = str(platform_card.get("url", "")).strip()
+                    if url:
+                        meta_parts.append(f"链接：{url}")
+                    lines.append("- " + "；".join(meta_parts))
+                    lines.append("")
+                    lines.append(_blockquote(_content_excerpt(platform_card.get("clean_content", ""))))
+                    lines.append("")
             evidence_urls = card.get("evidence_urls", [])
             if isinstance(evidence_urls, list) and evidence_urls:
-                lines.append("**证据链接**：")
+                lines.append("#### 证据链接")
                 lines.append("")
                 lines.extend(f"- {url}" for url in evidence_urls)
                 lines.append("")
+        lines.append("---")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -187,6 +217,45 @@ def _format_classification(topic: dict[str, object]) -> str:
 
 def _format_modes(topic: dict[str, object]) -> str:
     return "、".join(str(item) for item in topic.get("content_modes", []))
+
+
+def _format_overview(card: dict[str, object], topic: dict[str, object]) -> str:
+    parts = [
+        _format_hotness(card),
+        f"平台 {_format_source_platforms(card)}",
+        f"分类 {' > '.join(str(item) for item in topic.get('domain_path', []))}",
+        f"受众 {'、'.join(str(item) for item in topic.get('audience_tags', []))}",
+        f"适合 {_format_modes(topic)}",
+    ]
+    return " | ".join(part for part in parts if part.strip())
+
+
+def _format_source_platforms(card: dict[str, object]) -> str:
+    platforms = card.get("source_platforms", [])
+    if not isinstance(platforms, list):
+        return ""
+    return "、".join(str(platform) for platform in platforms if str(platform).strip())
+
+
+def _content_excerpt(text: object, limit: int = 700) -> str:
+    content = str(text or "").strip()
+    if len(content) <= limit:
+        return content
+    return content[:limit].rstrip() + "\n\n（内容较长，已截取前段。）"
+
+
+def _reference_table(creator_angle: object, tracking_hint: object, risk_note: object) -> str:
+    return "\n".join(
+        [
+            "| 创作者角度 | 后续追踪 | 风险提示 |",
+            "| --- | --- | --- |",
+            f"| {_table_cell(creator_angle)} | {_table_cell(tracking_hint)} | {_table_cell(risk_note)} |",
+        ]
+    )
+
+
+def _table_cell(value: object) -> str:
+    return str(value or "").replace("\n", "<br>").replace("|", "\\|").strip()
 
 
 def _blockquote(text: object) -> str:
