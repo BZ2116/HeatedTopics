@@ -85,7 +85,7 @@ class BaseHTTPSearchProvider:
 
 ### MockProvider 保留
 
-`providers.py` 里的 `MockProvider` 不删。当某个真实 provider 的 `from_env()` 返回 None（缺 key），CLI 装配时用 `MockProvider(source_id, rows=[])` 顶替——返回空结果而不是假数据。
+`providers.py` 里的 `MockProvider` 不删。当某个真实 provider 的 `from_env()` 返回 None（缺 key），CLI 装配时用 `MockProvider(source_id, rows=[])` 顶替——返回空结果而不是假数据。同时 CLI 会在 raw JSONL 里**显式注入 1 条占位 `SearchResult`**，带 `fetch_status="mock_unavailable"`，让 raw 输出始终能反映"这个源无 key"：
 
 ```python
 def _build_provider(cls) -> SearchProvider:
@@ -93,6 +93,21 @@ def _build_provider(cls) -> SearchProvider:
     if real is not None:
         return real
     return MockProvider(cls.source_id, rows=[])  # 无 key -> 空 mock
+
+
+# CLI 装配时, 对每个走 fallback 的 source_id 写一条占位 SearchResult
+def _emit_unavailable_marker(source_id, source_role, query, category, fetched_at):
+    return SearchResult(
+        result_id=f"{source_id}_unavailable",
+        source_id=source_id,
+        source_role=source_role,
+        query=query,
+        keyword_category=category,
+        title="",
+        fetch_status="mock_unavailable",
+        error_type="missing_key",
+        fetched_at=fetched_at,
+    )
 ```
 
 ## 配置策略
@@ -139,7 +154,7 @@ QIANFAN_SECRET_KEY=
 
 | 场景 | 重试 | fetch_status | error_type |
 | --- | --- | --- | --- |
-| 无 key（`from_env()` 返回 None） | 不调用 | `mock_unavailable` | `missing_key` |
+| 无 key（`from_env()` 返回 None） | 不调用真实 API；CLI 注入 1 条占位 `SearchResult` | `mock_unavailable` | `missing_key` |
 | 401 / 403 | 不重试 | `auth_failed` | `unauthorized` / `forbidden` |
 | 429 限流 | 按 `Retry-After` 头等待，最多 3 次 | 成功后 `ok`，否则 `upstream_failed` | `rate_limited` |
 | 5xx | 指数退避 1s → 2s → 4s，最多 3 次 | 成功后 `ok`，否则 `upstream_failed` | `server_error` |
@@ -215,8 +230,9 @@ reports/search_discovery/search_topic_recommendations.md
 
 - `pytest tests/search_discovery/ -q` 全绿。
 - `python -m src.search_discovery.cli --profile ... --render-report` 跑通，退出码 0。
-- raw JSONL 至少有 1-2 个 `fetch_status="ok"`（说明至少接到了一个真实源），其余是 `mock_unavailable` 或 `upstream_failed`。
-- 报告里至少有一条非 mock 的真实候选话题（不同 provider 出不同结果）。
+- raw JSONL 中每个走 fallback 的 source_id 至少有 1 条 `fetch_status="mock_unavailable"` 占位记录（说明 fallback 链可观测）。
+- 若任一源配置了真实 key：raw JSONL 至少有 1-2 个 `fetch_status="ok"`，报告里有非 mock 的真实候选话题。
+- 若全部源都无 key：raw JSONL 全是 `mock_unavailable`，CLI 仍正常退出，仅报告为空——这种情况下不能算集成失败。
 - `.env` 文件不进 commit（`git status` 看不到）。
 
 ## 实施顺序
