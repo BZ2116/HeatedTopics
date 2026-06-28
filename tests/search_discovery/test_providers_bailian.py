@@ -50,3 +50,20 @@ def test_search_rows_empty(monkeypatch):
         timeout=p.timeout_seconds,
     )
     assert p.search_rows("x") == []
+
+
+def test_search_rows_normalizes_nonzero_code_to_error_row(monkeypatch):
+    monkeypatch.setenv("BAILIAN_API_KEY", "sk-fake")
+    p = BailianWebSearchProvider.from_env()
+    p._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={
+            "code": 400,
+            "message": "InvalidArgument",
+        })),
+        timeout=p.timeout_seconds,
+    )
+    rows = p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00")
+    assert len(rows) == 1
+    assert rows[0]["fetch_status"] == "upstream_failed"
+    assert rows[0]["error_type"] == "bailian_code_400"
+    assert rows[0]["source_id"] == "juejin_content"

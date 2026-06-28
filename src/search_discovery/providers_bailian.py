@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from src.search_discovery.base_provider import BaseHTTPSearchProvider
+from src.search_discovery.base_provider import BaseHTTPSearchProvider, ProviderError
 
 
 class BailianWebSearchProvider(BaseHTTPSearchProvider):
@@ -38,6 +38,11 @@ class BailianWebSearchProvider(BaseHTTPSearchProvider):
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
+        # DashScope success envelopes may not include a top-level `code`,
+        # but failure envelopes do. Validate defensively when present.
+        code = body.get("code")
+        if code is not None and code != 0:
+            raise ProviderError("upstream_failed", f"bailian_code_{code}")
         results = body.get("output", {}).get("search_results", [])
         rows: list[dict[str, object]] = []
         for item in results:
