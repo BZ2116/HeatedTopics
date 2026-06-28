@@ -146,7 +146,10 @@ class BaseHTTPSearchProvider:
                 raise ProviderError("auth_failed", "forbidden")
             if status == 429:
                 if attempt < self.max_retries - 1:
-                    wait = float(response.headers.get("Retry-After", "1"))
+                    try:
+                        wait = float(response.headers.get("Retry-After", "1"))
+                    except (TypeError, ValueError):
+                        wait = 1.0
                     self._bucket.sleep(wait)
                     continue
                 raise ProviderError("upstream_failed", "rate_limited")

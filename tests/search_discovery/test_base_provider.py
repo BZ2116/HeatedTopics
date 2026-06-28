@@ -155,3 +155,27 @@ def test_make_error_row_helper():
     assert row["title"] == ""
     assert row["url"] == ""
     assert row["result_id"] == "x_error_2"
+
+
+class _BaseDefaultParser(BaseHTTPSearchProvider):
+    """Uses the base class's default _parse_response unchanged."""
+    source_id = "base_default"
+    rpm_limit = 6000
+
+    def __init__(self, transport, **kwargs):
+        super().__init__(transport=transport, **kwargs)
+
+    @classmethod
+    def from_env(cls):
+        return cls(transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})))
+
+    def _build_request(self, query):
+        return httpx.Request("GET", "https://example.test/", params={"q": query})
+
+
+def test_base_parse_response_normalizes_non_json_to_parse_failed():
+    provider = _BaseDefaultParser(_transport(lambda r: httpx.Response(200, text="not json")))
+    rows = provider.search_rows("hello", keyword_category="topic_discovery",
+                                fetched_at="2026-06-27T10:00:00+08:00")
+    assert rows[0]["fetch_status"] == "parse_failed"
+    assert rows[0]["error_type"] == "invalid_json"
