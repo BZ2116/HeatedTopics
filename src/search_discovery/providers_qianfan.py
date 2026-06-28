@@ -51,12 +51,41 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
                 "client_secret": self._secret_key,
             },
         )
-        response = self._client.send(request)
-        if response.status_code != 200:
-            raise ProviderError("auth_failed", "token_exchange_failed")
-        body = response.json()
-        self._access_token = body["access_token"]
-        self._token_expires_at = self._clock() + int(body.get("expires_in", 2592000)) - 60
+        # Token exchange can briefly blip (5xx, timeout). Retry those
+        # transient cases, but do NOT retry 401/403 (permanent auth).
+        last_exc: ProviderError | None = None
+        for attempt in range(2):
+            try:
+                response = self._client.send(request)
+            except httpx.TimeoutException:
+                last_exc = ProviderError("auth_failed", "token_exchange_failed")
+                if attempt == 0:
+                    time.sleep(1)
+                continue
+            except httpx.TransportError:
+                last_exc = ProviderError("auth_failed", "token_exchange_failed")
+                if attempt == 0:
+                    time.sleep(1)
+                continue
+
+            status = response.status_code
+            if status == 401 or status == 403:
+                raise ProviderError("auth_failed", "token_exchange_failed")
+            if 500 <= status < 600:
+                last_exc = ProviderError("auth_failed", "token_exchange_failed")
+                if attempt == 0:
+                    time.sleep(1)
+                continue
+            if status != 200:
+                raise ProviderError("auth_failed", "token_exchange_failed")
+            body = response.json()
+            self._access_token = body["access_token"]
+            self._token_expires_at = self._clock() + int(body.get("expires_in", 2592000)) - 60
+            return
+        # All attempts exhausted
+        if last_exc is not None:
+            raise last_exc
+        raise ProviderError("auth_failed", "token_exchange_failed")
 
     def _build_request(self, query: str) -> httpx.Request:
         self._ensure_token()

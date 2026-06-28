@@ -98,3 +98,48 @@ def test_search_rows_normalizes_nonzero_errno_to_error_row(monkeypatch):
     assert rows[0]["fetch_status"] == "upstream_failed"
     assert rows[0]["error_type"] == "qianfan_errno_100"
     assert rows[0]["source_id"] == "baidu_qianfan_search"
+
+
+def test_token_exchange_retries_on_5xx_then_succeeds(monkeypatch):
+    monkeypatch.setenv("QIANFAN_API_KEY", "ak")
+    monkeypatch.setenv("QIANFAN_SECRET_KEY", "sk")
+    p = QianfanSearchProvider.from_env()
+
+    token_calls = {"n": 0}
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        if "oauth/2.0/token" in str(request.url):
+            token_calls["n"] += 1
+            if token_calls["n"] == 1:
+                return httpx.Response(503, json={"error": "transient"})
+            return httpx.Response(200, json={"access_token": "tok-1", "expires_in": 2592000})
+        return httpx.Response(200, json={"errno": 0, "data": {"items": []}})
+
+    p._client = httpx.Client(transport=_transport(responder), timeout=p.timeout_seconds)
+    # Avoid real sleep in retry backoff.
+    monkeypatch.setattr("src.search_discovery.providers_qianfan.time.sleep", lambda _s: None)
+    rows = p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00")
+    assert token_calls["n"] == 2
+    assert rows == []
+
+
+def test_token_exchange_does_not_retry_on_401(monkeypatch):
+    monkeypatch.setenv("QIANFAN_API_KEY", "ak")
+    monkeypatch.setenv("QIANFAN_SECRET_KEY", "sk")
+    p = QianfanSearchProvider.from_env()
+
+    token_calls = {"n": 0}
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        token_calls["n"] += 1
+        return httpx.Response(401, json={"error": "invalid_client"})
+
+    p._client = httpx.Client(transport=_transport(responder), timeout=p.timeout_seconds)
+    monkeypatch.setattr("src.search_discovery.providers_qianfan.time.sleep", lambda _s: None)
+    import pytest as _pytest
+    from src.search_discovery.base_provider import ProviderError
+    with _pytest.raises(ProviderError) as exc_info:
+        p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00")
+    assert exc_info.value.fetch_status == "auth_failed"
+    assert exc_info.value.error_type == "token_exchange_failed"
+    assert token_calls["n"] == 1
