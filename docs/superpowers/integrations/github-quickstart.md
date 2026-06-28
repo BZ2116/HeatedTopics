@@ -31,6 +31,6 @@ uv run python -m src.search_discovery.cli \
   --render-report
 ```
 
-查看 `data/search_discovery/raw/search_results.jsonl`，每条记录应包含 `source_id: "github_code"`。
+查看 `data/search_discovery/raw/search_results.jsonl`，每条记录应包含 `source_id: "github_search"`，成功条目 `fetch_status: "ok"`。
 
 来源：https://github.com/settings/tokens
