@@ -56,6 +56,30 @@ class _FailingGitHubProvider:
         }]
 
 
+def test_run_discovery_command_drops_non_ok_rows_from_topics(tmp_path, monkeypatch):
+    for key in ("GITHUB_TOKEN", "BOCHA_API_KEY", "BAILIAN_API_KEY",
+                "QIANFAN_API_KEY", "QIANFAN_SECRET_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "creator_id": "c1", "role": "科技博主", "profile_type": "tech_ai_creator",
+        "track_tags": ["AI"], "custom_keywords": ["Agent"], "content_modes": [],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    counts = run_discovery_command(root=tmp_path, profile_path=profile_path, render_report=False)
+
+    # raw rows may be > 0 (mock_unavailable markers are written),
+    # but none of them should reach the topic index.
+    assert counts["search_results_count"] > 0
+    assert counts["topics_count"] == 0
+
+    topic_index = json.loads(
+        (tmp_path / "data/search_discovery/processed/search_topic_index.json").read_text(encoding="utf-8")
+    )
+    assert topic_index["topics"] == []
+
+
 def test_failed_real_does_not_fallback_to_mock(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
     monkeypatch.setattr(

@@ -13,6 +13,8 @@ def cluster_results(
     content_by_result_id = {content.result_id: content for content in contents}
     topics = []
     for index, result in enumerate(results, start=1):
+        if result.fetch_status != "ok":
+            continue
         content = content_by_result_id.get(result.result_id)
         text = " ".join([result.title, result.snippet, content.content if content else ""])
         matched_keywords = _matched_keywords(profile.all_keywords(), text)
