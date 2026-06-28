@@ -36,10 +36,10 @@ class BailianWebSearchProvider(BaseHTTPSearchProvider):
             content=json.dumps({"query": query, "top_k": 10}),
         )
 
-    def _parse_response(self, response: httpx.Response, query: str) -> list[dict]:
+    def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
         results = body.get("output", {}).get("search_results", [])
-        rows: list[dict] = []
+        rows: list[dict[str, object]] = []
         for item in results:
             url = item.get("url", "")
             if not url:

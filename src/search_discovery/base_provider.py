@@ -36,7 +36,7 @@ def make_error_row(
     error_type: str,
     fetched_at: str,
     index: int = 0,
-) -> dict:
+) -> dict[str, object]:
     return {
         "result_id": f"{source_id}_error_{index}",
         "source_id": source_id,
@@ -87,7 +87,7 @@ class BaseHTTPSearchProvider:
         keyword_category: str = "unknown",
         fetched_at: str = "",
         index: int = 0,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         request = self._build_request(query)
         self._bucket.acquire()
         try:
@@ -170,7 +170,7 @@ class BaseHTTPSearchProvider:
     def _build_request(self, query: str) -> httpx.Request:
         raise NotImplementedError
 
-    def _parse_response(self, response: httpx.Response, query: str) -> list[dict]:
+    def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         try:
             return response.json()
         except Exception:

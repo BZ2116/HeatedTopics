@@ -35,9 +35,9 @@ class GitHubSearchProvider(BaseHTTPSearchProvider):
             headers=self._auth_headers(),
         )
 
-    def _parse_response(self, response: httpx.Response, query: str) -> list[dict]:
+    def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
-        rows: list[dict] = []
+        rows: list[dict[str, object]] = []
         for item in body.get("items", []):
             url = item.get("html_url", "")
             if not url:

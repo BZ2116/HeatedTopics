@@ -71,13 +71,13 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
             content=json.dumps({"query": query, "count": 10}),
         )
 
-    def _parse_response(self, response: httpx.Response, query: str) -> list[dict]:
+    def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
         errno = body.get("errno", 0)
         if errno != 0:
             raise ProviderError("upstream_failed", f"qianfan_errno_{errno}")
         items = body.get("data", {}).get("items", [])
-        rows: list[dict] = []
+        rows: list[dict[str, object]] = []
         for item in items:
             url = item.get("url", "")
             if not url:
