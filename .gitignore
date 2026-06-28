@@ -33,3 +33,6 @@ local_archive/
 dailyhot/
 detail/
 *.egg-info/
+
+# Local secrets
+.env
