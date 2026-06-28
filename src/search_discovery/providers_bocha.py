@@ -33,6 +33,7 @@ class BochaSearchProvider(BaseHTTPSearchProvider):
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
+            # Bocha returns a `summary` field when True, in addition to snippet.
             content=json.dumps({"query": query, "summary": True, "count": 10}),
         )
 
