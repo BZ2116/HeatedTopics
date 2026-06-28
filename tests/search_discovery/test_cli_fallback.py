@@ -1,6 +1,7 @@
 import json
 
-from src.search_discovery.cli import _build_registry, _emit_unavailable_markers
+from src.search_discovery.cli import _build_registry, _emit_unavailable_markers, run_discovery_command
+from src.search_discovery.providers_github import GitHubSearchProvider
 from src.search_discovery.types import CreatorProfile
 
 
@@ -43,3 +44,37 @@ def test_build_registry_uses_real_when_keys_present(monkeypatch):
     # others should be mock
     from src.search_discovery.providers import MockProvider
     assert isinstance(registry._providers["news_api_cn"], MockProvider)
+
+
+class _FailingGitHubProvider:
+    source_id = "github_search"
+
+    def search_rows(self, query, **kwargs):
+        return [{
+            "title": "", "url": "", "snippet": "", "content_type": "unknown",
+            "fetch_status": "auth_failed", "error_type": "unauthorized",
+        }]
+
+
+def test_failed_real_does_not_fallback_to_mock(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    monkeypatch.setattr(
+        GitHubSearchProvider, "from_env",
+        classmethod(lambda cls: _FailingGitHubProvider()),
+    )
+
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps({
+        "creator_id": "c1", "role": "科技博主", "profile_type": "tech_ai_creator",
+        "track_tags": ["AI"], "custom_keywords": ["Agent"], "content_modes": [],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    run_discovery_command(root=tmp_path, profile_path=profile_path, render_report=False)
+
+    raw_lines = (tmp_path / "data/search_discovery/raw/search_results.jsonl").read_text(
+        encoding="utf-8").splitlines()
+    raw_rows = [json.loads(line) for line in raw_lines]
+    github_rows = [r for r in raw_rows if r["source_id"] == "github_search"]
+    assert github_rows, "expected github rows to be written even on failure"
+    assert not any(r["fetch_status"] == "mock_unavailable" for r in github_rows)
+    assert all(r["fetch_status"] == "auth_failed" for r in github_rows)
