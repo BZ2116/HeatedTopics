@@ -26,8 +26,6 @@ _REAL_PROVIDER_CLASSES = [
     QianfanSearchProvider,
 ]
 
-_SLOT_IDS = ("github_search", "news_api_cn", "juejin_content", "baidu_qianfan_search")
-
 
 def _build_registry() -> SearchProviderRegistry:
     providers: list[object] = []
@@ -72,8 +70,8 @@ def run_discovery_command(root: Path, profile_path: Path, render_report: bool = 
     registry = _build_registry()
     results = []
     unavailable_ids = {
-        sid for sid in _SLOT_IDS
-        if isinstance(registry._providers.get(sid), MockProvider)
+        sid for sid, provider in registry.providers.items()
+        if isinstance(provider, MockProvider)
     }
     counter = 0
     for bundle in bundles:

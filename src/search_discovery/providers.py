@@ -25,6 +25,10 @@ class SearchProviderRegistry:
     def __init__(self, providers: list[SearchProvider]) -> None:
         self._providers = {provider.source_id: provider for provider in providers}
 
+    @property
+    def providers(self) -> dict[str, SearchProvider]:
+        return self._providers
+
     def search(
         self,
         source_id: str,
