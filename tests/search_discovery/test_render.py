@@ -22,30 +22,36 @@ def test_write_json_creates_readable_json(tmp_path):
     assert row["topics"][0]["title"] == "AI Agent 新闻"
 
 
-def test_render_topics_markdown_includes_source_urls():
+def test_render_topics_markdown_outputs_creator_reference_fields():
     topic = CandidateTopic(
-        topic_id="search_topic_001",
-        title="AI Agent 开源项目升温",
-        matched_keywords=["AI Agent"],
+        topic_id="t1",
+        title="AI Agent 开源项目仍在快速更新",
+        matched_keywords=["AI Agent", "MCP"],
         keyword_categories=["tech_project"],
-        profile_match_score=88,
-        freshness="breaking",
+        profile_match_score=90,
+        freshness="ongoing",
         detail_level="high",
         risk_level="low",
         source_hits=[
             {
                 "source_id": "github_search",
-                "title": "example/agent",
-                "url": "https://github.com/example/agent",
+                "title": "example/agent-framework",
+                "url": "https://github.com/example/agent-framework",
                 "content_type": "repo",
-                "source_weight": 95,
+                "source_weight": 100,
+                "route_reason": "科技类创作者关注开源项目，GitHub 适合召回 repo。",
             }
         ],
-        summary="GitHub 项目热度提升。",
-        topic_score=90,
+        summary="多个开源项目结果显示 AI Agent 工具链仍在活跃更新。",
+        topic_score=88,
     )
 
-    markdown = render_topics_markdown([topic], generated_at="2026-06-26T12:00:00+08:00")
+    markdown = render_topics_markdown([topic], generated_at="2026-06-29T12:00:00+08:00")
 
-    assert "# 关键词搜索话题推荐" in markdown
-    assert "https://github.com/example/agent" in markdown
+    assert "匹配原因" in markdown
+    assert "关键信息" in markdown
+    assert "创作角度" in markdown
+    assert "证据来源" in markdown
+    assert "可信度" in markdown
+    assert "风险提示" in markdown
+    assert "https://github.com/example/agent-framework" in markdown
