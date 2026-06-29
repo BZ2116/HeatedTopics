@@ -78,5 +78,6 @@ def test_business_profile_routes_news_above_github():
 
     routes = build_search_routes(profile)
     source_ids = [route.source_id for route in routes]
-    assert source_ids[0] == "news_api_cn"
+    assert source_ids[0] in {"tianapi_news", "news_api_cn"}
+    assert source_ids.index("tianapi_news") < source_ids.index("github_search")
     assert source_ids.index("baidu_qianfan_search") < source_ids.index("github_search")

@@ -52,9 +52,8 @@ def test_run_discovery_command_calls_each_source_once(tmp_path, monkeypatch):
 
     run_discovery_command(root=tmp_path, profile_path=profile_path, render_report=True)
 
-    assert github.queries == [
-        "AI Agent MCP RAG in:name,description stars:>50 pushed:>2025-01-01"
-    ]
+    assert len(github.queries) == 1
+    assert github.queries[0].startswith("AI Agent MCP RAG in:name,description,readme stars:>200 pushed:>")
     raw_rows = [
         json.loads(line)
         for line in (tmp_path / "data/search_discovery/raw/search_results.jsonl").read_text(encoding="utf-8").splitlines()

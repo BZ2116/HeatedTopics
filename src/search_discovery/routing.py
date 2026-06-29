@@ -1,4 +1,5 @@
 from src.search_discovery.config import source_registry
+from src.search_discovery.domestic_sources import domestic_query_for_source, domestic_source_plan
 from src.search_discovery.github_query import build_github_query
 from src.search_discovery.types import CreatorProfile, SearchRoute
 
@@ -77,6 +78,38 @@ def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
     base_weights = PROFILE_BASE_WEIGHTS.get(profile.profile_type, PROFILE_BASE_WEIGHTS["general_hot_topic_creator"])
     boosts = INTENT_BOOSTS.get(intent, INTENT_BOOSTS["content_angle"])
 
+    domestic_plan = domestic_source_plan(intent)
+    if domestic_plan:
+        routes: list[SearchRoute] = []
+        for planned in domestic_plan:
+            source = sources.get(planned.source_id)
+            if source is None:
+                continue
+            routes.append(
+                SearchRoute(
+                    source_id=planned.source_id,
+                    source_role=source.source_role,
+                    query=domestic_query_for_source(planned.source_id, keywords, intent),
+                    intent=intent,
+                    weight=planned.weight,
+                    reason=_route_reason(profile, planned.source_id, intent),
+                )
+            )
+        github_weight = base_weights.get("github_search", 0) + boosts.get("github_search", 0)
+        if github_weight > 0 and "github_search" in sources:
+            source = sources["github_search"]
+            routes.append(
+                SearchRoute(
+                    source_id="github_search",
+                    source_role=source.source_role,
+                    query=build_github_query(profile),
+                    intent="tech_project",
+                    weight=max(5, github_weight - 30),
+                    reason=_route_reason(profile, "github_search", "tech_project"),
+                )
+            )
+        return sorted(routes, key=lambda route: route.weight, reverse=True)
+
     routes: list[SearchRoute] = []
     for source_id, template in SOURCE_QUERY_TEMPLATES.items():
         weight = max(0, min(100, base_weights.get(source_id, 0) + boosts.get(source_id, 0)))
@@ -152,5 +185,8 @@ def _route_reason(profile: CreatorProfile, source_id: str, intent: str) -> str:
         "juejin_content": "技术内容源适合召回中文教程、实践案例和开发者文章。",
         "baidu_qianfan_search": "通用搜索适合召回中文网页、博客、问答和行业资料。",
         "news_api_cn": "新闻搜索适合召回时效新闻、发布信息和事实背景。",
+        "tianapi_news": "TianAPI 新闻源适合召回国内新闻事实、媒体来源和发布时间。",
+        "qiniu_web_search": "七牛全网搜索适合作为国内网页搜索兜底源。",
     }
-    return f"{profile.role or profile.profile_type} 的当前搜索意图是 {intent}，{source_labels[source_id]}"
+    label = source_labels.get(source_id, "")
+    return f"{profile.role or profile.profile_type} 的当前搜索意图是 {intent}，{label}"
