@@ -15,6 +15,8 @@ from src.search_discovery.providers_bailian import BailianWebSearchProvider
 from src.search_discovery.providers_bocha import BochaSearchProvider
 from src.search_discovery.providers_github import GitHubSearchProvider
 from src.search_discovery.providers_qianfan import QianfanSearchProvider
+from src.search_discovery.providers_qiniu import QiniuWebSearchProvider
+from src.search_discovery.providers_tianapi import TianAPINewsProvider
 from src.search_discovery.render import render_topics_markdown
 from src.search_discovery.routing import build_search_routes
 from src.search_discovery.types import CreatorProfile, SearchResult
@@ -24,6 +26,8 @@ _REAL_PROVIDER_CLASSES = [
     BochaSearchProvider,
     BailianWebSearchProvider,
     QianfanSearchProvider,
+    TianAPINewsProvider,
+    QiniuWebSearchProvider,
 ]
 
 
