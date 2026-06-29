@@ -6,17 +6,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.search_discovery.base_provider import make_error_row
-from src.search_discovery.config import plan_sources_for_category, profile_source_weights, source_registry
+from src.search_discovery.config import profile_source_weights
 from src.search_discovery.discovery import cluster_results
 from src.search_discovery.enrich import enrich_results
 from src.search_discovery.io import write_json, write_jsonl
-from src.search_discovery.keywords import classify_keywords, generate_query_bundles
 from src.search_discovery.providers import MockProvider, SearchProviderRegistry, normalize_provider_rows
 from src.search_discovery.providers_bailian import BailianWebSearchProvider
 from src.search_discovery.providers_bocha import BochaSearchProvider
 from src.search_discovery.providers_github import GitHubSearchProvider
 from src.search_discovery.providers_qianfan import QianfanSearchProvider
 from src.search_discovery.render import render_topics_markdown
+from src.search_discovery.routing import build_search_routes
 from src.search_discovery.types import CreatorProfile, SearchResult
 
 _REAL_PROVIDER_CLASSES = [
@@ -64,47 +64,62 @@ def run_discovery_command(root: Path, profile_path: Path, render_report: bool = 
     load_dotenv(root / ".env")
     profile = CreatorProfile.from_dict(json.loads(profile_path.read_text(encoding="utf-8")))
     generated_at = _now_shanghai()
-    categories = classify_keywords(profile)
-    bundles = generate_query_bundles(profile, categories=categories)
-    sources = source_registry()
+    routes = build_search_routes(profile)
     registry = _build_registry()
     results = []
     unavailable_ids = {
         sid for sid, provider in registry.providers.items()
         if isinstance(provider, MockProvider)
     }
-    counter = 0
-    for bundle in bundles:
-        planned_sources = plan_sources_for_category(profile.profile_type, bundle.category)
-        for planned_source in planned_sources:
-            source = sources[planned_source.source_id]
-            for query in bundle.queries:
-                if planned_source.source_id in unavailable_ids:
-                    marker_rows = _emit_unavailable_markers(
-                        registry_source_ids=[planned_source.source_id],
-                        query=query, category=bundle.category, fetched_at=generated_at,
-                        index=counter,
-                    )
-                    results.extend(normalize_provider_rows(
-                        rows=marker_rows,
-                        source_id=planned_source.source_id,
-                        source_role=source.source_role,
-                        query=query,
-                        keyword_category=bundle.category,
-                        fetched_at=generated_at,
-                    ))
-                else:
-                    results.extend(
-                        registry.search(
-                            source_id=planned_source.source_id,
-                            source_role=source.source_role,
-                            query=query,
-                            keyword_category=bundle.category,
-                            fetched_at=generated_at,
-                            index=counter,
-                        )
-                    )
-                counter += 1
+    for counter, route in enumerate(routes):
+        if route.source_id in unavailable_ids:
+            marker_rows = _emit_unavailable_markers(
+                registry_source_ids=[route.source_id],
+                query=route.query,
+                category=route.intent,
+                fetched_at=generated_at,
+                index=counter,
+            )
+            rows = normalize_provider_rows(
+                rows=[
+                    {
+                        **row,
+                        "route_weight": route.weight,
+                        "route_reason": route.reason,
+                        "matched_keywords": _matched_keywords(profile, row.get("title", ""), row.get("snippet", "")),
+                    }
+                    for row in marker_rows
+                ],
+                source_id=route.source_id,
+                source_role=route.source_role,
+                query=route.query,
+                keyword_category=route.intent,
+                fetched_at=generated_at,
+            )
+            results.extend(rows)
+            continue
+
+        rows = registry.search(
+            source_id=route.source_id,
+            source_role=route.source_role,
+            query=route.query,
+            keyword_category=route.intent,
+            fetched_at=generated_at,
+            index=counter,
+        )
+        results.extend(
+            [
+                SearchResult(
+                    **{
+                        **result.to_dict(),
+                        "route_weight": route.weight,
+                        "route_reason": route.reason,
+                        "matched_keywords": _matched_keywords(profile, result.title, result.snippet),
+                    }
+                )
+                for result in rows
+            ]
+        )
     enriched = enrich_results(results)
     source_weights = profile_source_weights(profile.profile_type)
     topics = cluster_results(profile, results, enriched, source_weights=source_weights)
@@ -141,6 +156,15 @@ def _output_paths(root: Path) -> dict[str, Path]:
 
 def _now_shanghai() -> str:
     return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+
+
+def _matched_keywords(profile: CreatorProfile, title: str, snippet: str) -> list[str]:
+    haystack = f"{title} {snippet}".lower()
+    return [
+        keyword
+        for keyword in profile.all_keywords()
+        if keyword.lower() in haystack
+    ]
 
 
 def main() -> None:
