@@ -10,16 +10,22 @@ class CreatorProfile:
     track_tags: list[str] = field(default_factory=list)
     custom_keywords: list[str] = field(default_factory=list)
     content_modes: list[str] = field(default_factory=list)
+    platforms: list[str] = field(default_factory=list)
+    content_goal: str = ""
+    exclude_keywords: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> "CreatorProfile":
         return cls(
-            creator_id=str(row.get("creator_id", "")),
+            creator_id=str(row.get("creator_id", row.get("user_id", ""))),
             role=str(row.get("role", "")),
             profile_type=str(row.get("profile_type", "")),
             track_tags=[str(item) for item in row.get("track_tags", [])],
-            custom_keywords=[str(item) for item in row.get("custom_keywords", [])],
+            custom_keywords=[str(item) for item in row.get("custom_keywords", row.get("keywords", []))],
             content_modes=[str(item) for item in row.get("content_modes", [])],
+            platforms=[str(item) for item in row.get("platforms", row.get("platform", []))],
+            content_goal=str(row.get("content_goal", "")),
+            exclude_keywords=[str(item) for item in row.get("exclude_keywords", [])],
         )
 
     def all_keywords(self) -> list[str]:
@@ -50,6 +56,19 @@ class PlannedSource:
 
 
 @dataclass(frozen=True)
+class SearchRoute:
+    source_id: str
+    source_role: str
+    query: str
+    intent: str
+    weight: int
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class SearchResult:
     result_id: str
     source_id: str
@@ -67,6 +86,9 @@ class SearchResult:
     raw_payload: dict[str, Any] = field(default_factory=dict)
     fetch_status: str = "ok"
     error_type: str | None = None
+    route_weight: int = 0
+    route_reason: str = ""
+    matched_keywords: list[str] = field(default_factory=list)
 
     def has_usable_detail(self) -> bool:
         return bool(self.url and (self.snippet or self.raw_payload or self.content_type == "repo"))

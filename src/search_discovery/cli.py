@@ -3,38 +3,123 @@ import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from src.search_discovery.config import plan_sources_for_category, profile_source_weights, source_registry
+from dotenv import load_dotenv
+
+from src.search_discovery.base_provider import make_error_row
+from src.search_discovery.config import profile_source_weights
 from src.search_discovery.discovery import cluster_results
 from src.search_discovery.enrich import enrich_results
 from src.search_discovery.io import write_json, write_jsonl
-from src.search_discovery.keywords import classify_keywords, generate_query_bundles
-from src.search_discovery.providers import MockProvider, SearchProviderRegistry
+from src.search_discovery.providers import MockProvider, SearchProviderRegistry, normalize_provider_rows
+from src.search_discovery.providers_bailian import BailianWebSearchProvider
+from src.search_discovery.providers_bocha import BochaSearchProvider
+from src.search_discovery.providers_github import GitHubSearchProvider
+from src.search_discovery.providers_qianfan import QianfanSearchProvider
 from src.search_discovery.render import render_topics_markdown
-from src.search_discovery.types import CreatorProfile
+from src.search_discovery.routing import build_search_routes
+from src.search_discovery.types import CreatorProfile, SearchResult
+
+_REAL_PROVIDER_CLASSES = [
+    GitHubSearchProvider,
+    BochaSearchProvider,
+    BailianWebSearchProvider,
+    QianfanSearchProvider,
+]
+
+
+def _build_registry() -> SearchProviderRegistry:
+    providers: list[object] = []
+    for cls in _REAL_PROVIDER_CLASSES:
+        real = cls.from_env()
+        if real is not None:
+            providers.append(real)
+        else:
+            providers.append(MockProvider(cls.source_id, rows=[]))
+    return SearchProviderRegistry(providers)
+
+
+def _emit_unavailable_markers(
+    *,
+    registry_source_ids: list[str],
+    query: str,
+    category: str,
+    fetched_at: str,
+    index: int,
+) -> list[dict]:
+    return [
+        make_error_row(
+            source_id=sid,
+            query=query,
+            category=category,
+            fetch_status="mock_unavailable",
+            error_type="missing_key",
+            fetched_at=fetched_at,
+            index=index,
+        )
+        for sid in registry_source_ids
+    ]
 
 
 def run_discovery_command(root: Path, profile_path: Path, render_report: bool = False) -> dict[str, int]:
+    load_dotenv(root / ".env")
     profile = CreatorProfile.from_dict(json.loads(profile_path.read_text(encoding="utf-8")))
     generated_at = _now_shanghai()
-    categories = classify_keywords(profile)
-    bundles = generate_query_bundles(profile, categories=categories)
-    sources = source_registry()
-    registry = _default_mock_registry()
+    routes = build_search_routes(profile)
+    registry = _build_registry()
     results = []
-    for bundle in bundles:
-        planned_sources = plan_sources_for_category(profile.profile_type, bundle.category)
-        for planned_source in planned_sources:
-            source = sources[planned_source.source_id]
-            for query in bundle.queries:
-                results.extend(
-                    registry.search(
-                        source_id=planned_source.source_id,
-                        source_role=source.source_role,
-                        query=query,
-                        keyword_category=bundle.category,
-                        fetched_at=generated_at,
-                    )
+    unavailable_ids = {
+        sid for sid, provider in registry.providers.items()
+        if isinstance(provider, MockProvider)
+    }
+    for counter, route in enumerate(routes):
+        if route.source_id in unavailable_ids:
+            marker_rows = _emit_unavailable_markers(
+                registry_source_ids=[route.source_id],
+                query=route.query,
+                category=route.intent,
+                fetched_at=generated_at,
+                index=counter,
+            )
+            rows = normalize_provider_rows(
+                rows=[
+                    {
+                        **row,
+                        "route_weight": route.weight,
+                        "route_reason": route.reason,
+                        "matched_keywords": _matched_keywords(profile, row.get("title", ""), row.get("snippet", "")),
+                    }
+                    for row in marker_rows
+                ],
+                source_id=route.source_id,
+                source_role=route.source_role,
+                query=route.query,
+                keyword_category=route.intent,
+                fetched_at=generated_at,
+            )
+            results.extend(rows)
+            continue
+
+        rows = registry.search(
+            source_id=route.source_id,
+            source_role=route.source_role,
+            query=route.query,
+            keyword_category=route.intent,
+            fetched_at=generated_at,
+            index=counter,
+        )
+        results.extend(
+            [
+                SearchResult(
+                    **{
+                        **result.to_dict(),
+                        "route_weight": route.weight,
+                        "route_reason": route.reason,
+                        "matched_keywords": _matched_keywords(profile, result.title, result.snippet),
+                    }
                 )
+                for result in rows
+            ]
+        )
     enriched = enrich_results(results)
     source_weights = profile_source_weights(profile.profile_type)
     topics = cluster_results(profile, results, enriched, source_weights=source_weights)
@@ -69,59 +154,17 @@ def _output_paths(root: Path) -> dict[str, Path]:
     }
 
 
-def _default_mock_registry() -> SearchProviderRegistry:
-    return SearchProviderRegistry(
-        [
-            MockProvider(
-                "baidu_qianfan_search",
-                [
-                    {
-                        "title": "AI Agent 最新进展：开源工具和产品能力同步升温",
-                        "url": "https://example.com/ai-agent-news",
-                        "snippet": "AI Agent 相关产品发布和开源项目近期持续增加。",
-                        "content_type": "news",
-                    }
-                ],
-            ),
-            MockProvider(
-                "news_api_cn",
-                [
-                    {
-                        "title": "AI 工具行业出现新一轮产品发布",
-                        "url": "https://example.com/ai-tool-news",
-                        "snippet": "多家公司发布 AI 工具更新，开发者生态成为重点。",
-                        "content_type": "news",
-                    }
-                ],
-            ),
-            MockProvider(
-                "github_search",
-                [
-                    {
-                        "title": "example/ai-agent-framework",
-                        "url": "https://github.com/example/ai-agent-framework",
-                        "snippet": "Open source AI Agent framework with tools and workflow support.",
-                        "content_type": "repo",
-                    }
-                ],
-            ),
-            MockProvider(
-                "juejin_content",
-                [
-                    {
-                        "title": "AI Agent 掘金实践：从工具调用到工作流",
-                        "url": "https://juejin.cn/post/example",
-                        "snippet": "文章介绍 AI Agent 工程实践、工具调用和部署经验。",
-                        "content_type": "article",
-                    }
-                ],
-            ),
-        ]
-    )
-
-
 def _now_shanghai() -> str:
     return datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
+
+
+def _matched_keywords(profile: CreatorProfile, title: str, snippet: str) -> list[str]:
+    haystack = f"{title} {snippet}".lower()
+    return [
+        keyword
+        for keyword in profile.all_keywords()
+        if keyword.lower() in haystack
+    ]
 
 
 def main() -> None:
