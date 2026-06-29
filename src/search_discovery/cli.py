@@ -61,7 +61,7 @@ def _emit_unavailable_markers(
 
 
 def run_discovery_command(root: Path, profile_path: Path, render_report: bool = False) -> dict[str, int]:
-    load_dotenv()
+    load_dotenv(root / ".env")
     profile = CreatorProfile.from_dict(json.loads(profile_path.read_text(encoding="utf-8")))
     generated_at = _now_shanghai()
     categories = classify_keywords(profile)

@@ -88,7 +88,18 @@ class BaseHTTPSearchProvider:
         fetched_at: str = "",
         index: int = 0,
     ) -> list[dict[str, object]]:
-        request = self._build_request(query)
+        try:
+            request = self._build_request(query)
+        except ProviderError as exc:
+            return [make_error_row(
+                source_id=self.source_id,
+                query=query,
+                category=keyword_category,
+                fetch_status=exc.fetch_status,
+                error_type=exc.error_type,
+                fetched_at=fetched_at,
+                index=index,
+            )]
         self._bucket.acquire()
         try:
             response = self._execute_with_retry(request)

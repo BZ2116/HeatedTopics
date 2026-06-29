@@ -22,7 +22,10 @@ class GitHubSearchProvider(BaseHTTPSearchProvider):
         return cls(token=token)
 
     def _auth_headers(self) -> dict[str, str]:
-        headers = {"Accept": "application/vnd.github+json"}
+        headers = {
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "heatedTopics/0.1",
+        }
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         return headers

@@ -41,6 +41,22 @@ def test_search_rows_parses_items(monkeypatch):
     assert rows[0]["metrics"]["stars"] == 100
 
 
+def test_search_rows_sends_user_agent(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        assert request.headers["User-Agent"] == "heatedTopics/0.1"
+        return httpx.Response(200, json={"items": []})
+
+    provider._client = httpx.Client(
+        transport=_transport(responder),
+        timeout=provider.timeout_seconds,
+    )
+
+    assert provider.search_rows("agent") == []
+
+
 def test_search_rows_empty_items(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
     provider = GitHubSearchProvider.from_env()

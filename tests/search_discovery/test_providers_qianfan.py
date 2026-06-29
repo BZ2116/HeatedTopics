@@ -136,10 +136,25 @@ def test_token_exchange_does_not_retry_on_401(monkeypatch):
 
     p._client = httpx.Client(transport=_transport(responder), timeout=p.timeout_seconds)
     monkeypatch.setattr("src.search_discovery.providers_qianfan.time.sleep", lambda _s: None)
-    import pytest as _pytest
-    from src.search_discovery.base_provider import ProviderError
-    with _pytest.raises(ProviderError) as exc_info:
-        p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00")
-    assert exc_info.value.fetch_status == "auth_failed"
-    assert exc_info.value.error_type == "token_exchange_failed"
+    rows = p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00", index=3)
+    assert rows == [
+        {
+            "result_id": "baidu_qianfan_search_error_3",
+            "source_id": "baidu_qianfan_search",
+            "source_role": "",
+            "query": "x",
+            "keyword_category": "unknown",
+            "title": "",
+            "url": "",
+            "domain": "",
+            "snippet": "",
+            "content_type": "unknown",
+            "published_at": "",
+            "fetched_at": "2026-06-27T10:00:00+08:00",
+            "metrics": {},
+            "raw_payload": {},
+            "fetch_status": "auth_failed",
+            "error_type": "token_exchange_failed",
+        }
+    ]
     assert token_calls["n"] == 1
