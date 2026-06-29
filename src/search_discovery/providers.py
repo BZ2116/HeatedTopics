@@ -78,6 +78,9 @@ def normalize_provider_rows(
             raw_payload=dict(row),
             fetch_status=str(row.get("fetch_status", "ok")),
             error_type=row.get("error_type"),
+            route_weight=int(row.get("route_weight", 0) or 0),
+            route_reason=str(row.get("route_reason", "")),
+            matched_keywords=[str(item) for item in row.get("matched_keywords", [])],
         )
         if result.fetch_status == "ok" and not result.has_usable_detail():
             continue
