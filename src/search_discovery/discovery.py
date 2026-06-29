@@ -95,6 +95,8 @@ def _source_hits(results: list[SearchResult], source_weights: dict[str, int]) ->
                 "content_type": result.content_type,
                 "source_weight": result.route_weight or source_weights.get(result.source_id, 0),
                 "route_reason": result.route_reason,
+                "metrics": result.metrics,
+                "recently_recommended": bool(result.metrics.get("recently_recommended", False)),
             }
         )
     return hits

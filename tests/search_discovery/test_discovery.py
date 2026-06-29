@@ -126,3 +126,40 @@ def test_cluster_results_prefers_result_route_weight_over_profile_weight():
     topics = cluster_results(profile, results, [], source_weights={"github_search": 80})
 
     assert topics[0].source_hits[0]["source_weight"] == 100
+
+
+def test_cluster_results_carries_github_metrics_into_source_hits():
+    profile = CreatorProfile.from_dict(
+        {
+            "creator_id": "creator_001",
+            "role": "科技类博主",
+            "profile_type": "tech_ai_creator",
+            "custom_keywords": ["AI Agent"],
+        }
+    )
+    result = SearchResult(
+        result_id="r1",
+        source_id="github_search",
+        source_role="vertical_project",
+        query="AI Agent in:name,description,readme stars:>200 pushed:>2026-01-01",
+        keyword_category="tech_project",
+        title="owner/agent-framework",
+        url="https://github.com/owner/agent-framework",
+        snippet="AI Agent framework",
+        content_type="repo",
+        metrics={
+            "stars": 1200,
+            "forks": 88,
+            "language": "Python",
+            "updated_at": "2026-06-21T10:00:00Z",
+            "recently_recommended": True,
+        },
+    )
+
+    topics = cluster_results(profile, [result], [], source_weights={"github_search": 100})
+
+    hit = topics[0].source_hits[0]
+    assert hit["metrics"]["stars"] == 1200
+    assert hit["metrics"]["forks"] == 88
+    assert hit["metrics"]["language"] == "Python"
+    assert hit["recently_recommended"] is True

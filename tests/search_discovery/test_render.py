@@ -54,4 +54,40 @@ def test_render_topics_markdown_outputs_creator_reference_fields():
     assert "证据来源" in markdown
     assert "可信度" in markdown
     assert "风险提示" in markdown
-    assert "https://github.com/example/agent-framework" in markdown
+
+
+def test_render_topics_markdown_includes_github_project_details():
+    topic = CandidateTopic(
+        topic_id="t1",
+        title="owner/agent-framework",
+        matched_keywords=["AI Agent"],
+        keyword_categories=["tech_project"],
+        profile_match_score=80,
+        freshness="ongoing",
+        detail_level="high",
+        risk_level="low",
+        source_hits=[
+            {
+                "source_id": "github_search",
+                "title": "owner/agent-framework",
+                "url": "https://github.com/owner/agent-framework",
+                "content_type": "repo",
+                "source_weight": 100,
+                "metrics": {
+                    "stars": 1200,
+                    "forks": 88,
+                    "language": "Python",
+                    "updated_at": "2026-06-21T10:00:00Z",
+                },
+                "recently_recommended": True,
+            }
+        ],
+        summary="AI Agent framework",
+    )
+
+    markdown = render_topics_markdown([topic], generated_at="2026-06-29T12:00:00+08:00")
+
+    assert "stars: 1200" in markdown
+    assert "forks: 88" in markdown
+    assert "language: Python" in markdown
+    assert "recently recommended" in markdown

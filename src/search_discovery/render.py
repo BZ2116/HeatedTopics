@@ -32,7 +32,7 @@ def render_topics_markdown(topics: list[CandidateTopic], generated_at: str) -> s
             url = str(hit.get("url", ""))
             source_id = str(hit.get("source_id", ""))
             if url:
-                lines.append(f"  - `{source_id}` [{title}]({url})")
+                lines.append(f"  - `{source_id}` [{title}]({url}){_hit_suffix(hit)}")
         lines.extend(
             [
                 f"- 可信度：{confidence}",
@@ -64,3 +64,21 @@ def _first_nonempty(values: list[str]) -> str:
         if value.strip():
             return value.strip()
     return ""
+
+
+def _hit_suffix(hit: dict[str, object]) -> str:
+    metrics = hit.get("metrics", {})
+    if not isinstance(metrics, dict):
+        return ""
+    parts: list[str] = []
+    if metrics.get("stars"):
+        parts.append(f"stars: {metrics['stars']}")
+    if metrics.get("forks"):
+        parts.append(f"forks: {metrics['forks']}")
+    if metrics.get("language"):
+        parts.append(f"language: {metrics['language']}")
+    if metrics.get("updated_at"):
+        parts.append(f"updated: {metrics['updated_at']}")
+    if hit.get("recently_recommended"):
+        parts.append("recently recommended")
+    return f" ({', '.join(parts)})" if parts else ""
