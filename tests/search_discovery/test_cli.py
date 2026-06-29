@@ -157,3 +157,13 @@ def test_run_discovery_command_marks_recent_github_recommendations(tmp_path, mon
     assert github_row["metrics"]["recently_recommended"] is True
     updated_history = json.loads(history_path.read_text(encoding="utf-8"))
     assert updated_history["https://github.com/owner/agent-framework"]["recommended_at"] == "2026-06-29T12:00:00+08:00"
+
+    topic_index = json.loads((tmp_path / "data/search_discovery/processed/search_topic_index.json").read_text(encoding="utf-8"))
+    github_hit = next(
+        hit
+        for topic in topic_index["topics"]
+        for hit in topic["source_hits"]
+        if hit["source_id"] == "github_search"
+    )
+    assert github_hit["recently_recommended"] is True
+    assert github_hit["metrics"].get("recently_recommended") is True

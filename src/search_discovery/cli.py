@@ -132,15 +132,15 @@ def run_discovery_command(root: Path, profile_path: Path, render_report: bool = 
                 for result in rows
             ]
         )
-    enriched = enrich_results(results)
-    source_weights = profile_source_weights(profile.profile_type)
-    topics = cluster_results(profile, results, enriched, source_weights=source_weights)
     results = mark_recent_recommendations(
         results,
         history=history,
         now=datetime.fromisoformat(generated_at),
         cooldown_days=30,
     )
+    enriched = enrich_results(results)
+    source_weights = profile_source_weights(profile.profile_type)
+    topics = cluster_results(profile, results, enriched, source_weights=source_weights)
     write_jsonl(paths["raw_results"], [result.to_dict() for result in results])
     write_jsonl(paths["evidence"], [content.to_dict() for content in enriched])
     write_json(
