@@ -1,4 +1,5 @@
 from src.search_discovery.config import source_registry
+from src.search_discovery.github_query import build_github_query
 from src.search_discovery.types import CreatorProfile, SearchRoute
 
 
@@ -65,7 +66,6 @@ INTENT_BOOSTS = {
 SOURCE_QUERY_TEMPLATES = {
     "news_api_cn": "{keywords} 最新 发布 融资 应用",
     "baidu_qianfan_search": "{keywords} 最新进展 行业动态 应用",
-    "github_search": "{keywords} in:name,description stars:>50 pushed:>2025-01-01",
     "juejin_content": "{keywords} 教程 实践 案例 开发者",
 }
 
@@ -91,6 +91,19 @@ def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
                 intent=intent,
                 weight=weight,
                 reason=_route_reason(profile, source_id, intent),
+            )
+        )
+    github_weight = max(0, min(100, base_weights.get("github_search", 0) + boosts.get("github_search", 0)))
+    if github_weight > 0 and "github_search" in sources:
+        source = sources["github_search"]
+        routes.append(
+            SearchRoute(
+                source_id="github_search",
+                source_role=source.source_role,
+                query=build_github_query(profile),
+                intent=intent,
+                weight=github_weight,
+                reason=_route_reason(profile, "github_search", intent),
             )
         )
     return sorted(routes, key=lambda route: route.weight, reverse=True)
