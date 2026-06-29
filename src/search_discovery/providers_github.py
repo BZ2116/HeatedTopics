@@ -45,13 +45,31 @@ class GitHubSearchProvider(BaseHTTPSearchProvider):
             url = item.get("html_url", "")
             if not url:
                 continue
+            license_info = item.get("license") or {}
+            metrics = {
+                "stars": item.get("stargazers_count", 0),
+                "forks": item.get("forks_count", 0),
+                "watchers": item.get("watchers_count", 0),
+                "open_issues": item.get("open_issues_count", 0),
+                "language": item.get("language") or "Unknown",
+                "topics": item.get("topics", []),
+                "pushed_at": item.get("pushed_at", ""),
+                "updated_at": item.get("updated_at", ""),
+                "license": license_info.get("spdx_id", "") if isinstance(license_info, dict) else "",
+            }
             rows.append({
                 "title": item.get("full_name", ""),
                 "url": url,
                 "domain": "github.com",
                 "snippet": item.get("description", "") or "",
                 "content_type": "repo",
-                "published_at": "",
-                "metrics": {"stars": item.get("stargazers_count", 0)},
+                "published_at": str(item.get("updated_at", "") or item.get("pushed_at", "")),
+                "metrics": metrics,
+                "raw_payload": {
+                    "full_name": item.get("full_name", ""),
+                    "html_url": url,
+                    "description": item.get("description", "") or "",
+                    "owner": item.get("owner", {}),
+                },
             })
         return rows

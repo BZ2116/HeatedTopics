@@ -68,6 +68,48 @@ def test_search_rows_empty_items(monkeypatch):
     assert rows == []
 
 
+def test_search_rows_parses_rich_repo_metadata(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    provider._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={
+            "items": [
+                {
+                    "full_name": "owner/agent-framework",
+                    "html_url": "https://github.com/owner/agent-framework",
+                    "description": "AI Agent framework with MCP tools",
+                    "stargazers_count": 1200,
+                    "forks_count": 88,
+                    "watchers_count": 1200,
+                    "open_issues_count": 12,
+                    "language": "Python",
+                    "topics": ["ai-agent", "mcp", "rag"],
+                    "pushed_at": "2026-06-20T10:00:00Z",
+                    "updated_at": "2026-06-21T10:00:00Z",
+                    "license": {"spdx_id": "MIT"},
+                }
+            ]
+        })),
+        timeout=provider.timeout_seconds,
+    )
+
+    rows = provider.search_rows("AI Agent MCP")
+
+    assert rows[0]["metrics"] == {
+        "stars": 1200,
+        "forks": 88,
+        "watchers": 1200,
+        "open_issues": 12,
+        "language": "Python",
+        "topics": ["ai-agent", "mcp", "rag"],
+        "pushed_at": "2026-06-20T10:00:00Z",
+        "updated_at": "2026-06-21T10:00:00Z",
+        "license": "MIT",
+    }
+    assert rows[0]["published_at"] == "2026-06-21T10:00:00Z"
+    assert rows[0]["raw_payload"]["full_name"] == "owner/agent-framework"
+
+
 def test_search_rows_skips_items_without_url(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
     provider = GitHubSearchProvider.from_env()
