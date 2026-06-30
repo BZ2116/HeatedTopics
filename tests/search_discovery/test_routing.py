@@ -30,6 +30,7 @@ def test_build_search_routes_returns_one_route_per_source():
     source_ids = [route.source_id for route in routes]
     assert len(source_ids) == len(set(source_ids))
     assert set(source_ids[:2]) == {"github_search", "juejin_content"}
+    assert "tavily_search" in source_ids
     assert all(route.query for route in routes)
 
 
@@ -62,6 +63,13 @@ def test_github_route_uses_hunter_style_query(monkeypatch):
         "AI Agent MCP RAG in:name,description,readme stars:>200 "
     )
     assert "pushed:>" in routes["github_search"].query
+
+
+def test_tech_profile_includes_tavily_as_ai_friendly_web_search():
+    routes = {route.source_id: route for route in build_search_routes(_tech_profile())}
+
+    assert routes["tavily_search"].query == "AI Agent MCP RAG latest news background"
+    assert routes["tavily_search"].weight > routes["news_api_cn"].weight
 
 
 def test_business_profile_routes_news_above_github():

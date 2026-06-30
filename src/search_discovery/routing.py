@@ -10,24 +10,28 @@ PROFILE_BASE_WEIGHTS = {
         "juejin_content": 90,
         "baidu_qianfan_search": 80,
         "news_api_cn": 65,
+        "tavily_search": 75,
     },
     "developer_creator": {
         "github_search": 100,
         "juejin_content": 95,
         "baidu_qianfan_search": 70,
         "news_api_cn": 45,
+        "tavily_search": 65,
     },
     "business_startup_creator": {
         "github_search": 35,
         "juejin_content": 35,
         "baidu_qianfan_search": 85,
         "news_api_cn": 90,
+        "tavily_search": 80,
     },
     "general_hot_topic_creator": {
         "github_search": 5,
         "juejin_content": 10,
         "baidu_qianfan_search": 95,
         "news_api_cn": 90,
+        "tavily_search": 85,
     },
 }
 
@@ -37,30 +41,35 @@ INTENT_BOOSTS = {
         "juejin_content": 10,
         "baidu_qianfan_search": -10,
         "news_api_cn": -20,
+        "tavily_search": 0,
     },
     "tech_article": {
         "github_search": 5,
         "juejin_content": 20,
         "baidu_qianfan_search": 5,
         "news_api_cn": -10,
+        "tavily_search": 10,
     },
     "news_trend": {
         "github_search": -20,
         "juejin_content": -10,
         "baidu_qianfan_search": 15,
         "news_api_cn": 20,
+        "tavily_search": 15,
     },
     "product_trend": {
         "github_search": -10,
         "juejin_content": 0,
         "baidu_qianfan_search": 15,
         "news_api_cn": 10,
+        "tavily_search": 15,
     },
     "content_angle": {
         "github_search": -5,
         "juejin_content": 5,
         "baidu_qianfan_search": 15,
         "news_api_cn": 10,
+        "tavily_search": 15,
     },
 }
 
@@ -126,6 +135,19 @@ def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
                 reason=_route_reason(profile, source_id, intent),
             )
         )
+    tavily_weight = max(0, min(100, base_weights.get("tavily_search", 0) + boosts.get("tavily_search", 0)))
+    if tavily_weight > 0 and "tavily_search" in sources:
+        source = sources["tavily_search"]
+        routes.append(
+            SearchRoute(
+                source_id="tavily_search",
+                source_role=source.source_role,
+                query=f"{keywords} latest news background",
+                intent=intent,
+                weight=tavily_weight,
+                reason=_route_reason(profile, "tavily_search", intent),
+            )
+        )
     github_weight = max(0, min(100, base_weights.get("github_search", 0) + boosts.get("github_search", 0)))
     if github_weight > 0 and "github_search" in sources:
         source = sources["github_search"]
@@ -181,12 +203,13 @@ def compact_query_keywords(profile: CreatorProfile, limit: int = 5) -> str:
 
 def _route_reason(profile: CreatorProfile, source_id: str, intent: str) -> str:
     source_labels = {
-        "github_search": "GitHub 适合召回开源项目、repo、框架和开发者工具。",
-        "juejin_content": "技术内容源适合召回中文教程、实践案例和开发者文章。",
-        "baidu_qianfan_search": "通用搜索适合召回中文网页、博客、问答和行业资料。",
-        "news_api_cn": "新闻搜索适合召回时效新闻、发布信息和事实背景。",
-        "tianapi_news": "TianAPI 新闻源适合召回国内新闻事实、媒体来源和发布时间。",
-        "qiniu_web_search": "七牛全网搜索适合作为国内网页搜索兜底源。",
+        "github_search": "GitHub fits open-source projects, repos, frameworks, and developer tools.",
+        "juejin_content": "Juejin-style content fits Chinese tutorials, practice notes, and developer articles.",
+        "baidu_qianfan_search": "Baidu Qianfan fits domestic web pages, blogs, Q&A, and industry context.",
+        "news_api_cn": "Bocha/news search fits timely news, releases, and factual background.",
+        "tianapi_news": "TianAPI fits domestic news facts, media source names, and publish times.",
+        "tavily_search": "Tavily fits AI-friendly web/news search with summaries, URLs, and raw content.",
+        "qiniu_web_search": "Qiniu web search is a domestic web-search fallback source.",
     }
-    label = source_labels.get(source_id, "")
-    return f"{profile.role or profile.profile_type} 的当前搜索意图是 {intent}，{label}"
+    label = source_labels.get(source_id, "This source matches the current search route.")
+    return f"{profile.role or profile.profile_type} search intent is {intent}. {label}"
