@@ -54,6 +54,114 @@ QINIU_WEB_SEARCH_API_KEY=
 
 已有的 `GITHUB_TOKEN` / `BOCHA_API_KEY` / `BAILIAN_API_KEY` / `QIANFAN_API_KEY` / `QIANFAN_SECRET_KEY` 行为不变。
 
+## Search API 配置助手
+
+v2 新增 `src.search_discovery.config_api` CLI，专门管 `.env` 里的搜索 API key。核心特点：**保存即测**，确认写入 `.env` 后立刻跑一次连通性测试，立即反馈 key 是否可用。
+
+### 支持的 source
+
+| source_id | display_name | env_keys |
+| --- | --- | --- |
+| `github_search` | GitHub Search | `GITHUB_TOKEN` |
+| `news_api_cn` | Bocha AI Search | `BOCHA_API_KEY` |
+| `juejin_content` | Aliyun Bailian Web Search | `BAILIAN_API_KEY` |
+| `baidu_qianfan_search` | Baidu Qianfan Search | `QIANFAN_API_KEY`, `QIANFAN_SECRET_KEY` |
+| `tianapi_news` | TianAPI News | `TIANAPI_KEY` |
+| `tavily_search` | Tavily Search | `TAVILY_API_KEY` |
+| `qiniu_web_search` | Qiniu Web Search | `QINIU_WEB_SEARCH_API_KEY` |
+
+每个 source 的注册地址和默认 test query 在 `src/search_discovery/api_config.py::api_source_configs()` 里。
+
+### 命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `--list` | 列出全部 source，已配置的 key 显示掩码 (`ghp_****blW0`)，缺失的显示 `[MISS]` |
+| `--set SOURCE_ID` | 交互式配置单个 source：提示输入每个 env_key → 确认 `[y/N]` → 保存 → 立刻连通性测试 |
+| `--wizard` | 自动遍历所有未配齐的 source，逐个走 `--set` 流程 |
+| `--test SOURCE_ID` | 不写盘，仅对已存在的 key 跑一次连通性测试 |
+
+### 用法
+
+查看现状：
+
+```bash
+PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
+  uv run python -m src.search_discovery.config_api --list
+```
+
+输出示例（已配的会被掩码，不会打印完整 key）：
+
+```text
+Search API Configuration
+
+[OK]   github_search          GITHUB_TOKEN=ghp_****blW0
+[MISS] tavily_search          missing: TAVILY_API_KEY
+[OK]   baidu_qianfan_search   QIANFAN_API_KEY=bce-****9d02, QIANFAN_SECRET_KEY=bce-****1def
+```
+
+单 source 配置（保存后自动测）：
+
+```bash
+PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
+  uv run python -m src.search_discovery.config_api --set tavily_search
+```
+
+流程：
+
+```text
+Configuring Tavily Search
+Open: https://app.tavily.com/home
+
+TAVILY_API_KEY: tvly_xxxx
+Save these keys to .env? [y/N] y
+[OK] Saved TAVILY_API_KEY
+[TEST] Testing tavily_search with query: AI Agent 最新进展
+[OK] tavily_search connected successfully, returned 10 results.
+```
+
+拒绝确认则不写盘：
+
+```text
+Save these keys to .env? [y/N] n
+Cancelled.
+```
+
+一次性配齐所有缺失项：
+
+```bash
+PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
+  uv run python -m src.search_discovery.config_api --wizard
+```
+
+只测不写（改完 `.env` 后验证）：
+
+```bash
+PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
+  uv run python -m src.search_discovery.config_api --test tavily_search
+```
+
+### 连通性状态语义
+
+`test_source_connection()` 返回 `ConnectionTestResult`，状态字段含义：
+
+| status | 含义 | 建议 |
+| --- | --- | --- |
+| `ok` | provider 已配置且 query 正常返回 | 无需处理 |
+| `missing_key` | `.env` 里没有对应的 key，或 key 为空 | 走 `--set` 配 key |
+| `auth_failed` | 鉴权失败（401 / token 过期 / 千帆 token 兑换失败等） | 检查 key 是否过期或配额 |
+| `upstream_failed` | 上游 5xx / 网络层失败 | 重试或换时段 |
+| `parse_failed` | 返回内容无法解析 | 排查 provider 协议变更 |
+| `empty_result` | provider 配置 OK 但 query 没结果 | 通常无害，可能是分词过窄 |
+
+`--set` / `--wizard` 在 `status != "ok"` 时退出码 1，方便 CI 检查。
+
+### `.env` 安全
+
+- `mask_secret(value)`：空值 → `<empty>`；≤4 字符 → `***`；其他 → `{前4}****{后4}`。`--list` 永远不打印完整 key。
+- `upsert_env_values()`：保留原有注释、空行、未涉及的 key；只替换或追加传入的 key。原 `.env` 的结构基本不变。
+- `ensure_env_file()`：首次运行自动从 `.env.example` 复制生成 `.env`，避免手动新建。
+
 ## 路由规则
 
 `build_search_routes()` 根据 `classify_search_intent()` 的结果选路：
@@ -112,7 +220,7 @@ class XxxProvider(BaseHTTPSearchProvider):
 
 ## 测试
 
-`tests/search_discovery/` 共 93 个测试（v2 新增 21 个）：
+`tests/search_discovery/` 共 108 个测试（v2 累计新增 36 个）：
 
 - `test_providers_github.py` — 含 `test_search_rows_parses_rich_repo_metadata`（10 字段 metrics）
 - `test_github_query.py` — 关键词限长 5、`pushed:>` 注入、language 可选
@@ -121,6 +229,10 @@ class XxxProvider(BaseHTTPSearchProvider):
 - `test_providers_tianapi.py` / `test_providers_qiniu.py` — code != 200/0 时返回 error_row
 - `test_history.py` — read/write/mark 三件套
 - `test_cli.py` — 含 `test_run_discovery_command_marks_recent_github_recommendations`，断言 raw row、topic source_hits、history 三处都被同步
+- `test_api_config.py` — source 元数据、KeyError、mask_secret 行为
+- `test_env_file.py` — `.env` 复制、读、upsert 三件套
+- `test_connectivity.py` — `missing_key` / `ok` / provider error_row 三种结果
+- `test_config_api.py` — `--list` 掩码、`--set` 保存即测、`--set` 拒绝不写盘
 
 跑特定文件：
 ```bash
@@ -138,4 +250,5 @@ PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
 ## 相关文档
 
 - 设计计划：`docs/superpowers/plans/2026-06-29-hunter-ai-github-enhancement.md`
+- 配置助手实施计划：`docs/superpowers/plans/2026-06-30-search-api-config-assistant.md`
 - 决策参考：Hunter AI（`Pangu-Immortal/hunter-ai-content-factory`）的 `github_hunter.py` / `github_trending.py` 思路，仅借鉴不引入
