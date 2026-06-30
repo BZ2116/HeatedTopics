@@ -1,96 +1,67 @@
-# HeatedTopics v2 — 搜索发现增强
+# HeatedTopics v2 使用说明
 
-> **v2 文档**：聚焦 `src/search_discovery/` 包的 v2 改动（基于 master 的搜索发现能力 + Hunter 风格 GitHub 检索 + 国内信源 + 推荐冷却历史）。DailyHot 热榜采集和核心 pipeline 部分未变化，参见根 `README.md`。
+v2 是 HeatedTopics 的「搜索发现增强」链路，核心代码在 `src/search_discovery/`。它从创作者画像出发，自动生成搜索 query，路由到 GitHub、博查、阿里百炼、百度千帆、天聚数行、Tavily、七牛等搜索源，最后输出候选选题索引和 Markdown 推荐报告。
 
-## v2 改了什么
+它不替代 `README.md` 里的 DailyHot 热榜采集主流程。简单说：
 
-| 维度 | master | v2 |
-| --- | --- | --- |
-| GitHub 检索元数据 | 只取 `stargazers_count` | 完整 `metrics`：`stars` / `forks` / `watchers` / `open_issues` / `language` / `topics` / `pushed_at` / `updated_at` / `license` |
-| GitHub 查询 | 静态模板 `in:name,description stars:>50` | Hunter 风格 builder：`in:name,description,readme stars:>200 pushed:>YYYY-MM-DD [language:X]`，日期按 `today - days_since_update` 动态计算 |
-| 国内信源 | 只有 baidu_qianfan_search / news_api_cn | 新增 tianapi_news 和 qiniu_web_search；news_trend / deep_article / product_trend 三种意图下国内信源优先于 GitHub |
-| 推荐去重 | 无 | 持久化历史 `data/search_discovery/history/recommended_topics.json`；冷却期（默认 30 天）内 GitHub 结果在 raw row、topic source_hits、报告 evidence 三处标 `recently_recommended` |
-| 报告 evidence | `github_search` [title](url) | `github_search` [title](url) `(stars: 1200, forks: 88, language: Python, updated: ..., recently recommended)` |
-
-**未引入：** Hunter AI 包本体、Gradio UI、ChromaDB、Twitter/X / Reddit / 小红书登录采集、auto-publish。v2 仍然只是 Search API 驱动的话题发现。
+- `README.md`：采集多平台热榜和详情证据。
+- `README.v2.md`：用搜索 API 主动发现更适合创作者的内容选题。
 
 ## 快速开始
 
-```bash
+进入项目目录：
+
+```powershell
 cd E:\.code\My\heatedTopics\heatedTopics
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' uv run pytest tests/search_discovery -q
+$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
 ```
 
-跑一次端到端：
+安装依赖、运行测试：
 
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run python -m src.search_discovery.cli \
-  --profile config/search_discovery/creator_profiles/tech_ai_creator.json \
+```powershell
+uv sync
+uv run pytest tests/search_discovery -q
+```
+
+使用内置科技 AI 博主画像跑一次 v2：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
   --render-report
 ```
 
-输出（按文件）：
+命令结束后会打印类似结果：
 
-| 路径 | 内容 |
-| --- | --- |
-| `data/search_discovery/raw/search_results.jsonl` | 归一化后的搜索源结果，含完整 `metrics` 和 `recently_recommended` 标志 |
-| `data/search_discovery/evidence/search_content_evidence.jsonl` | 摘要或正文补全证据 |
-| `data/search_discovery/processed/search_topic_index.json` | 候选话题索引；每个 source_hit 都带 `metrics` 和 `recently_recommended` |
-| `data/search_discovery/history/recommended_topics.json` | 推荐历史快照（自动写入，下次运行读取） |
-| `reports/search_discovery/search_topic_recommendations.md` | 创作者检索报告，evidence 行展示 stars/forks/language/updated/recently recommended |
-
-## 环境变量
-
-`.env` / `.env.example` 新增两个 key（缺失时对应 provider 在 raw results 里以 `fetch_status=mock_unavailable` 出现，不阻断其他源）：
-
-```text
-# TianAPI news (https://www.tianapi.com/)
-TIANAPI_KEY=
-
-# Qiniu Web Search (https://www.qiniu.com/)
-QINIU_WEB_SEARCH_API_KEY=
+```json
+{"evidence_count": 12, "search_results_count": 35, "topics_count": 8}
 ```
 
-已有的 `GITHUB_TOKEN` / `BOCHA_API_KEY` / `BAILIAN_API_KEY` / `QIANFAN_API_KEY` / `QIANFAN_SECRET_KEY` 行为不变。
+如果某些 API key 没有配置，对应 source 会写入 `fetch_status=mock_unavailable` 的占位结果，不会阻断其他已配置 source。
 
-## Search API 配置助手
+## API 配置
 
-v2 新增 `src.search_discovery.config_api` CLI，专门管 `.env` 里的搜索 API key。核心特点：**保存即测**，确认写入 `.env` 后立刻跑一次连通性测试，立即反馈 key 是否可用。
+v2 的 API key 写在项目根目录的 `.env`。第一次运行配置助手时，如果 `.env` 不存在，会自动从 `.env.example` 复制一份。
 
-### 支持的 source
+支持的搜索源如下：
 
-| source_id | display_name | env_keys |
-| --- | --- | --- |
-| `github_search` | GitHub Search | `GITHUB_TOKEN` |
-| `news_api_cn` | Bocha AI Search | `BOCHA_API_KEY` |
-| `juejin_content` | Aliyun Bailian Web Search | `BAILIAN_API_KEY` |
-| `baidu_qianfan_search` | Baidu Qianfan Search | `QIANFAN_API_KEY`, `QIANFAN_SECRET_KEY` |
-| `tianapi_news` | TianAPI News | `TIANAPI_KEY` |
-| `tavily_search` | Tavily Search | `TAVILY_API_KEY` |
-| `qiniu_web_search` | Qiniu Web Search | `QINIU_WEB_SEARCH_API_KEY` |
+| source_id | 用途 | 环境变量 | 申请地址 |
+| --- | --- | --- | --- |
+| `github_search` | GitHub 仓库和开源项目发现 | `GITHUB_TOKEN` | https://github.com/settings/tokens |
+| `news_api_cn` | 博查 AI 搜索，国内新闻和网页信息 | `BOCHA_API_KEY` | https://bochaai.com |
+| `juejin_content` | 阿里百炼 Web Search，技术文章槽位 | `BAILIAN_API_KEY` | https://bailian.console.aliyun.com/ |
+| `baidu_qianfan_search` | 百度千帆搜索，国内网页、博客、问答和新闻 | `QIANFAN_API_KEY`, `QIANFAN_SECRET_KEY` | https://console.bce.baidu.com/qianfan/ |
+| `tianapi_news` | 天聚数行新闻，媒体源和发布时间 | `TIANAPI_KEY` | https://www.tianapi.com/ |
+| `tavily_search` | Tavily 搜索，英文/全球网页和摘要 | `TAVILY_API_KEY` | https://app.tavily.com/home |
+| `qiniu_web_search` | 七牛 Web Search，国内网页搜索兜底 | `QINIU_WEB_SEARCH_API_KEY` | https://www.qiniu.com/ |
 
-每个 source 的注册地址和默认 test query 在 `src/search_discovery/api_config.py::api_source_configs()` 里。
+### 查看配置状态
 
-### 命令
-
-| 命令 | 作用 |
-| --- | --- |
-| `--list` | 列出全部 source，已配置的 key 显示掩码 (`ghp_****blW0`)，缺失的显示 `[MISS]` |
-| `--set SOURCE_ID` | 交互式配置单个 source：提示输入每个 env_key → 确认 `[y/N]` → 保存 → 立刻连通性测试 |
-| `--wizard` | 自动遍历所有未配齐的 source，逐个走 `--set` 流程 |
-| `--test SOURCE_ID` | 不写盘，仅对已存在的 key 跑一次连通性测试 |
-
-### 用法
-
-查看现状：
-
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run python -m src.search_discovery.config_api --list
+```powershell
+uv run python -m src.search_discovery.config_api --list
 ```
 
-输出示例（已配的会被掩码，不会打印完整 key）：
+示例输出：
 
 ```text
 Search API Configuration
@@ -100,14 +71,15 @@ Search API Configuration
 [OK]   baidu_qianfan_search   QIANFAN_API_KEY=bce-****9d02, QIANFAN_SECRET_KEY=bce-****1def
 ```
 
-单 source 配置（保存后自动测）：
+`--list` 会对已配置的 key 做脱敏展示，不会打印完整密钥。
 
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run python -m src.search_discovery.config_api --set tavily_search
+### 配置单个 source
+
+```powershell
+uv run python -m src.search_discovery.config_api --set tavily_search
 ```
 
-流程：
+交互流程：
 
 ```text
 Configuring Tavily Search
@@ -120,135 +92,258 @@ Save these keys to .env? [y/N] y
 [OK] tavily_search connected successfully, returned 10 results.
 ```
 
-拒绝确认则不写盘：
+配置助手采用「保存后立即测试」：写入 `.env` 后会立刻用默认 query 做一次连通性验证。返回码为 `0` 表示测试通过，非 `0` 表示配置失败或上游不可用。
+
+如果不想保存后立即测试（避免烧 API 配额，或批量配完再统一验证），可以加 `--no-test-after-set`：
+
+```powershell
+uv run python -m src.search_discovery.config_api --set tavily_search --no-test-after-set
+```
+
+跳过时打印：
+
+```text
+[OK] Saved TAVILY_API_KEY
+[SKIP] Test skipped (use --test tavily_search to verify later).
+```
+
+如果确认时输入 `n` 或直接回车，本次配置不会写入 `.env`：
 
 ```text
 Save these keys to .env? [y/N] n
 Cancelled.
 ```
 
-一次性配齐所有缺失项：
+### 配齐所有缺失 source
 
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run python -m src.search_discovery.config_api --wizard
+```powershell
+uv run python -m src.search_discovery.config_api --wizard
 ```
 
-只测不写（改完 `.env` 后验证）：
+`--wizard` 会按 source 列表依次检查 `.env`。已经配置完整的 source 会跳过，缺 key 的 source 会进入和 `--set` 相同的交互流程。
 
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run python -m src.search_discovery.config_api --test tavily_search
+如果想一次性配齐所有缺失 source 后再统一测试（避免每个 source 都跑一次连通性），加 `--no-test-after-wizard`：
+
+```powershell
+uv run python -m src.search_discovery.config_api --wizard --no-test-after-wizard
 ```
 
-### 连通性状态语义
+写完后手动跑一次 `--test` 复验：
 
-`test_source_connection()` 返回 `ConnectionTestResult`，状态字段含义：
+```powershell
+uv run python -m src.search_discovery.config_api --test tavily_search
+uv run python -m src.search_discovery.config_api --test github_search
+```
 
-| status | 含义 | 建议 |
-| --- | --- | --- |
-| `ok` | provider 已配置且 query 正常返回 | 无需处理 |
-| `missing_key` | `.env` 里没有对应的 key，或 key 为空 | 走 `--set` 配 key |
-| `auth_failed` | 鉴权失败（401 / token 过期 / 千帆 token 兑换失败等） | 检查 key 是否过期或配额 |
-| `upstream_failed` | 上游 5xx / 网络层失败 | 重试或换时段 |
-| `parse_failed` | 返回内容无法解析 | 排查 provider 协议变更 |
-| `empty_result` | provider 配置 OK 但 query 没结果 | 通常无害，可能是分词过窄 |
+### 只测试已有配置
 
-`--set` / `--wizard` 在 `status != "ok"` 时退出码 1，方便 CI 检查。
+```powershell
+uv run python -m src.search_discovery.config_api --test github_search
+uv run python -m src.search_discovery.config_api --test baidu_qianfan_search
+```
 
-### `.env` 安全
+`--test` 不会修改 `.env`，适合手动改完 `.env` 后验证 key 是否可用。
 
-- `mask_secret(value)`：空值 → `<empty>`；≤4 字符 → `***`；其他 → `{前4}****{后4}`。`--list` 永远不打印完整 key。
-- `upsert_env_values()`：保留原有注释、空行、未涉及的 key；只替换或追加传入的 key。原 `.env` 的结构基本不变。
-- `ensure_env_file()`：首次运行自动从 `.env.example` 复制生成 `.env`，避免手动新建。
+### 手动编辑 `.env`
+
+也可以直接编辑 `.env`：
+
+```text
+GITHUB_TOKEN=
+BOCHA_API_KEY=
+BAILIAN_API_KEY=
+QIANFAN_API_KEY=
+QIANFAN_SECRET_KEY=
+TIANAPI_KEY=
+TAVILY_API_KEY=
+QINIU_WEB_SEARCH_API_KEY=
+```
+
+注意事项：
+
+- GitHub 搜索没有 token 时仍可访问公开搜索 API，但 rate limit 较低；建议配置 `GITHUB_TOKEN`。
+- 百度千帆需要同时配置 `QIANFAN_API_KEY` 和 `QIANFAN_SECRET_KEY`。
+- 任意单个 source 缺失或失败都不会让 v2 全流程崩溃，只会在结果中记录不可用状态。
+- `.env` 包含密钥，不要提交到 Git。
+
+## 运行搜索发现
+
+基础命令：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json
+```
+
+生成 Markdown 报告：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
+  --render-report
+```
+
+`--profile` 必填，指向一个创作者画像 JSON。`--render-report` 可选，开启后会额外生成可读报告。
+
+## 输出文件
+
+默认输出路径如下：
+
+| 路径 | 内容 |
+| --- | --- |
+| `data/search_discovery/raw/search_results.jsonl` | 各 source 返回的归一化搜索结果，包含 `metrics`、`route_weight`、`route_reason`、`fetch_status` 等字段 |
+| `data/search_discovery/evidence/search_content_evidence.jsonl` | 搜索结果补充证据，例如摘要、正文片段或错误信息 |
+| `data/search_discovery/processed/search_topic_index.json` | 聚合后的候选选题索引，供下游筛选和生成报告使用 |
+| `data/search_discovery/history/recommended_topics.json` | 推荐历史，用来标记 30 天内已经推荐过的 GitHub 结果 |
+| `reports/search_discovery/search_topic_recommendations.md` | 可读的选题推荐报告，仅在传入 `--render-report` 时生成 |
+
+## 创作者画像
+
+内置示例：
+
+```json
+{
+  "creator_id": "creator_001",
+  "role": "科技类博主",
+  "profile_type": "tech_ai_creator",
+  "track_tags": ["AI", "开发者工具", "开源项目"],
+  "custom_keywords": ["AI Agent", "MCP", "RAG"],
+  "content_modes": ["趋势观察", "工具测评", "教程实践"]
+}
+```
+
+常用字段：
+
+| 字段 | 作用 |
+| --- | --- |
+| `creator_id` | 创作者或账号标识 |
+| `role` | 人设说明，会进入路由理由和搜索意图判断 |
+| `profile_type` | 影响 source 权重，目前包含 `tech_ai_creator`、`developer_creator`、`business_startup_creator`、`general_hot_topic_creator` |
+| `track_tags` | 领域标签，作为 query 候选关键词 |
+| `custom_keywords` | 优先级最高的关键词；存在时会优先用于 query |
+| `content_modes` | 内容形态，例如趋势观察、工具测评、教程实践，也会影响 intent 判断 |
+
+新增画像时，可以复制 `config/search_discovery/creator_profiles/tech_ai_creator.json`，改名后调整字段，再用 `--profile` 指向新文件。
 
 ## 路由规则
 
-`build_search_routes()` 根据 `classify_search_intent()` 的结果选路：
+v2 会先用 `classify_search_intent()` 判断搜索意图，再用 `build_search_routes()` 生成 source-specific query。
 
-| Intent | 触发条件（关键词命中） | 选路 |
+| intent | 典型触发词 | 优先 source |
 | --- | --- | --- |
-| `tech_project` | github / 开源 / 框架 / sdk / mcp / rag / 开发者工具 等 | 走 `PROFILE_BASE_WEIGHTS` 默认源（含 github_search + juejin_content + baidu_qianfan_search + news_api_cn） |
-| `tech_article` | 教程 / 实践 / 案例 / 源码 / 部署 / 架构 | 同上，但 github 权重被 `INTENT_BOOSTS` 下调 |
-| `news_trend` | 新闻 / 最新 / 发布 / 融资 / 政策 / 行业 | **tianapi_news → news_api_cn → baidu_qianfan_search → qiniu_web_search**，github_search 兜底（max(5, weight-30)） |
-| `deep_article` | 分析 / 解读 / 复盘 / 观点 / 原因 / 影响 | **baidu_qianfan_search → news_api_cn → qiniu_web_search → juejin_content**，github 兜底 |
-| `product_trend` | 产品 / 应用 / 商业化 / saas / 工具 | **baidu_qianfan_search → news_api_cn → tianapi_news → qiniu_web_search**，github 兜底 |
-| `content_angle` | 兜底 | 同 `tech_article` 风格（默认权重） |
+| `tech_project` | `github`、`开源`、`repo`、`框架`、`sdk`、`mcp`、`rag` | `github_search`、`juejin_content`、`baidu_qianfan_search`、`tavily_search` |
+| `tech_article` | `教程`、`实践`、`案例`、`源码`、`部署`、`架构` | `juejin_content`、`github_search`、`baidu_qianfan_search`、`tavily_search` |
+| `news_trend` | `新闻`、`最新`、`发布`、`融资`、`政策`、`行业` | `tianapi_news`、`news_api_cn`、`baidu_qianfan_search`、`tavily_search`、`qiniu_web_search` |
+| `product_trend` | `产品`、`应用`、`商业化`、`saas`、`工具` | `baidu_qianfan_search`、`news_api_cn`、`tianapi_news`、`tavily_search`、`qiniu_web_search` |
+| `content_angle` | 兜底意图 | 按画像默认权重选择 |
 
-每条 route 一条 source-specific query：plan 文件里禁止"一个 source 多 query"。
+GitHub query 使用 Hunter 风格构造：
 
-## 冷却历史
-
-`src/search_discovery/history.py` 是核心模块，导出 4 个 helper：
-
-```python
-read_recommendation_history(path)   # 读 history；文件不存在返回 {}
-write_recommendation_history(path, data)   # 写 history（ensure_ascii=False, sort_keys=True）
-mark_recent_recommendations(results, history=..., now=..., cooldown_days=30)
-update_recommendation_history(history, results, recommended_at=...)
+```text
+AI Agent MCP RAG in:name,description,readme stars:>200 pushed:>YYYY-MM-DD
 ```
 
-CLI 流程：
-1. 读 `data/search_discovery/history/recommended_topics.json`（首次不存在则空 dict）
-2. **在 `enrich_results()` 和 `cluster_results()` 之前**调用 `mark_recent_recommendations()`，把 `metrics.recently_recommended` / `metrics.last_recommended_at` 写入每条 result
-3. `cluster_results()` 复制 metrics 到 `source_hits[i].metrics` 和 `source_hits[i].recently_recommended`
-4. `render.py` 的 `_hit_suffix()` 在 evidence 行追加 `(stars: ..., recently recommended)` 片段
-5. 报告生成后 `update_recommendation_history()` + `write_recommendation_history()` 写回
+其中 `pushed:>` 默认取最近 180 天，避免推荐长期未维护的仓库。
 
-冷却判定：`(now - recommended_at) <= 30 days`。`recommended_at` 支持 ISO8601 带/不带 tzinfo；不带时按 UTC 解析。
+## 推荐历史和冷却期
 
-调整冷却期：改 `cli.py` 里的 `cooldown_days=30` 参数和 `history.py` 的默认值。
+v2 会维护 `data/search_discovery/history/recommended_topics.json`。默认规则是：30 天内已经推荐过的 GitHub 结果会被标记为 `recently_recommended`，并在 raw result、topic source hits 和报告 evidence 中展示。
 
-## Provider 接口约定
+当前冷却逻辑只做「标记和展示」，不做强制降权。这样可以让报告保留透明度，同时避免因为历史记录误伤高质量项目。
 
-新加 provider 走标准 `BaseHTTPSearchProvider`：
+## 连通性状态
 
-```python
-class XxxProvider(BaseHTTPSearchProvider):
-    source_id = "xxx_xxx"
-    rpm_limit = 60
-    timeout_seconds = 10.0
+`--set` 和 `--test` 最终会调用 `test_source_connection()`，常见状态如下：
 
-    def __init__(self, *, api_key: str, transport=None): ...
-    @classmethod
-    def from_env(cls) -> "XxxProvider | None": ...
-    def _build_request(self, query) -> httpx.Request: ...
-    def _parse_response(self, response, query) -> list[dict]: ...
+| status | 含义 | 建议 |
+| --- | --- | --- |
+| `ok` | provider 已配置并正常返回结果 | 无需处理 |
+| `missing_key` | `.env` 缺 key，或 key 为空 | 使用 `--set SOURCE_ID` 配置 |
+| `auth_failed` | 鉴权失败，例如 token 过期、key 无效、权限不足 | 检查平台后台的 key 状态 |
+| `upstream_failed` | 上游服务错误、网络错误或限流 | 稍后重试，或检查服务状态 |
+| `parse_failed` | 返回内容无法解析 | 检查 provider 协议是否变化 |
+| `empty_result` | 连接成功但 query 没有结果 | 通常不严重，可换 query 或稍后重试 |
+
+## 开发和测试
+
+运行 v2 全量测试：
+
+```powershell
+$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
+uv run pytest tests/search_discovery -q
 ```
 
-注册到 `src/search_discovery/cli.py::_REAL_PROVIDER_CLASSES` 即生效；`MockProvider(source_id, rows=[])` 是无 key 时的回退占位。
+运行配置助手相关测试：
 
-## 测试
-
-`tests/search_discovery/` 共 108 个测试（v2 累计新增 36 个）：
-
-- `test_providers_github.py` — 含 `test_search_rows_parses_rich_repo_metadata`（10 字段 metrics）
-- `test_github_query.py` — 关键词限长 5、`pushed:>` 注入、language 可选
-- `test_routing.py` — 含 `test_github_route_uses_hunter_style_query` 和国内信源顺序
-- `test_domestic_sources.py` — news_trend 优先级、source-specific query 模板、business profile 路由
-- `test_providers_tianapi.py` / `test_providers_qiniu.py` — code != 200/0 时返回 error_row
-- `test_history.py` — read/write/mark 三件套
-- `test_cli.py` — 含 `test_run_discovery_command_marks_recent_github_recommendations`，断言 raw row、topic source_hits、history 三处都被同步
-- `test_api_config.py` — source 元数据、KeyError、mask_secret 行为
-- `test_env_file.py` — `.env` 复制、读、upsert 三件套
-- `test_connectivity.py` — `missing_key` / `ok` / provider error_row 三种结果
-- `test_config_api.py` — `--list` 掩码、`--set` 保存即测、`--set` 拒绝不写盘
-
-跑特定文件：
-```bash
-PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics' \
-  uv run pytest tests/search_discovery/test_history.py -q
+```powershell
+uv run pytest tests/search_discovery/test_api_config.py `
+  tests/search_discovery/test_env_file.py `
+  tests/search_discovery/test_connectivity.py `
+  tests/search_discovery/test_config_api.py -q
 ```
 
-## 已知边界
+运行路由和 GitHub query 测试：
 
-- GitHub 未配置 token 时，rate limit 60 req/h；本项目每个 profile 一次运行 1 个 GitHub query，不会撞限
-- TianAPI / 七牛 / 博查 / 千帆 / 阿里百炼 任一缺失不会阻塞其他源；缺失的 provider 写入 `fetch_status=mock_unavailable` 的占位 row
-- 冷却历史只过滤 GitHub 列表结果；国内信源不受冷却影响（新闻类话题时效性强）
-- v2 没有把冷却信息写进 cluster 排序权重；只是"标记+展示"，不做降权。如果要降权，改 `cluster_results()` 里 `_source_hits()` 之后的 `score_topic()` 调用前一步即可
+```powershell
+uv run pytest tests/search_discovery/test_routing.py `
+  tests/search_discovery/test_github_query.py `
+  tests/search_discovery/test_providers_github.py -q
+```
+
+新增 provider 时，通常需要做四件事：
+
+1. 在 `src/search_discovery/providers_xxx.py` 实现 provider。
+2. 在 `src/search_discovery/cli.py::_REAL_PROVIDER_CLASSES` 注册 provider。
+3. 在 `src/search_discovery/api_config.py::api_source_configs()` 增加配置元数据。
+4. 补充 provider、连通性、CLI 或路由测试。
+
+## 常见问题
+
+### 没有配置任何 API key 能跑吗？
+
+能跑，但基本只会得到 `mock_unavailable` 占位结果。建议至少配置 `GITHUB_TOKEN` 和一个国内搜索源，例如 `BOCHA_API_KEY`、`QIANFAN_API_KEY`/`QIANFAN_SECRET_KEY` 或 `TIANAPI_KEY`。
+
+### 为什么配置了 key 还是显示 `missing_key`？
+
+先确认当前目录是项目根目录：
+
+```powershell
+pwd
+```
+
+应该位于：
+
+```text
+E:\.code\My\heatedTopics\heatedTopics
+```
+
+然后重新加载并测试：
+
+```powershell
+$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
+uv run python -m src.search_discovery.config_api --list
+uv run python -m src.search_discovery.config_api --test SOURCE_ID
+```
+
+### 报告没有生成怎么办？
+
+确认命令里带了 `--render-report`：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
+  --render-report
+```
+
+报告路径是 `reports/search_discovery/search_topic_recommendations.md`。
+
+### v2 会修改 DailyHot 主流程吗？
+
+不会。v2 只读画像、调用搜索源，并写入 `data/search_discovery/` 与 `reports/search_discovery/`。DailyHot 热榜采集、浏览器登录态管理、主报告生成仍按 `README.md` 的说明运行。
 
 ## 相关文档
 
-- 设计计划：`docs/superpowers/plans/2026-06-29-hunter-ai-github-enhancement.md`
-- 配置助手实施计划：`docs/superpowers/plans/2026-06-30-search-api-config-assistant.md`
-- 决策参考：Hunter AI（`Pangu-Immortal/hunter-ai-content-factory`）的 `github_hunter.py` / `github_trending.py` 思路，仅借鉴不引入
+- `README.md`：DailyHot 热榜采集和详情证据整理主流程。
+- `docs/superpowers/plans/2026-06-30-search-api-config-assistant.md`：Search API 配置助手实施计划。
+- `docs/superpowers/specs/2026-06-29-profile-driven-search-routing-design.md`：画像驱动搜索路由设计。
+- `docs/superpowers/specs/2026-06-27-search-discovery-real-providers-design.md`：真实搜索 provider 接入设计。
