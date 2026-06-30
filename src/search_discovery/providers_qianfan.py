@@ -14,13 +14,13 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
     timeout_seconds = 10.0
 
     TOKEN_URL = "https://aip.baidubce.com/oauth/2.0/token"
-    SEARCH_URL = "https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/plugin/search"
+    SEARCH_URL = "https://qianfan.baidubce.com/v2/ai_search/web_search"
 
     def __init__(
         self,
         *,
         api_key: str,
-        secret_key: str,
+        secret_key: str = "",
         transport: httpx.BaseTransport | None = None,
         clock=time.time,
     ):
@@ -34,10 +34,16 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
     @classmethod
     def from_env(cls) -> "QianfanSearchProvider | None":
         api_key = os.getenv("QIANFAN_API_KEY")
-        secret_key = os.getenv("QIANFAN_SECRET_KEY")
-        if not api_key or not secret_key:
+        secret_key = os.getenv("QIANFAN_SECRET_KEY", "")
+        if not api_key:
+            return None
+        if not secret_key and not cls._is_single_api_key(api_key):
             return None
         return cls(api_key=api_key, secret_key=secret_key)
+
+    @staticmethod
+    def _is_single_api_key(api_key: str) -> bool:
+        return api_key.startswith("bce-v3/")
 
     def _ensure_token(self) -> None:
         if self._access_token and self._clock() < self._token_expires_at:
@@ -70,14 +76,14 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
 
             status = response.status_code
             if status == 401 or status == 403:
-                raise ProviderError("auth_failed", "token_exchange_failed")
+                raise ProviderError("auth_failed", self._token_error_type(response))
             if 500 <= status < 600:
                 last_exc = ProviderError("auth_failed", "token_exchange_failed")
                 if attempt == 0:
                     time.sleep(1)
                 continue
             if status != 200:
-                raise ProviderError("auth_failed", "token_exchange_failed")
+                raise ProviderError("auth_failed", self._token_error_type(response))
             body = response.json()
             self._access_token = body["access_token"]
             self._token_expires_at = self._clock() + int(body.get("expires_in", 2592000)) - 60
@@ -87,25 +93,51 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
             raise last_exc
         raise ProviderError("auth_failed", "token_exchange_failed")
 
+    def _token_error_type(self, response: httpx.Response) -> str:
+        try:
+            body = response.json()
+        except Exception:
+            return "token_exchange_failed"
+        upstream_error = str(body.get("error", "")).strip()
+        if upstream_error:
+            return f"qianfan_token_{upstream_error}"
+        return "token_exchange_failed"
+
     def _build_request(self, query: str) -> httpx.Request:
-        self._ensure_token()
+        if self._is_single_api_key(self._api_key):
+            access_token = self._api_key
+        else:
+            self._ensure_token()
+            access_token = self._access_token
         return httpx.Request(
             "POST",
             self.SEARCH_URL,
-            params={"access_token": self._access_token},
             headers={
-                "Authorization": f"Bearer {self._access_token}",
+                "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json",
             },
-            content=json.dumps({"query": query, "count": 10}),
+            content=json.dumps({
+                "messages": [{"content": query, "role": "user"}],
+                "search_source": "baidu_search_v2",
+                "resource_type_filter": [{"type": "web", "top_k": 10}],
+            }),
         )
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
+        code = body.get("code")
+        if code not in (None, 0):
+            status = "auth_failed" if str(code).startswith("216") else "upstream_failed"
+            raise ProviderError(status, f"qianfan_code_{code}")
+        error_code = body.get("error_code")
+        if error_code not in (None, 0):
+            raise ProviderError("upstream_failed", f"qianfan_error_code_{error_code}")
         errno = body.get("errno", 0)
         if errno != 0:
             raise ProviderError("upstream_failed", f"qianfan_errno_{errno}")
-        items = body.get("data", {}).get("items", [])
+        items = body.get("references", [])
+        if not items:
+            items = body.get("data", {}).get("items", [])
         rows: list[dict[str, object]] = []
         for item in items:
             url = item.get("url", "")
@@ -115,9 +147,9 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
                 "title": item.get("title", ""),
                 "url": url,
                 "domain": urlparse(url).netloc,
-                "snippet": item.get("abstract", "") or "",
-                "content_type": "news",
-                "published_at": item.get("publishTime", "") or "",
+                "snippet": item.get("snippet", "") or item.get("content", "") or item.get("abstract", "") or "",
+                "content_type": item.get("type", "") or "web",
+                "published_at": item.get("date", "") or item.get("publishTime", "") or "",
                 "metrics": {},
             })
         return rows

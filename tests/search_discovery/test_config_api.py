@@ -19,6 +19,19 @@ def test_list_command_masks_configured_keys(tmp_path, monkeypatch, capsys):
     assert "tvly_1234567890" not in output
 
 
+def test_list_command_accepts_qianfan_single_api_key(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env").write_text("QIANFAN_API_KEY=bce-v3/ALTAK-1234567890\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    exit_code = run_config_api_command(["--list"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert "[OK]   baidu_qianfan_search" in output
+    assert "QIANFAN_API_KEY=bce-****7890" in output
+    assert "QIANFAN_SECRET_KEY" not in output
+
+
 def test_set_command_saves_then_tests_connection(tmp_path, monkeypatch, capsys):
     (tmp_path / ".env.example").write_text("TAVILY_API_KEY=\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -56,6 +69,32 @@ def test_set_command_does_not_save_when_user_declines(tmp_path, monkeypatch, cap
     assert exit_code == 1
     assert (tmp_path / ".env").read_text(encoding="utf-8") == "TAVILY_API_KEY=\n"
     assert "Cancelled" in output
+
+
+def test_wizard_command_skips_qianfan_when_single_api_key_exists(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env").write_text("QIANFAN_API_KEY=bce-v3/ALTAK-1234567890\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def qianfan_config() -> dict[str, ApiSourceConfig]:
+        return {
+            "baidu_qianfan_search": ApiSourceConfig(
+                source_id="baidu_qianfan_search",
+                display_name="Baidu Qianfan Search",
+                env_keys=["QIANFAN_API_KEY", "QIANFAN_SECRET_KEY"],
+                signup_url="https://console.bce.baidu.com/qianfan/",
+                description="test",
+            ),
+        }
+
+    monkeypatch.setattr("src.search_discovery.config_api.api_source_configs", qianfan_config)
+
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "")
+
+    exit_code = run_config_api_command(["--wizard", "--no-test-after-wizard"])
+
+    assert exit_code == 0
+    assert prompts == []
 
 
 def test_set_command_with_skip_test_does_not_run_connection(tmp_path, monkeypatch, capsys):

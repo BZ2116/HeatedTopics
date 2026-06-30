@@ -43,11 +43,15 @@ def _list_sources(env_path: Path) -> int:
     values = read_env_values(env_path)
     print("Search API Configuration\n")
     for source_id, config in api_source_configs().items():
-        missing = [key for key in config.env_keys if not values.get(key)]
+        missing = _missing_env_keys(source_id, config.env_keys, values)
         if missing:
             print(f"[MISS] {source_id:<22} missing: {', '.join(missing)}")
         else:
-            masked = ", ".join(f"{key}={mask_secret(values[key])}" for key in config.env_keys)
+            masked = ", ".join(
+                f"{key}={mask_secret(values[key])}"
+                for key in _display_env_keys(source_id, config.env_keys, values)
+                if values.get(key)
+            )
             print(f"[OK]   {source_id:<22} {masked}")
     return 0
 
@@ -58,7 +62,8 @@ def _set_source(source_id: str, root: Path, env_path: Path, *, skip_test: bool =
     print(f"Open: {config.signup_url}\n")
     updates = {}
     for key in config.env_keys:
-        value = input(f"{key}: ").strip()
+        suffix = " (optional for bce-v3 API Key)" if source_id == "baidu_qianfan_search" and key == "QIANFAN_SECRET_KEY" else ""
+        value = input(f"{key}{suffix}: ").strip()
         updates[key] = value
     confirmed = input("Save these keys to .env? [y/N] ").strip().lower()
     if confirmed != "y":
@@ -79,7 +84,7 @@ def _set_source(source_id: str, root: Path, env_path: Path, *, skip_test: bool =
 def _wizard(root: Path, env_path: Path, *, skip_test: bool = False) -> int:
     values = read_env_values(env_path)
     for source_id, config in api_source_configs().items():
-        if all(values.get(key) for key in config.env_keys):
+        if not _missing_env_keys(source_id, config.env_keys, values):
             continue
         code = _set_source(source_id, root, env_path, skip_test=skip_test)
         if code != 0:
@@ -93,6 +98,18 @@ def test_source_after_save(source_id: str, root: Path) -> ConnectionTestResult:
     config = get_api_source_config(source_id)
     registry = _build_registry()
     return test_source_connection(source_id, registry=registry, query=config.test_query)
+
+
+def _missing_env_keys(source_id: str, env_keys: list[str], values: dict[str, str]) -> list[str]:
+    if source_id == "baidu_qianfan_search" and values.get("QIANFAN_API_KEY", "").startswith("bce-v3/"):
+        return []
+    return [key for key in env_keys if not values.get(key)]
+
+
+def _display_env_keys(source_id: str, env_keys: list[str], values: dict[str, str]) -> list[str]:
+    if source_id == "baidu_qianfan_search" and values.get("QIANFAN_API_KEY", "").startswith("bce-v3/"):
+        return ["QIANFAN_API_KEY"]
+    return env_keys
 
 
 def _print_test_result(result: ConnectionTestResult) -> None:

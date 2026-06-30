@@ -50,10 +50,12 @@ v2 的 API key 写在项目根目录的 `.env`。第一次运行配置助手时�
 | `github_search` | GitHub 仓库和开源项目发现 | `GITHUB_TOKEN` | https://github.com/settings/tokens |
 | `news_api_cn` | 博查 AI 搜索，国内新闻和网页信息 | `BOCHA_API_KEY` | https://bochaai.com |
 | `juejin_content` | 阿里百炼 Web Search，技术文章槽位 | `BAILIAN_API_KEY` | https://bailian.console.aliyun.com/ |
-| `baidu_qianfan_search` | 百度千帆搜索，国内网页、博客、问答和新闻 | `QIANFAN_API_KEY`, `QIANFAN_SECRET_KEY` | https://console.bce.baidu.com/qianfan/ |
+| `baidu_qianfan_search` | 百度千帆搜索，国内网页、博客、问答和新闻 | `QIANFAN_API_KEY`；旧版凭证可额外填 `QIANFAN_SECRET_KEY` | https://console.bce.baidu.com/qianfan/ |
 | `tianapi_news` | 天聚数行新闻，媒体源和发布时间 | `TIANAPI_KEY` | https://www.tianapi.com/ |
 | `tavily_search` | Tavily 搜索，英文/全球网页和摘要 | `TAVILY_API_KEY` | https://app.tavily.com/home |
 | `qiniu_web_search` | 七牛 Web Search，国内网页搜索兜底 | `QINIU_WEB_SEARCH_API_KEY` | https://www.qiniu.com/ |
+
+千帆特别注意：新版控制台生成的 `bce-v3/ALTAK...` API Key 只需要填 `QIANFAN_API_KEY`，`QIANFAN_SECRET_KEY` 可以留空。旧版 `API Key + Secret Key` 二件套仍然兼容，会自动走 OAuth token 兑换。
 
 ### 查看配置状态
 
@@ -68,7 +70,7 @@ Search API Configuration
 
 [OK]   github_search          GITHUB_TOKEN=ghp_****blW0
 [MISS] tavily_search          missing: TAVILY_API_KEY
-[OK]   baidu_qianfan_search   QIANFAN_API_KEY=bce-****9d02, QIANFAN_SECRET_KEY=bce-****1def
+[OK]   baidu_qianfan_search   QIANFAN_API_KEY=bce-****9d02
 ```
 
 `--list` 会对已配置的 key 做脱敏展示，不会打印完整密钥。
@@ -152,7 +154,7 @@ uv run python -m src.search_discovery.config_api --test baidu_qianfan_search
 GITHUB_TOKEN=
 BOCHA_API_KEY=
 BAILIAN_API_KEY=
-QIANFAN_API_KEY=
+QIANFAN_API_KEY=bce-v3/ALTAK...
 QIANFAN_SECRET_KEY=
 TIANAPI_KEY=
 TAVILY_API_KEY=
@@ -162,7 +164,9 @@ QINIU_WEB_SEARCH_API_KEY=
 注意事项：
 
 - GitHub 搜索没有 token 时仍可访问公开搜索 API，但 rate limit 较低；建议配置 `GITHUB_TOKEN`。
-- 百度千帆需要同时配置 `QIANFAN_API_KEY` 和 `QIANFAN_SECRET_KEY`。
+- 百度千帆新版 API Key 只需要配置 `QIANFAN_API_KEY`，请求时会以 `Authorization: Bearer <QIANFAN_API_KEY>` 发送。
+- 当前 `baidu_qianfan_search` 使用千帆新版百度搜索接口 `https://qianfan.baidubce.com/v2/ai_search/web_search`，请求体包含 `messages`、`search_source=baidu_search_v2` 和 `resource_type_filter`。
+- 如果你使用旧版千帆 `API Key + Secret Key` 凭证，则同时配置 `QIANFAN_API_KEY` 和 `QIANFAN_SECRET_KEY`，项目会先调用 `https://aip.baidubce.com/oauth/2.0/token` 换取 `access_token`。
 - 任意单个 source 缺失或失败都不会让 v2 全流程崩溃，只会在结果中记录不可用状态。
 - `.env` 包含密钥，不要提交到 Git。
 
@@ -301,7 +305,7 @@ uv run pytest tests/search_discovery/test_routing.py `
 
 ### 没有配置任何 API key 能跑吗？
 
-能跑，但基本只会得到 `mock_unavailable` 占位结果。建议至少配置 `GITHUB_TOKEN` 和一个国内搜索源，例如 `BOCHA_API_KEY`、`QIANFAN_API_KEY`/`QIANFAN_SECRET_KEY` 或 `TIANAPI_KEY`。
+能跑，但基本只会得到 `mock_unavailable` 占位结果。建议至少配置 `GITHUB_TOKEN` 和一个国内搜索源，例如 `BOCHA_API_KEY`、`QIANFAN_API_KEY` 或 `TIANAPI_KEY`。
 
 ### 为什么配置了 key 还是显示 `missing_key`？
 
