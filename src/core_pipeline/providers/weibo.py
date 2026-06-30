@@ -70,7 +70,7 @@ def _status_evidence(record: HotRecord, fetched_at: str, status: str) -> DetailE
     )
 
 
-def extract_weibo_posts_from_text(page_text: str) -> list[dict[str, object]]:
+def extract_weibo_posts_from_text(page_text: str, max_items: int | None = None) -> list[dict[str, object]]:
     lines = [line.strip() for line in page_text.splitlines() if line.strip()]
     chunks: list[dict[str, object]] = []
     current: list[str] = []
@@ -82,4 +82,4 @@ def extract_weibo_posts_from_text(page_text: str) -> list[dict[str, object]]:
             current = []
     if current:
         chunks.append({"content": "\n".join(current), "comments_preview": [], "url": ""})
-    return chunks[:5]
+    return chunks[:max_items] if max_items is not None else chunks

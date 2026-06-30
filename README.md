@@ -154,3 +154,23 @@ uv run python -m src.core_pipeline.run collect-core-hot-details --window today -
 
 - `docs/superpowers/specs/2026-06-23-detail-cache-and-session-safety-design.md`
 - `docs/superpowers/plans/2026-06-23-detail-cache-and-session-safety.md`
+
+## 关键词搜索话题发现
+
+新链路从作者画像和关键词出发，通过独立的 `src/search_discovery/` 包生成搜索 query、规划搜索源、归一化结果、补全内容、聚合候选话题并输出报告。它不覆盖原有 DailyHot 热榜采集链路。
+
+示例运行：
+
+```powershell
+$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
+uv run python -m src.search_discovery.cli --profile config/search_discovery/creator_profiles/tech_ai_creator.json --render-report
+```
+
+输出文件：
+
+| 路径 | 内容 |
+| --- | --- |
+| `data/search_discovery/raw/search_results.jsonl` | 搜索源返回的归一化结果 |
+| `data/search_discovery/evidence/search_content_evidence.jsonl` | 摘要或正文补全证据 |
+| `data/search_discovery/processed/search_topic_index.json` | 候选话题索引 |
+| `reports/search_discovery/search_topic_recommendations.md` | 可读推荐报告 |

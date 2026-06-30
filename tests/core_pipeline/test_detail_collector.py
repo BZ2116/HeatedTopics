@@ -142,7 +142,7 @@ class DetailCollectorTests(unittest.TestCase):
         self.assertEqual(video_rows[0].raw_payload["record"]["title"], "视频标题")
 
 
-    def test_collect_topic_details_fetches_weibo_and_xiaohongshu_when_sessions_are_ok(self):
+    def test_collect_topic_details_fetches_weibo_and_places_xiaohongshu_placeholder_when_sessions_are_ok(self):
         topic = {
             "topic_key": "realhotdetail",
             "canonical_title": "real hot detail",
@@ -159,7 +159,7 @@ class DetailCollectorTests(unittest.TestCase):
             if platform == "weibo":
                 return [{"content": "real weibo discussion body", "comments_preview": ["weibo comment"], "url": "https://weibo.example.com/a"}]
             if platform == "xiaohongshu":
-                return [{"content": "real xiaohongshu note body", "comments_preview": ["xhs comment"], "url": "https://xhs.example.com/a"}]
+                raise AssertionError("xiaohongshu detail should be a placeholder in this project")
             raise AssertionError(platform)
 
         evidence = collect_topic_details(
@@ -171,13 +171,42 @@ class DetailCollectorTests(unittest.TestCase):
         )
 
         self.assertIn(("weibo", "real hot detail"), calls)
-        self.assertIn(("xiaohongshu", "real hot detail"), calls)
+        self.assertNotIn(("xiaohongshu", "real hot detail"), calls)
         weibo_rows = [row for row in evidence if row.platform == "weibo"]
         xhs_rows = [row for row in evidence if row.platform == "xiaohongshu"]
         self.assertEqual(weibo_rows[0].fetch_status, "ok")
         self.assertIn("real weibo discussion body", weibo_rows[0].content)
-        self.assertEqual(xhs_rows[0].fetch_status, "ok")
-        self.assertIn("real xiaohongshu note body", xhs_rows[0].content)
+        self.assertEqual(xhs_rows[0].fetch_status, "placeholder")
+        self.assertEqual(xhs_rows[0].source_method, "external_placeholder")
+        self.assertEqual(xhs_rows[0].raw_payload["notes"], [])
+        self.assertEqual(xhs_rows[0].raw_payload["external_detail_status"], "pending")
+
+    def test_collect_topic_details_adds_baidu_content_pages_from_search_results(self):
+        topic = {
+            "topic_key": "baiducontenttopic",
+            "canonical_title": "baidu content topic",
+            "hot_record_ids": ["hot_baidu_001"],
+            "records": [hot_record("hot_baidu_001", "baidu", "baidu content topic")],
+        }
+        search_results = [
+            {"title": "first detail", "snippet": "first snippet", "url": "https://example.com/first"},
+            {"title": "second detail", "snippet": "second snippet", "url": "https://example.com/second"},
+        ]
+
+        evidence = collect_topic_details(
+            topics=[topic],
+            fetched_at="2026-06-24T08:00:00+08:00",
+            search_provider=lambda query: search_results,
+            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+            page_fetcher=lambda url: f"<html><body><article>Full page body for {url}</article></body></html>",
+        )
+
+        row = evidence[0]
+        assert row.platform == "baidu"
+        assert row.fetch_status == "ok"
+        assert row.raw_payload["content_pages"][0]["url"] == "https://example.com/first"
+        assert "Full page body for https://example.com/first" in row.raw_payload["content_pages"][0]["content"]
+        assert row.metrics["content_pages"] == 2
 
 
 def test_collect_topic_details_skips_social_fetch_for_non_detail_platform():
@@ -345,6 +374,110 @@ def test_collect_topic_details_dispatches_baidu_only_for_baidu_topic():
 
     assert {row.platform for row in evidence} == {"baidu"}
     assert evidence[0].fetch_status == "ok"
+
+
+def test_collect_topic_details_keeps_complete_baidu_raw_search_results():
+    topic = {
+        "topic_key": "baidurawtopic",
+        "canonical_title": "baidu raw topic",
+        "hot_record_ids": ["hot_baidu_001"],
+        "records": [hot_record("hot_baidu_001", "baidu", "baidu raw topic")],
+    }
+    all_results = [
+        {"title": f"title {index}", "snippet": f"full snippet {index}", "url": f"https://example.com/{index}"}
+        for index in range(8)
+    ]
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: all_results,
+        session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+    )
+
+    row = evidence[0]
+    assert row.raw_payload["search_results"] == all_results
+    assert row.raw_payload["query_attempts"][0]["query"] == "baidu raw topic"
+    assert row.raw_payload["query_attempts"][0]["result_count"] == 8
+
+
+def test_collect_topic_details_keeps_complete_social_raw_snapshot():
+    topic = {
+        "topic_key": "socialrawtopic",
+        "canonical_title": "social raw topic",
+        "hot_record_ids": ["hot_weibo_001"],
+        "records": [hot_record("hot_weibo_001", "weibo", "social raw topic")],
+    }
+    rows = [{"content": f"post {index}", "comments_preview": [], "url": f"https://weibo.example.com/{index}"} for index in range(12)]
+    browser_snapshot = {
+        "platform": "weibo",
+        "query": "social raw topic",
+        "current_url": "https://s.weibo.com/weibo?q=social",
+        "page_text": "\n".join(f"raw page line {index}" for index in range(100)),
+        "dom_rows": rows,
+    }
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-23T08:00:00+08:00",
+        search_provider=lambda query: [],
+        session_status={"weibo": "ok", "xiaohongshu": "login_required"},
+        social_detail_fetcher=lambda platform, query: {"rows": rows, "raw": browser_snapshot},
+    )
+
+    row = evidence[0]
+    assert row.raw_payload["posts"] == rows
+    assert row.raw_payload["browser_raw"] == browser_snapshot
+    assert row.metrics["posts"] == 12
+
+
+def test_collect_topic_details_does_not_supplement_xiaohongshu_detail_for_baidu_seed_topic():
+    topic = {
+        "topic_key": "baiduseedtopic",
+        "canonical_title": "baidu seed topic",
+        "hot_record_ids": ["hot_baidu_001"],
+        "records": [hot_record("hot_baidu_001", "baidu", "baidu seed topic")],
+    }
+    calls = []
+
+    def social_detail_fetcher(platform: str, query: str):
+        calls.append((platform, query))
+        raise AssertionError("xiaohongshu detail is filled by the external notes project")
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-24T08:00:00+08:00",
+        search_provider=lambda query: [{"title": "baidu title", "snippet": "baidu body", "url": "https://example.com/baidu"}],
+        session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+        supplemental_social_platforms=("weibo", "xiaohongshu"),
+    )
+
+    assert calls == []
+    assert {row.platform for row in evidence} == {"baidu"}
+
+
+def test_collect_topic_details_ignores_xiaohongshu_supplemental_detail_without_aborting():
+    topic = {
+        "topic_key": "guardedtopic",
+        "canonical_title": "guarded topic",
+        "hot_record_ids": ["hot_baidu_001"],
+        "records": [hot_record("hot_baidu_001", "baidu", "guarded topic")],
+    }
+
+    def social_detail_fetcher(platform: str, query: str):
+        raise RuntimeError("captcha_required")
+
+    evidence = collect_topic_details(
+        topics=[topic],
+        fetched_at="2026-06-24T08:00:00+08:00",
+        search_provider=lambda query: [{"title": "baidu title", "snippet": "baidu body", "url": "https://example.com/baidu"}],
+        session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+        social_detail_fetcher=social_detail_fetcher,
+        supplemental_social_platforms=("xiaohongshu",),
+    )
+
+    assert {row.platform for row in evidence} == {"baidu"}
 
 
 def test_collect_topic_details_dispatches_juejin_as_metadata_detail():

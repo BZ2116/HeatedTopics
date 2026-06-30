@@ -1,0 +1,8 @@
+{
+  "creator_id": "creator_001",
+  "role": "科技类博主",
+  "profile_type": "tech_ai_creator",
+  "track_tags": ["AI", "开发者工具", "开源项目"],
+  "custom_keywords": ["AI Agent", "MCP", "RAG"],
+  "content_modes": ["趋势观察", "工具测评", "教程实践"]
+}

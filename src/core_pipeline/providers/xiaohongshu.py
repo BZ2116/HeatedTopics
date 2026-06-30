@@ -1,6 +1,48 @@
 from src.core_pipeline.types import DetailEvidence, HotRecord
 
 
+def collect_xiaohongshu_placeholder_detail(
+    record: HotRecord,
+    fetched_at: str,
+) -> DetailEvidence:
+    return DetailEvidence(
+        evidence_id=f"evidence_xiaohongshu_{record.id}",
+        topic_key=record.title,
+        related_hot_record_ids=[record.id],
+        platform="xiaohongshu",
+        source_role="required",
+        source_method="external_placeholder",
+        query=record.title,
+        url=record.url,
+        title=f"小红书笔记详情占位：{record.title}",
+        content="",
+        author="",
+        published_at="",
+        metrics={"notes": 0},
+        comments_preview=[],
+        result_urls=[record.url] if record.url else [],
+        raw_snapshot_path="",
+        screenshot_path="",
+        fetched_at=fetched_at,
+        fetch_status="placeholder",
+        error_type=None,
+        confidence="low",
+        raw_payload={
+            "notes": [],
+            "external_detail_status": "pending",
+            "external_detail_source": "另一个小红书笔记采集项目",
+            "placeholder_reason": "当前项目只采集小红书热点话题、热度和排序，笔记正文由外部项目后续补齐。",
+            "hot_record": {
+                "platform": record.platform,
+                "title": record.title,
+                "hot_value": record.hot_value,
+                "rank": record.rank,
+                "source": record.source,
+            },
+        },
+    )
+
+
 def collect_xiaohongshu_detail(
     record: HotRecord,
     fetched_at: str,
@@ -70,7 +112,7 @@ def _status_evidence(record: HotRecord, fetched_at: str, status: str) -> DetailE
     )
 
 
-def extract_xiaohongshu_notes_from_text(page_text: str) -> list[dict[str, object]]:
+def extract_xiaohongshu_notes_from_text(page_text: str, max_items: int | None = None) -> list[dict[str, object]]:
     lines = [line.strip() for line in page_text.splitlines() if line.strip()]
     chunks: list[dict[str, object]] = []
     current: list[str] = []
@@ -82,4 +124,4 @@ def extract_xiaohongshu_notes_from_text(page_text: str) -> list[dict[str, object
             current = []
     if current:
         chunks.append({"content": "\n".join(current), "comments_preview": [], "url": ""})
-    return chunks[:5]
+    return chunks[:max_items] if max_items is not None else chunks

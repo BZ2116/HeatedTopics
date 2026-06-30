@@ -6,7 +6,7 @@ import tempfile
 from unittest.mock import patch
 
 from src.core_pipeline.cache_store import CacheStore
-from src.core_pipeline.run import build_creator_topic_index_command, default_social_detail_fetcher, main, output_paths, platform_raw_paths, print_progress, rooted_output_paths
+from src.core_pipeline.run import build_creator_topic_index_command, default_social_detail_fetcher, main, output_paths, platform_raw_paths, print_progress, rooted_output_paths, unique_creator_topic_synthesis_path
 from src.core_pipeline.run import run_recent_detail_collection
 
 
@@ -43,6 +43,27 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(output.getvalue(), "[3/8] 去重生成话题：10 个话题\n")
 
+    def test_print_progress_does_not_crash_when_console_rejects_unicode(self):
+        class GbkOnlyOutput:
+            encoding = "gbk"
+
+            def __init__(self):
+                self.value = ""
+
+            def write(self, text):
+                text.encode("gbk")
+                self.value += text
+
+            def flush(self):
+                pass
+
+        output = GbkOnlyOutput()
+
+        with patch("sys.stdout", output):
+            print_progress(5, 8, "采集详情证据：love❤topic")
+
+        self.assertIn("[5/8] 采集详情证据：love?topic", output.value)
+
 
     def test_core_hot_details_command_limits_routes_and_detail_platforms(self):
         calls = []
@@ -71,6 +92,19 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(paths["creator_topic_index"].as_posix(), "data/processed/creator_topic_index.json")
         self.assertEqual(paths["creator_topic_cards"].as_posix(), "reports/creator_topic_cards.md")
+        self.assertEqual(paths["creator_topic_synthesis_dir"].as_posix(), "data/processed/creator_topic_syntheses")
+
+    def test_unique_creator_topic_synthesis_path_does_not_overwrite_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = unique_creator_topic_synthesis_path(root, "2026-06-24T16:00:00+08:00")
+            first.parent.mkdir(parents=True)
+            first.write_text("{}", encoding="utf-8")
+
+            second = unique_creator_topic_synthesis_path(root, "2026-06-24T16:00:00+08:00")
+
+            self.assertNotEqual(first, second)
+            self.assertEqual(second.name, "creator_topic_synthesis_20260624T160000p0800_002.json")
 
     def test_build_creator_topic_index_command_writes_json_and_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -144,6 +178,175 @@ class RunTests(unittest.TestCase):
 
         self.assertEqual(calls[0]["root"], Path("."))
         self.assertTrue(calls[0]["render_report"])
+
+    def test_build_creator_topic_index_command_uses_manual_summary_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data/raw").mkdir(parents=True)
+            (root / "data/evidence").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            manual_path = root / "manual.json"
+            (root / "data/raw/dailyhot_records.json").write_text("[]", encoding="utf-8")
+            (root / "data/evidence/detail_evidence_raw.jsonl").write_text("", encoding="utf-8")
+            (root / "data/processed/topic_clusters.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "topic_key": "河北高考分数线",
+                            "canonical_title": "河北高考分数线",
+                            "hot_record_ids": [],
+                            "platforms": ["weibo"],
+                            "best_rank": 1,
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            manual_path.write_text(
+                json.dumps(
+                    {
+                        "河北高考分数线": {
+                            "what_happened": "人工摘要：河北分数线公布。",
+                            "why_it_matters": "人工摘要：影响志愿填报。",
+                            "creator_angle": "人工摘要：适合本地教育号。",
+                            "tracking_hint": "人工摘要：追踪志愿节点。",
+                        }
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            build_creator_topic_index_command(
+                root=root,
+                generated_at="2026-06-24T16:00:00+08:00",
+                render_report=True,
+                manual_summaries_path=manual_path,
+            )
+
+            index = json.loads((root / "data/processed/creator_topic_index.json").read_text(encoding="utf-8"))
+            card = index["topics"][0]["card"]
+            self.assertEqual(card["manual_summary"]["what_happened"], "人工摘要：河北分数线公布。")
+            self.assertIn("人工摘要：河北分数线公布。", (root / "reports/creator_topic_cards.md").read_text(encoding="utf-8"))
+
+    def test_main_accepts_manual_summaries_and_summary_mode_flags(self):
+        calls = []
+
+        def fake_command(**kwargs):
+            calls.append(kwargs)
+            return {"topics_count": 0}
+
+        with patch(
+            "sys.argv",
+            [
+                "run.py",
+                "build-creator-topic-index",
+                "--render-report",
+                "--manual-summaries",
+                "data/manual/topic_summaries.json",
+                "--summary-mode",
+                "model",
+            ],
+        ):
+            with patch("src.core_pipeline.run.build_creator_topic_index_command", fake_command):
+                main()
+
+        self.assertEqual(calls[0]["manual_summaries_path"], Path("data/manual/topic_summaries.json"))
+        self.assertEqual(calls[0]["summary_mode"], "model")
+
+    def test_build_creator_topic_index_command_model_mode_writes_synthesis_and_model_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "data/raw").mkdir(parents=True)
+            (root / "data/evidence").mkdir(parents=True)
+            (root / "data/processed").mkdir(parents=True)
+            (root / "data/raw/dailyhot_records.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "hot_weibo_001",
+                            "platform": "weibo",
+                            "title": "model-topic",
+                            "rank": 1,
+                            "hot_value": "1784276",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            (root / "data/evidence/detail_evidence_raw.jsonl").write_text(
+                json.dumps(
+                    {
+                        "source": "weibo",
+                        "title": "model-topic",
+                        "content": "model-topic happened with enough evidence for a concise model summary.",
+                        "url": "https://example.com/weibo",
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (root / "data/processed/topic_clusters.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "topic_key": "model-topic",
+                            "canonical_title": "model-topic",
+                            "hot_record_ids": ["hot_weibo_001"],
+                            "platforms": ["weibo"],
+                            "best_rank": 1,
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            def fake_model_call(messages):
+                self.assertIn("topics", messages[1]["content"])
+                return {
+                    "overall_summary": {
+                        "core_conclusion": "model overall conclusion",
+                        "topic_landscape": "model topic landscape",
+                        "creator_strategy": "model creator strategy",
+                        "risk_and_verification": "model verification note",
+                    },
+                    "theme_clusters": [],
+                    "topic_summaries": {
+                        "model-topic": {
+                            "what_happened": "model summary happened",
+                            "why_it_matters": "model summary matters",
+                            "creator_angle": "model summary creator angle",
+                            "tracking_hint": "model summary tracking hint",
+                            "confidence": "high",
+                        }
+                    },
+                }
+
+            result = build_creator_topic_index_command(
+                root=root,
+                generated_at="2026-06-24T16:00:00+08:00",
+                render_report=True,
+                summary_mode="model",
+                model_call=fake_model_call,
+                model_name="gpt-test",
+            )
+
+            index = json.loads((root / "data/processed/creator_topic_index.json").read_text(encoding="utf-8"))
+            synthesis_files = sorted((root / "data/processed/creator_topic_syntheses").glob("creator_topic_synthesis_*.json"))
+            self.assertEqual(len(synthesis_files), 1)
+            self.assertFalse((root / "data/processed/creator_topic_synthesis.json").exists())
+            synthesis = json.loads(synthesis_files[0].read_text(encoding="utf-8"))
+            card = index["topics"][0]["card"]
+            self.assertEqual(result["topics_count"], 1)
+            self.assertEqual(result["synthesis_topic_count"], 1)
+            self.assertEqual(card["model_summary"]["what_happened"], "model summary happened")
+            self.assertEqual(synthesis["overall_summary"]["core_conclusion"], "model overall conclusion")
+            self.assertIn(synthesis_files[0].as_posix(), index["source_files"])
+            self.assertIn("model summary happened", (root / "reports/creator_topic_cards.md").read_text(encoding="utf-8"))
 
 
 class RecentDetailRunTests(unittest.TestCase):
@@ -503,20 +706,23 @@ class RecentDetailRunTests(unittest.TestCase):
 
     def test_run_recent_detail_collection_reports_progress_steps(self):
         events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
 
-        def route_fetcher(route: str):
-            return {"data": [{"title": "进度测试热点", "hot": "100", "url": "https://example.com/hot"}]}
+            def route_fetcher(route: str):
+                return {"data": [{"title": "进度测试热点", "hot": "100", "url": "https://example.com/hot"}]}
 
-        run_recent_detail_collection(
-            window="today",
-            routes=("weibo",),
-            route_fetcher=route_fetcher,
-            search_provider=lambda query: [],
-            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
-            page_fetcher=None,
-            now=lambda: "2026-06-22T20:00:00+08:00",
-            progress=lambda current, total, message: events.append((current, total, message)),
-        )
+            run_recent_detail_collection(
+                window="today",
+                root=root,
+                routes=("weibo",),
+                route_fetcher=route_fetcher,
+                search_provider=lambda query: [],
+                session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+                page_fetcher=None,
+                now=lambda: "2026-06-22T20:00:00+08:00",
+                progress=lambda current, total, message: events.append((current, total, message)),
+            )
 
         self.assertEqual(events[0], (1, 8, "校验采集窗口"))
         self.assertEqual(events[-1][0:2], (8, 8))
@@ -528,20 +734,23 @@ class RecentDetailRunTests(unittest.TestCase):
 
     def test_run_recent_detail_collection_defaults_to_all_registered_dailyhot_routes(self):
         called_routes = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
 
-        def route_fetcher(route: str):
-            called_routes.append(route)
-            return {"data": []}
+            def route_fetcher(route: str):
+                called_routes.append(route)
+                return {"data": []}
 
-        run_recent_detail_collection(
-            window="today",
-            route_fetcher=route_fetcher,
-            search_provider=lambda query: [],
-            session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
-            page_fetcher=None,
-            now=lambda: "2026-06-22T20:00:00+08:00",
-            cache_store=CacheStore(Path(tempfile.mkdtemp()), refresh=True),
-        )
+            run_recent_detail_collection(
+                window="today",
+                root=root,
+                route_fetcher=route_fetcher,
+                search_provider=lambda query: [],
+                session_status={"weibo": "login_required", "xiaohongshu": "login_required"},
+                page_fetcher=None,
+                now=lambda: "2026-06-22T20:00:00+08:00",
+                cache_store=CacheStore(root / "cache", refresh=True),
+            )
 
         self.assertIn("weibo", called_routes)
         self.assertIn("baidu", called_routes)
@@ -551,19 +760,22 @@ class RecentDetailRunTests(unittest.TestCase):
 
     def test_run_recent_detail_collection_continues_when_browser_sessions_are_missing(self):
         events = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
 
-        with patch(
-            "src.core_pipeline.run.check_required_sessions",
-            return_value={"weibo": "login_required", "xiaohongshu": "login_required"},
-        ):
-            result = run_recent_detail_collection(
-                window="today",
-                route_fetcher=lambda route: {"data": [{"title": "partial session topic", "hot": "100", "url": "https://example.com/hot"}]},
-                search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
-                page_fetcher=None,
-                now=lambda: "2026-06-22T20:00:00+08:00",
-                progress=lambda current, total, message: events.append((current, total, message)),
-            )
+            with patch(
+                "src.core_pipeline.run.check_required_sessions",
+                return_value={"weibo": "login_required", "xiaohongshu": "login_required"},
+            ):
+                result = run_recent_detail_collection(
+                    window="today",
+                    root=root,
+                    route_fetcher=lambda route: {"data": [{"title": "partial session topic", "hot": "100", "url": "https://example.com/hot"}]},
+                    search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
+                    page_fetcher=None,
+                    now=lambda: "2026-06-22T20:00:00+08:00",
+                    progress=lambda current, total, message: events.append((current, total, message)),
+                )
 
         self.assertGreater(result["topics_count"], 0)
         self.assertEqual(result["missing_browser_sessions_count"], 2)
@@ -571,22 +783,25 @@ class RecentDetailRunTests(unittest.TestCase):
 
     def test_run_recent_detail_collection_uses_available_single_browser_session(self):
         calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
 
-        def social_detail_fetcher(platform: str, query: str):
-            calls.append((platform, query))
-            return [{"content": f"{platform} real detail", "comments_preview": [], "url": f"https://example.com/{platform}"}]
+            def social_detail_fetcher(platform: str, query: str):
+                calls.append((platform, query))
+                return [{"content": f"{platform} real detail", "comments_preview": [], "url": f"https://example.com/{platform}"}]
 
-        result = run_recent_detail_collection(
-            window="today",
-            routes=("xiaohongshu",),
-            route_fetcher=lambda route: {"data": [{"title": "single session topic", "hot": "100", "url": "https://example.com/hot"}]},
-            search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
-            session_status={"weibo": "login_required", "xiaohongshu": "ok"},
-            social_detail_fetcher=social_detail_fetcher,
-            page_fetcher=None,
-            now=lambda: "2026-06-22T20:00:00+08:00",
-            cache_store=CacheStore(Path(tempfile.mkdtemp()), refresh=True),
-        )
+            result = run_recent_detail_collection(
+                window="today",
+                root=root,
+                routes=("xiaohongshu",),
+                route_fetcher=lambda route: {"data": [{"title": "single session topic", "hot": "100", "url": "https://example.com/hot"}]},
+                search_provider=lambda query: [{"title": "baidu detail", "snippet": "baidu detail body", "url": "https://news.example.com/a"}],
+                session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+                social_detail_fetcher=social_detail_fetcher,
+                page_fetcher=None,
+                now=lambda: "2026-06-22T20:00:00+08:00",
+                cache_store=CacheStore(root / "cache", refresh=True),
+            )
 
         self.assertEqual(result["missing_browser_sessions_count"], 1)
         self.assertEqual(calls, [])
@@ -608,52 +823,55 @@ class RecentDetailRunTests(unittest.TestCase):
 
     def test_run_recent_detail_collection_adds_xiaohongshu_browser_hot_records_when_dailyhot_is_empty(self):
         calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
 
-        def route_fetcher(route: str):
-            if route == "baidu":
-                return {"data": [{"title": "baidu seed topic", "hot": "100"}]}
-            if route == "xiaohongshu":
+            def route_fetcher(route: str):
+                if route == "baidu":
+                    return {"data": [{"title": "baidu seed topic", "hot": "100"}]}
+                if route == "xiaohongshu":
+                    return {"data": []}
                 return {"data": []}
-            return {"data": []}
 
-        def xiaohongshu_hot_fetcher(captured_at: str):
-            calls.append(captured_at)
-            from src.core_pipeline.types import HotRecord
+            def xiaohongshu_hot_fetcher(captured_at: str):
+                calls.append(captured_at)
+                from src.core_pipeline.types import HotRecord
 
-            return [
-                HotRecord(
-                    id="hot_xiaohongshu_browser_001",
-                    source="xiaohongshu_browser",
-                    platform="xiaohongshu",
-                    route="xiaohongshu",
-                    category="core_discovery",
-                    title="xhs browser hot topic",
-                    rank=1,
-                    hot_value="",
-                    url="https://www.xiaohongshu.com/explore/1",
-                    mobile_url="",
-                    desc="raw xhs card text",
-                    author="",
-                    cover="",
-                    timestamp="",
-                    captured_at=captured_at,
-                    raw_payload={"page_text": "raw xhs explore"},
-                    fetch_status="ok",
-                    error_type=None,
-                )
-            ]
+                return [
+                    HotRecord(
+                        id="hot_xiaohongshu_browser_001",
+                        source="xiaohongshu_browser",
+                        platform="xiaohongshu",
+                        route="xiaohongshu",
+                        category="core_discovery",
+                        title="xhs browser hot topic",
+                        rank=1,
+                        hot_value="",
+                        url="https://www.xiaohongshu.com/explore/1",
+                        mobile_url="",
+                        desc="raw xhs card text",
+                        author="",
+                        cover="",
+                        timestamp="",
+                        captured_at=captured_at,
+                        raw_payload={"page_text": "raw xhs explore"},
+                        fetch_status="ok",
+                        error_type=None,
+                    )
+                ]
 
-        result = run_recent_detail_collection(
-            window="today",
-            routes=("baidu", "xiaohongshu"),
-            route_fetcher=route_fetcher,
-            search_provider=lambda query: [{"title": "detail", "snippet": "body", "url": "https://example.com"}],
-            session_status={"weibo": "login_required", "xiaohongshu": "ok"},
-            social_detail_fetcher=lambda platform, query: {"rows": [{"content": "xhs detail", "comments_preview": [], "url": ""}], "raw": {}},
-            xiaohongshu_hot_fetcher=xiaohongshu_hot_fetcher,
-            now=lambda: "2026-06-24T08:00:00+08:00",
-            cache_store=CacheStore(Path(tempfile.mkdtemp()), refresh=True),
-        )
+            result = run_recent_detail_collection(
+                window="today",
+                root=root,
+                routes=("baidu", "xiaohongshu"),
+                route_fetcher=route_fetcher,
+                search_provider=lambda query: [{"title": "detail", "snippet": "body", "url": "https://example.com"}],
+                session_status={"weibo": "login_required", "xiaohongshu": "ok"},
+                social_detail_fetcher=lambda platform, query: {"rows": [{"content": "xhs detail", "comments_preview": [], "url": ""}], "raw": {}},
+                xiaohongshu_hot_fetcher=xiaohongshu_hot_fetcher,
+                now=lambda: "2026-06-24T08:00:00+08:00",
+                cache_store=CacheStore(root / "cache", refresh=True),
+            )
 
         assert calls == ["2026-06-24T08:00:00+08:00"]
         assert result["hot_records_count"] == 2

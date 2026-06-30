@@ -11,6 +11,7 @@ data/cache/
 data/evidence/
 data/raw/
 data/processed/*.json
+data/search_discovery/
 
 # DailyHotApi clone (run tools/run-demo.sh instead)
 tools/DailyHotApi/
@@ -24,9 +25,14 @@ reports/daily_digest_demo.md
 reports/daily_digest_demo.html
 reports/hot_topic_cards.md
 reports/recent_hot_topics_digest.md
+reports/search_discovery/
 
 # Local smoke-test and build artifacts
 tmp/
+local_archive/
 dailyhot/
 detail/
 *.egg-info/
+
+# Local secrets
+.env

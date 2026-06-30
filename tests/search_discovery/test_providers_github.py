@@ -1,0 +1,127 @@
+import httpx
+import pytest
+
+from src.search_discovery.providers_github import GitHubSearchProvider
+
+
+def _transport(responder):
+    return httpx.MockTransport(responder)
+
+
+def test_from_env_returns_none_when_no_token(monkeypatch):
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    assert GitHubSearchProvider.from_env() is None
+
+
+def test_from_env_returns_instance_when_token_present(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    assert provider is not None
+    assert provider.source_id == "github_search"
+
+
+def test_search_rows_parses_items(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    provider._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={
+            "items": [
+                {"full_name": "foo/bar", "html_url": "https://github.com/foo/bar",
+                 "description": "desc", "stargazers_count": 100}
+            ]
+        })),
+        timeout=provider.timeout_seconds,
+    )
+    rows = provider.search_rows("agent", keyword_category="tech_project", fetched_at="2026-06-27T10:00:00+08:00")
+    assert len(rows) == 1
+    assert rows[0]["title"] == "foo/bar"
+    assert rows[0]["url"] == "https://github.com/foo/bar"
+    assert rows[0]["snippet"] == "desc"
+    assert rows[0]["content_type"] == "repo"
+    assert rows[0]["metrics"]["stars"] == 100
+
+
+def test_search_rows_sends_user_agent(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        assert request.headers["User-Agent"] == "heatedTopics/0.1"
+        return httpx.Response(200, json={"items": []})
+
+    provider._client = httpx.Client(
+        transport=_transport(responder),
+        timeout=provider.timeout_seconds,
+    )
+
+    assert provider.search_rows("agent") == []
+
+
+def test_search_rows_empty_items(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    provider._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={"items": []})),
+        timeout=provider.timeout_seconds,
+    )
+    rows = provider.search_rows("nothing")
+    assert rows == []
+
+
+def test_search_rows_parses_rich_repo_metadata(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    provider._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={
+            "items": [
+                {
+                    "full_name": "owner/agent-framework",
+                    "html_url": "https://github.com/owner/agent-framework",
+                    "description": "AI Agent framework with MCP tools",
+                    "stargazers_count": 1200,
+                    "forks_count": 88,
+                    "watchers_count": 1200,
+                    "open_issues_count": 12,
+                    "language": "Python",
+                    "topics": ["ai-agent", "mcp", "rag"],
+                    "pushed_at": "2026-06-20T10:00:00Z",
+                    "updated_at": "2026-06-21T10:00:00Z",
+                    "license": {"spdx_id": "MIT"},
+                }
+            ]
+        })),
+        timeout=provider.timeout_seconds,
+    )
+
+    rows = provider.search_rows("AI Agent MCP")
+
+    assert rows[0]["metrics"] == {
+        "stars": 1200,
+        "forks": 88,
+        "watchers": 1200,
+        "open_issues": 12,
+        "language": "Python",
+        "topics": ["ai-agent", "mcp", "rag"],
+        "pushed_at": "2026-06-20T10:00:00Z",
+        "updated_at": "2026-06-21T10:00:00Z",
+        "license": "MIT",
+    }
+    assert rows[0]["published_at"] == "2026-06-21T10:00:00Z"
+    assert rows[0]["raw_payload"]["full_name"] == "owner/agent-framework"
+
+
+def test_search_rows_skips_items_without_url(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_fake")
+    provider = GitHubSearchProvider.from_env()
+    provider._client = httpx.Client(
+        transport=_transport(lambda r: httpx.Response(200, json={
+            "items": [
+                {"full_name": "ok/x", "html_url": "https://github.com/ok/x", "description": "d"},
+                {"full_name": "bad", "html_url": "", "description": "no url"},
+            ]
+        })),
+        timeout=provider.timeout_seconds,
+    )
+    rows = provider.search_rows("x")
+    assert len(rows) == 1
+    assert rows[0]["title"] == "ok/x"

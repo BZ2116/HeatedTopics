@@ -264,7 +264,7 @@ def test_recent_report_shows_dailyhot_metadata_without_missing_detail_warning():
 from src.core_pipeline.report_renderer import render_creator_topic_cards
 
 
-def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
+def test_render_creator_topic_cards_uses_structured_summary_layout():
     index = {
         "generated_at": "2026-06-24T16:00:00+08:00",
         "topics": [
@@ -273,9 +273,6 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
                 "domain_path": ["教育升学", "高考", "分数线"],
                 "content_modes": ["数据整理", "经验攻略"],
                 "audience_tags": ["学生", "家长"],
-                "entity_keywords": ["河北", "2026高考"],
-                "event_keywords": ["分数线公布"],
-                "match_terms": ["河北高考分数线"],
                 "hotness": {
                     "best_rank": 1,
                     "platforms": ["weibo"],
@@ -287,9 +284,37 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
                 "creator_fit_score": 88,
                 "card": {
                     "source_platforms": ["weibo"],
-                    "summary": "适合做高考数据整理。",
-                    "detail": "河北公布 2026 年高考分数线。",
+                    "hotness_label": "排名 1；weibo热度 1784276",
+                    "clean_content": "河北公布 2026 年高考分数线。",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "河北公布 2026 年高考分数线。",
+                        "why_it_matters": "影响学生和家长志愿填报。",
+                        "creator_angle": "适合做分数线汇总。",
+                        "tracking_hint": "后续可追踪志愿填报时间。",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "教育信息需核对官方来源。",
                     "evidence_urls": ["https://example.com/weibo"],
+                    "platform_cards": [
+                        {
+                            "platform": "weibo",
+                            "title": "河北高考分数线",
+                            "url": "https://example.com/weibo",
+                            "clean_content": "微博整理内容。",
+                            "content_quality": "partial",
+                            "removed_line_count": 2,
+                        },
+                        {
+                            "platform": "baidu",
+                            "title": "河北高考分数线",
+                            "url": "https://example.com/baidu",
+                            "clean_content": "百度整理内容。",
+                            "content_quality": "clean",
+                            "removed_line_count": 0,
+                        },
+                    ],
                 },
             }
         ],
@@ -299,11 +324,99 @@ def test_render_creator_topic_cards_groups_by_domain_and_shows_card_fields():
 
     assert "# 创作者热点卡片" in markdown
     assert "## 教育升学" in markdown
-    assert "### 河北高考分数线" in markdown
-    assert "话题热度" in markdown
-    assert "来源平台" in markdown
-    assert "可追踪度" in markdown
+    assert "---\n\n### 01. 河北高考分数线" in markdown
+    assert "**概览**：排名 1；weibo热度 1784276 | 平台 weibo | 分类 教育升学 > 高考 > 分数线 | 受众 学生、家长 | 适合 数据整理、经验攻略" in markdown
+    assert "#### 一句话结论" in markdown
     assert "河北公布 2026 年高考分数线。" in markdown
+    assert "#### 核心内容" in markdown
+    assert "> 河北公布 2026 年高考分数线。" in markdown
+    assert "#### 创作参考" in markdown
+    assert "| 创作者角度 | 后续追踪 | 风险提示 |" in markdown
+    assert "| --- | --- | --- |" in markdown
+    assert "| 适合做分数线汇总。 | 后续可追踪志愿填报时间。 | 教育信息需核对官方来源。 |" in markdown
+    assert "适合做分数线汇总。" in markdown
+    assert "后续可追踪志愿填报时间。" in markdown
+    assert "教育信息需核对官方来源。" in markdown
+    assert "#### 平台数据整理" in markdown
+    assert "##### 平台 1: weibo" in markdown
+    assert "> 微博整理内容。" in markdown
+    assert "##### 平台 2: baidu" in markdown
+    assert "> 百度整理内容。" in markdown
+    assert "#### 证据链接" in markdown
+    assert "- https://example.com/weibo" in markdown
+
+
+def test_render_creator_topic_cards_wraps_multiline_content_in_blockquote():
+    index = {
+        "generated_at": "2026-06-25T10:00:00+08:00",
+        "topics": [
+            {
+                "title": "多行内容话题",
+                "domain_path": ["未分类", "待人工确认"],
+                "content_modes": ["数据整理"],
+                "audience_tags": ["泛大众"],
+                "card": {
+                    "source_platforms": ["weibo"],
+                    "hotness_label": "排名 2",
+                    "clean_content": "第一行内容。\n第二行内容。\n第三行内容。",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "一句话",
+                        "creator_angle": "创作角度",
+                        "tracking_hint": "追踪点",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "常规风险",
+                    "evidence_urls": [],
+                },
+            }
+        ],
+    }
+
+    markdown = render_creator_topic_cards(index)
+
+    assert "#### 核心内容" in markdown
+    assert "> 第一行内容。" in markdown
+    assert "> 第二行内容。" in markdown
+    assert "> 第三行内容。" in markdown
+    assert "#### 证据链接" not in markdown
+
+
+def test_render_creator_topic_cards_handles_missing_metadata():
+    index = {
+        "generated_at": "2026-06-25T10:00:00+08:00",
+        "topics": [
+            {
+                "title": "裸数据话题",
+                "domain_path": [],
+                "content_modes": [],
+                "audience_tags": [],
+                "card": {
+                    "source_platforms": [],
+                    "hotness_label": "",
+                    "clean_content": "",
+                    "summary": {
+                        "mode": "rule",
+                        "what_happened": "",
+                        "creator_angle": "",
+                        "tracking_hint": "",
+                    },
+                    "manual_summary": None,
+                    "model_summary": None,
+                    "risk_note": "",
+                    "evidence_urls": [],
+                },
+            }
+        ],
+    }
+
+    markdown = render_creator_topic_cards(index)
+
+    assert "### 01. 裸数据话题" in markdown
+    assert "**概览**：" in markdown
+    assert "#### 一句话结论" in markdown
+    assert "#### 核心内容" in markdown
 
 
 if __name__ == "__main__":

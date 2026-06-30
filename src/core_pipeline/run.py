@@ -1,6 +1,7 @@
 import argparse
 import inspect
 import json
+import sys
 import urllib.request
 from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
@@ -13,6 +14,12 @@ from src.core_pipeline.dailyhot_client import collect_dailyhot_records, fetch_da
 from src.core_pipeline.browser_detail_fetcher import fetch_social_details_with_browser
 from src.core_pipeline.detail_collector import collect_topic_details, html_to_text
 from src.core_pipeline.json_store import read_json_list, read_jsonl, write_json_list, write_jsonl
+from src.core_pipeline.model_topic_summarizer import (
+    DEFAULT_MODEL,
+    build_creator_topic_synthesis,
+    build_model_summaries,
+    call_openai_compatible_chat,
+)
 from src.core_pipeline.providers.baidu import collect_baidu_detail, search_baidu_details
 from src.core_pipeline.providers.weibo import collect_weibo_detail
 from src.core_pipeline.providers.weibo_hot import fetch_weibo_hot_records_with_browser
@@ -26,6 +33,7 @@ from src.core_pipeline.report_renderer import (
 )
 from src.core_pipeline.session_gate import check_required_sessions
 from src.core_pipeline.source_registry import ALL_DAILYHOT_ROUTES, DETAIL_ENABLED_PLATFORMS
+from src.core_pipeline.topic_summary import load_manual_summaries
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -53,6 +61,7 @@ def output_paths() -> dict[str, Path]:
         "topic_briefs": Path("data/processed/topic_briefs.json"),
         "markdown_report": Path("reports/core_platform_topic_digest.md"),
         "creator_topic_index": Path("data/processed/creator_topic_index.json"),
+        "creator_topic_synthesis_dir": Path("data/processed/creator_topic_syntheses"),
         "creator_topic_cards": Path("reports/creator_topic_cards.md"),
     }
 
@@ -79,6 +88,29 @@ def rooted_output_paths(root: Path) -> dict[str, Path]:
     return {key: root / value for key, value in output_paths().items()} | {
         "recent_markdown_report": root / "reports/recent_hot_topics_digest.md"
     }
+
+
+def unique_creator_topic_synthesis_path(root: Path, generated_at: str) -> Path:
+    directory = root / output_paths()["creator_topic_synthesis_dir"]
+    timestamp = _filename_safe_timestamp(generated_at)
+    base = directory / f"creator_topic_synthesis_{timestamp}.json"
+    if not base.exists():
+        return base
+    for index in range(2, 1000):
+        candidate = directory / f"creator_topic_synthesis_{timestamp}_{index:03d}.json"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"Unable to find available synthesis output path in {directory}")
+
+
+def _filename_safe_timestamp(value: str) -> str:
+    return (
+        value.strip()
+        .replace(":", "")
+        .replace("+", "p")
+        .replace("-", "")
+        .replace(".", "")
+    )
 
 
 def platform_raw_paths(root: Path = Path(".")) -> dict[str, Path]:
@@ -267,7 +299,13 @@ def report_progress(progress: ProgressReporter | None, current: int, total: int,
 
 
 def print_progress(current: int, total: int, message: str) -> None:
-    print(f"[{current}/{total}] {message}")
+    line = f"[{current}/{total}] {message}"
+    try:
+        print(line)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        safe_line = line.encode(encoding, errors="replace").decode(encoding)
+        print(safe_line)
 
 
 def missing_browser_sessions(status: dict[str, str]) -> list[str]:
@@ -518,6 +556,10 @@ def build_creator_topic_index_command(
     root: Path = Path("."),
     generated_at: str | None = None,
     render_report: bool = False,
+    manual_summaries_path: Path | None = None,
+    summary_mode: str = "rule",
+    model_call: Callable[[list[dict[str, str]]], dict[str, Any]] | None = None,
+    model_name: str = DEFAULT_MODEL,
 ) -> dict[str, int]:
     paths = rooted_output_paths(root)
     generated = generated_at or now_shanghai_iso()
@@ -527,6 +569,24 @@ def build_creator_topic_index_command(
     records = read_json_list(hot_records_path)
     detail_rows = read_jsonl(raw_detail_path)
     topics = read_json_list(topic_clusters_path)
+    missing_inputs = [
+        (label, str(path))
+        for label, path, rows in (
+            ("热榜记录", hot_records_path, records),
+            ("详情证据 JSONL", raw_detail_path, detail_rows),
+            ("话题聚类", topic_clusters_path, topics),
+        )
+        if not rows and not path.exists()
+    ]
+    if missing_inputs:
+        print("[警告] 以下输入文件不存在，将生成空索引：", file=sys.stderr)
+        for label, path in missing_inputs:
+            print(f"  - {label}: {path}", file=sys.stderr)
+        print(
+            "请先在项目根目录运行采集命令：uv run python -m src.core_pipeline.run collect-recent-details --window today",
+            file=sys.stderr,
+        )
+    manual_summaries = load_manual_summaries(manual_summaries_path) if manual_summaries_path is not None else {}
     index = build_creator_topic_index(
         topics=topics,
         hot_records=records,
@@ -537,7 +597,40 @@ def build_creator_topic_index_command(
             raw_detail_path.as_posix(),
             topic_clusters_path.as_posix(),
         ],
+        manual_summaries=manual_summaries,
+        model_summaries={},
     )
+    synthesis_topic_count = 0
+    if summary_mode == "model":
+        call = model_call or (lambda messages: call_openai_compatible_chat(messages, model=model_name))
+        synthesis = build_creator_topic_synthesis(
+            index=index,
+            model_call=call,
+            generated_at=generated,
+            model=model_name,
+        )
+        synthesis_path = unique_creator_topic_synthesis_path(root, generated)
+        synthesis_path.parent.mkdir(parents=True, exist_ok=True)
+        synthesis_path.write_text(
+            json.dumps(synthesis, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        model_summaries = build_model_summaries(synthesis)
+        synthesis_topic_count = len(model_summaries)
+        index = build_creator_topic_index(
+            topics=topics,
+            hot_records=records,
+            detail_rows=detail_rows,
+            generated_at=generated,
+            source_files=[
+                hot_records_path.as_posix(),
+                raw_detail_path.as_posix(),
+                topic_clusters_path.as_posix(),
+                synthesis_path.as_posix(),
+            ],
+            manual_summaries=manual_summaries,
+            model_summaries=model_summaries,
+        )
     paths["creator_topic_index"].parent.mkdir(parents=True, exist_ok=True)
     paths["creator_topic_index"].write_text(
         json.dumps(index, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
@@ -547,7 +640,13 @@ def build_creator_topic_index_command(
         report = render_creator_topic_cards(index)
         paths["creator_topic_cards"].parent.mkdir(parents=True, exist_ok=True)
         paths["creator_topic_cards"].write_text(report, encoding="utf-8")
-    return {"topics_count": len(index["topics"])}
+    print(f"生成创作者索引：{len(index['topics'])} 个话题")
+    print(f"  索引文件：{paths['creator_topic_index'].resolve()}")
+    if summary_mode == "model":
+        print(f"  模型归纳文件：{synthesis_path.resolve()}")
+    if render_report:
+        print(f"  卡片报告：{paths['creator_topic_cards'].resolve()}")
+    return {"topics_count": len(index["topics"]), "synthesis_topic_count": synthesis_topic_count}
 
 
 def main() -> None:
@@ -561,6 +660,8 @@ def main() -> None:
     parser.add_argument("--detail-platforms", default="")
     parser.add_argument("--max-hot-per-platform", type=int, default=10)
     parser.add_argument("--render-report", action="store_true")
+    parser.add_argument("--manual-summaries", default="")
+    parser.add_argument("--summary-mode", choices=("rule", "model"), default="rule")
     args = parser.parse_args()
     if args.command == "paths":
         write_json_list("data/processed/pipeline_paths.json", [{key: str(value) for key, value in output_paths().items()}])
@@ -588,9 +689,12 @@ def main() -> None:
             max_hot_per_platform=args.max_hot_per_platform,
         )
     if args.command == "build-creator-topic-index":
+        manual_summaries_path = Path(args.manual_summaries) if args.manual_summaries else None
         build_creator_topic_index_command(
             root=Path("."),
             render_report=args.render_report,
+            manual_summaries_path=manual_summaries_path,
+            summary_mode=args.summary_mode,
         )
 
 

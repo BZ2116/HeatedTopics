@@ -1,5 +1,6 @@
 from src.core_pipeline.completeness import evaluate_required_details
 from src.core_pipeline.source_registry import REQUIRED_DETAIL_PLATFORMS
+from src.core_pipeline.topic_summary import select_display_summary
 from src.core_pipeline.types import DetailEvidence, HotRecord, TopicBrief
 
 
@@ -131,45 +132,137 @@ def render_creator_topic_cards(index: dict[str, object]) -> str:
         f"- 话题数量：`{len(topics)}`",
         "",
     ]
+    card_index = 0
     for domain in sorted(grouped):
         lines.extend([f"## {domain}", ""])
         for topic in grouped[domain]:
-            hotness = topic.get("hotness", {}) if isinstance(topic.get("hotness"), dict) else {}
+            card_index += 1
             card = topic.get("card", {}) if isinstance(topic.get("card"), dict) else {}
-            hot_values = hotness.get("hot_values", [])
-            hot_value_text = _format_hot_values(hot_values if isinstance(hot_values, list) else [])
+            summary = select_display_summary(card)
+            title = topic.get("title", "未命名话题")
+            overview = _format_overview(card, topic)
             lines.extend(
                 [
-                    f"### {topic.get('title', '未命名话题')}",
+                    "---",
                     "",
-                    f"- 话题热度：排名 `{hotness.get('best_rank', '')}`；热度 `{hot_value_text}`",
-                    f"- 来源平台：`{', '.join(str(item) for item in card.get('source_platforms', hotness.get('platforms', [])))}`",
-                    f"- 领域路径：`{' > '.join(str(item) for item in topic.get('domain_path', []))}`",
-                    f"- 创作方式：`{', '.join(str(item) for item in topic.get('content_modes', []))}`",
-                    f"- 目标受众：`{', '.join(str(item) for item in topic.get('audience_tags', []))}`",
-                    f"- 可追踪度：`{topic.get('traceability', '')}`",
-                    f"- 新鲜度：`{topic.get('freshness', '')}`",
-                    f"- 风险等级：`{topic.get('risk_level', '')}`",
-                    f"- 创作者适配分：`{topic.get('creator_fit_score', '')}`",
-                    f"- 关键词：`{', '.join(str(item) for item in topic.get('match_terms', []))}`",
+                    f"### {card_index:02d}. {title}",
                     "",
-                    "具体内容：",
+                    f"**概览**：{overview}",
                     "",
-                    str(card.get("detail", "")),
+                    "#### 一句话结论",
                     "",
-                    "推荐摘要：",
+                    str(summary.get("what_happened", "")),
                     "",
-                    str(card.get("summary", "")),
+                    "#### 核心内容",
+                    "",
+                    _blockquote(_content_excerpt(card.get("clean_content", ""))),
+                    "",
+                    "#### 创作参考",
+                    "",
+                    _reference_table(
+                        summary.get("creator_angle", ""),
+                        summary.get("tracking_hint", ""),
+                        card.get("risk_note", ""),
+                    ),
                     "",
                 ]
             )
+            platform_cards = card.get("platform_cards", [])
+            if isinstance(platform_cards, list) and platform_cards:
+                lines.append("#### 平台数据整理")
+                lines.append("")
+                for platform_index, platform_card in enumerate(platform_cards, start=1):
+                    if not isinstance(platform_card, dict):
+                        continue
+                    platform = str(platform_card.get("platform", "unknown"))
+                    lines.append(f"##### 平台 {platform_index}: {platform}")
+                    lines.append("")
+                    meta_parts = [
+                        f"质量：`{platform_card.get('content_quality', '')}`",
+                        f"移除噪声：`{platform_card.get('removed_line_count', 0)}`",
+                    ]
+                    url = str(platform_card.get("url", "")).strip()
+                    if url:
+                        meta_parts.append(f"链接：{url}")
+                    lines.append("- " + "；".join(meta_parts))
+                    lines.append("")
+                    lines.append(_blockquote(_content_excerpt(platform_card.get("clean_content", ""))))
+                    lines.append("")
             evidence_urls = card.get("evidence_urls", [])
             if isinstance(evidence_urls, list) and evidence_urls:
-                lines.append("证据链接：")
+                lines.append("#### 证据链接")
                 lines.append("")
                 lines.extend(f"- {url}" for url in evidence_urls)
                 lines.append("")
+        lines.append("---")
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _bullet(label: str, value: str) -> str:
+    return f"**{label}**：{value}"
+
+
+def _format_hotness(card: dict[str, object]) -> str:
+    return str(card.get("hotness_label", "")).strip()
+
+
+def _format_classification(topic: dict[str, object]) -> str:
+    domain_path = " > ".join(str(item) for item in topic.get("domain_path", []))
+    audience = "、".join(str(item) for item in topic.get("audience_tags", []))
+    if domain_path and audience:
+        return f"{domain_path}；{audience}"
+    return domain_path or audience
+
+
+def _format_modes(topic: dict[str, object]) -> str:
+    return "、".join(str(item) for item in topic.get("content_modes", []))
+
+
+def _format_overview(card: dict[str, object], topic: dict[str, object]) -> str:
+    parts = [
+        _format_hotness(card),
+        f"平台 {_format_source_platforms(card)}",
+        f"分类 {' > '.join(str(item) for item in topic.get('domain_path', []))}",
+        f"受众 {'、'.join(str(item) for item in topic.get('audience_tags', []))}",
+        f"适合 {_format_modes(topic)}",
+    ]
+    return " | ".join(part for part in parts if part.strip())
+
+
+def _format_source_platforms(card: dict[str, object]) -> str:
+    platforms = card.get("source_platforms", [])
+    if not isinstance(platforms, list):
+        return ""
+    return "、".join(str(platform) for platform in platforms if str(platform).strip())
+
+
+def _content_excerpt(text: object, limit: int = 700) -> str:
+    content = str(text or "").strip()
+    if len(content) <= limit:
+        return content
+    return content[:limit].rstrip() + "\n\n（内容较长，已截取前段。）"
+
+
+def _reference_table(creator_angle: object, tracking_hint: object, risk_note: object) -> str:
+    return "\n".join(
+        [
+            "| 创作者角度 | 后续追踪 | 风险提示 |",
+            "| --- | --- | --- |",
+            f"| {_table_cell(creator_angle)} | {_table_cell(tracking_hint)} | {_table_cell(risk_note)} |",
+        ]
+    )
+
+
+def _table_cell(value: object) -> str:
+    return str(value or "").replace("\n", "<br>").replace("|", "\\|").strip()
+
+
+def _blockquote(text: object) -> str:
+    stripped = str(text or "").rstrip()
+    if not stripped:
+        return ">"
+    return "\n".join(f"> {line}" if line else ">" for line in stripped.splitlines())
 
 
 def _format_hot_values(hot_values: list[object]) -> str:

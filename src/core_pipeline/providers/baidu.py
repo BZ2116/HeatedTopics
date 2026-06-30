@@ -141,7 +141,9 @@ def collect_baidu_detail(
     record: HotRecord,
     fetched_at: str,
     search_results: list[dict[str, str]],
+    content_pages: list[dict[str, object]] | None = None,
 ) -> DetailEvidence:
+    content_pages = content_pages or []
     usable_results = [row for row in search_results if row.get("title") or row.get("snippet")]
     status = "ok" if usable_results else "empty_content"
     content_parts = []
@@ -153,6 +155,11 @@ def collect_baidu_detail(
         if url:
             result_urls.append(url)
         content_parts.append(f"{title}\n{snippet}".strip())
+    for page in content_pages:
+        page_title = str(page.get("title", "")).strip()
+        page_content = str(page.get("content", "")).strip()
+        if page_content:
+            content_parts.append(f"{page_title}\n{page_content}".strip())
     content = "\n\n".join(part for part in content_parts if part)
     return DetailEvidence(
         evidence_id=f"evidence_baidu_{record.id}",
@@ -167,7 +174,7 @@ def collect_baidu_detail(
         content=content,
         author="",
         published_at="",
-        metrics={},
+        metrics={"search_results": len(search_results), "content_pages": len(content_pages)},
         comments_preview=[],
         result_urls=result_urls,
         raw_snapshot_path="",
@@ -176,5 +183,5 @@ def collect_baidu_detail(
         fetch_status=status,
         error_type=None if status == "ok" else status,
         confidence="medium" if status == "ok" else "low",
-        raw_payload={"search_results": search_results},
+        raw_payload={"search_results": search_results, "content_pages": content_pages},
     )
