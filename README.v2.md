@@ -189,6 +189,34 @@ uv run python -m src.search_discovery.cli `
 
 `--profile` 必填，指向一个创作者画像 JSON。`--render-report` 可选，开启后会额外生成可读报告。
 
+## 选题分析输出
+
+如果希望在搜索推荐之外生成更完整的整理、归纳和统计结果，开启 `--render-analysis`：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
+  --render-analysis `
+  --analysis-mode rule
+```
+
+输出文件：
+
+| 路径 | 用途 |
+| --- | --- |
+| `data/search_discovery/processed/topic_analysis.json` | 面向程序和大语言模型的结构化统计、证据和话题上下文 |
+| `reports/search_discovery/topic_analysis.md` | 面向用户的选题分析报告 |
+
+`--analysis-mode rule` 不需要模型 key。`--analysis-mode model` 会调用 OpenAI-compatible Chat API，为总体归纳和每个话题生成建议：
+
+```text
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_MODEL=
+```
+
+模型调用失败时，流程仍会输出规则版分析，并在 `topic_analysis.json` 的 `model_error` 字段记录原因。
+
 ## 输出文件
 
 默认输出路径如下：
