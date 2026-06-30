@@ -190,24 +190,8 @@ def run_discovery_command(
                 model=model,
                 generated_at=generated_at,
             )
-            if model_result.get("mode") == "model_error":
-                analysis = build_topic_analysis(
-                    profile_path=profile_path,
-                    generated_at=generated_at,
-                    topics=topics,
-                    results=results,
-                    evidence=enriched,
-                    model_error=model_result,
-                )
-            else:
-                analysis = build_topic_analysis(
-                    profile_path=profile_path,
-                    generated_at=generated_at,
-                    topics=topics,
-                    results=results,
-                    evidence=enriched,
-                    model_synthesis=model_result,
-                )
+            key = "model_error" if model_result.get("mode") == "model_error" else "model_synthesis"
+            analysis[key] = model_result
         write_json(paths["topic_analysis"], analysis)
         paths["analysis_report"].parent.mkdir(parents=True, exist_ok=True)
         paths["analysis_report"].write_text(render_topic_analysis_markdown(analysis), encoding="utf-8")
