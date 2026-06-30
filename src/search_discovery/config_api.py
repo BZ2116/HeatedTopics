@@ -15,6 +15,8 @@ def run_config_api_command(argv: list[str] | None = None) -> int:
     parser.add_argument("--set", dest="set_source")
     parser.add_argument("--test", dest="test_source")
     parser.add_argument("--wizard", action="store_true")
+    parser.add_argument("--no-test-after-set", action="store_true")
+    parser.add_argument("--no-test-after-wizard", action="store_true")
     args = parser.parse_args(argv)
 
     root = Path(".")
@@ -25,13 +27,13 @@ def run_config_api_command(argv: list[str] | None = None) -> int:
     if args.list:
         return _list_sources(env_path)
     if args.set_source:
-        return _set_source(args.set_source, root, env_path)
+        return _set_source(args.set_source, root, env_path, skip_test=args.no_test_after_set)
     if args.test_source:
         result = test_source_after_save(args.test_source, root)
         _print_test_result(result)
         return 0 if result.status == "ok" else 1
     if args.wizard:
-        return _wizard(root, env_path)
+        return _wizard(root, env_path, skip_test=args.no_test_after_wizard)
 
     parser.print_help()
     return 1
@@ -50,7 +52,7 @@ def _list_sources(env_path: Path) -> int:
     return 0
 
 
-def _set_source(source_id: str, root: Path, env_path: Path) -> int:
+def _set_source(source_id: str, root: Path, env_path: Path, *, skip_test: bool = False) -> int:
     config = get_api_source_config(source_id)
     print(f"Configuring {config.display_name}")
     print(f"Open: {config.signup_url}\n")
@@ -65,18 +67,21 @@ def _set_source(source_id: str, root: Path, env_path: Path) -> int:
     upsert_env_values(env_path, updates)
     for key in updates:
         print(f"[OK] Saved {key}")
+    if skip_test:
+        print(f"[SKIP] Test skipped (use --test {source_id} to verify later).")
+        return 0
     print(f"[TEST] Testing {source_id} with query: {config.test_query}")
     result = test_source_after_save(source_id, root)
     _print_test_result(result)
     return 0 if result.status == "ok" else 1
 
 
-def _wizard(root: Path, env_path: Path) -> int:
+def _wizard(root: Path, env_path: Path, *, skip_test: bool = False) -> int:
     values = read_env_values(env_path)
     for source_id, config in api_source_configs().items():
         if all(values.get(key) for key in config.env_keys):
             continue
-        code = _set_source(source_id, root, env_path)
+        code = _set_source(source_id, root, env_path, skip_test=skip_test)
         if code != 0:
             return code
         values = read_env_values(env_path)
