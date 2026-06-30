@@ -1,10 +1,16 @@
 import argparse
 import json
+import os
+from collections.abc import Callable
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
+from src.core_pipeline.model_topic_summarizer import DEFAULT_MODEL, call_openai_compatible_chat
+from src.search_discovery.analysis import build_topic_analysis
+from src.search_discovery.analysis_render import render_topic_analysis_markdown
 from src.search_discovery.base_provider import make_error_row
 from src.search_discovery.config import profile_source_weights
 from src.search_discovery.discovery import cluster_results
@@ -16,6 +22,7 @@ from src.search_discovery.history import (
     write_recommendation_history,
 )
 from src.search_discovery.io import write_json, write_jsonl
+from src.search_discovery.model_analysis import build_model_topic_analysis
 from src.search_discovery.providers import MockProvider, SearchProviderRegistry, normalize_provider_rows
 from src.search_discovery.providers_bailian import BailianWebSearchProvider
 from src.search_discovery.providers_bocha import BochaSearchProvider
@@ -72,7 +79,15 @@ def _emit_unavailable_markers(
     ]
 
 
-def run_discovery_command(root: Path, profile_path: Path, render_report: bool = False) -> dict[str, int]:
+def run_discovery_command(
+    root: Path,
+    profile_path: Path,
+    render_report: bool = False,
+    render_analysis: bool = False,
+    analysis_mode: str = "rule",
+    model_call: Callable[[list[dict[str, str]]], dict[str, Any]] | None = None,
+    model_name: str | None = None,
+) -> dict[str, int]:
     load_dotenv(root / ".env")
     profile = CreatorProfile.from_dict(json.loads(profile_path.read_text(encoding="utf-8")))
     generated_at = _now_shanghai()
@@ -157,12 +172,53 @@ def run_discovery_command(root: Path, profile_path: Path, render_report: bool = 
     if render_report:
         paths["report"].parent.mkdir(parents=True, exist_ok=True)
         paths["report"].write_text(render_topics_markdown(topics, generated_at), encoding="utf-8")
+    analysis_topics_count = 0
+    if render_analysis:
+        model = model_name or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+        analysis = build_topic_analysis(
+            profile_path=profile_path,
+            generated_at=generated_at,
+            topics=topics,
+            results=results,
+            evidence=enriched,
+        )
+        if analysis_mode == "model":
+            call = model_call or (lambda messages: call_openai_compatible_chat(messages, model=model))
+            model_result = build_model_topic_analysis(
+                analysis=analysis,
+                model_call=call,
+                model=model,
+                generated_at=generated_at,
+            )
+            if model_result.get("mode") == "model_error":
+                analysis = build_topic_analysis(
+                    profile_path=profile_path,
+                    generated_at=generated_at,
+                    topics=topics,
+                    results=results,
+                    evidence=enriched,
+                    model_error=model_result,
+                )
+            else:
+                analysis = build_topic_analysis(
+                    profile_path=profile_path,
+                    generated_at=generated_at,
+                    topics=topics,
+                    results=results,
+                    evidence=enriched,
+                    model_synthesis=model_result,
+                )
+        write_json(paths["topic_analysis"], analysis)
+        paths["analysis_report"].parent.mkdir(parents=True, exist_ok=True)
+        paths["analysis_report"].write_text(render_topic_analysis_markdown(analysis), encoding="utf-8")
+        analysis_topics_count = len(analysis["topics"])
     updated_history = update_recommendation_history(history, results, recommended_at=generated_at)
     write_recommendation_history(paths["history"], updated_history)
     return {
         "search_results_count": len(results),
         "evidence_count": len(enriched),
         "topics_count": len(topics),
+        "analysis_topics_count": analysis_topics_count,
     }
 
 
@@ -173,6 +229,8 @@ def _output_paths(root: Path) -> dict[str, Path]:
         "topic_index": root / "data/search_discovery/processed/search_topic_index.json",
         "report": root / "reports/search_discovery/search_topic_recommendations.md",
         "history": root / "data/search_discovery/history/recommended_topics.json",
+        "topic_analysis": root / "data/search_discovery/processed/topic_analysis.json",
+        "analysis_report": root / "reports/search_discovery/topic_analysis.md",
     }
 
 
@@ -193,8 +251,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", required=True)
     parser.add_argument("--render-report", action="store_true")
+    parser.add_argument("--render-analysis", action="store_true")
+    parser.add_argument("--analysis-mode", choices=("rule", "model"), default="rule")
     args = parser.parse_args()
-    counts = run_discovery_command(Path("."), Path(args.profile), render_report=args.render_report)
+    counts = run_discovery_command(
+        Path("."),
+        Path(args.profile),
+        render_report=args.render_report,
+        render_analysis=args.render_analysis,
+        analysis_mode=args.analysis_mode,
+    )
     print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
 
 

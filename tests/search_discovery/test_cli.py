@@ -2,6 +2,7 @@ import json
 
 from src.search_discovery.cli import run_discovery_command
 from src.search_discovery.providers import MockProvider, SearchProviderRegistry
+from src.search_discovery.types import SearchRoute
 
 
 class RecordingProvider:
@@ -167,3 +168,103 @@ def test_run_discovery_command_marks_recent_github_recommendations(tmp_path, mon
     )
     assert github_hit["recently_recommended"] is True
     assert github_hit["metrics"].get("recently_recommended") is True
+
+
+def test_run_discovery_command_writes_rule_analysis(tmp_path, monkeypatch):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps(
+            {
+                "creator_id": "creator_001",
+                "role": "科技类博主",
+                "profile_type": "tech_ai_creator",
+                "custom_keywords": ["AI Agent", "MCP"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class Provider:
+        source_id = "github_search"
+
+        def search_rows(self, query, **kwargs):
+            return [
+                {
+                    "result_id": "github_search_001",
+                    "title": "agent/repo",
+                    "url": "https://github.com/agent/repo",
+                    "snippet": "AI Agent MCP repo",
+                    "content_type": "repo",
+                    "metrics": {"stars": 1000},
+                    "fetch_status": "ok",
+                }
+            ]
+
+    monkeypatch.setattr("src.search_discovery.cli._build_registry", lambda: SearchProviderRegistry([Provider()]))
+    monkeypatch.setattr("src.search_discovery.cli.build_search_routes", lambda profile: [
+        SearchRoute(
+            source_id="github_search",
+            source_role="vertical_project",
+            query="AI Agent MCP",
+            intent="tech_project",
+            weight=100,
+            reason="test route",
+        )
+    ])
+
+    counts = run_discovery_command(
+        root=tmp_path,
+        profile_path=profile_path,
+        render_report=False,
+        render_analysis=True,
+        analysis_mode="rule",
+    )
+
+    analysis_path = tmp_path / "data/search_discovery/processed/topic_analysis.json"
+    report_path = tmp_path / "reports/search_discovery/topic_analysis.md"
+    assert counts["analysis_topics_count"] == 1
+    assert analysis_path.exists()
+    assert report_path.exists()
+    analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
+    assert analysis["statistics"]["total_topics"] == 1
+    assert analysis["model_synthesis"] is None
+    assert "选题分析报告" in report_path.read_text(encoding="utf-8")
+
+
+def test_run_discovery_command_writes_model_analysis(tmp_path, monkeypatch):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({"creator_id": "creator_001", "role": "科技类博主", "profile_type": "tech_ai_creator", "custom_keywords": ["AI Agent"]}),
+        encoding="utf-8",
+    )
+
+    class Provider:
+        source_id = "github_search"
+
+        def search_rows(self, query, **kwargs):
+            return [{"title": "agent/repo", "url": "https://github.com/agent/repo", "snippet": "AI Agent repo", "content_type": "repo"}]
+
+    def fake_model_call(messages):
+        return {
+            "overall_summary": {"core_conclusion": "模型结论"},
+            "topic_suggestions": {"search_topic_001": {"one_line_summary": "模型摘要", "creator_angles": ["模型角度"]}},
+        }
+
+    monkeypatch.setattr("src.search_discovery.cli._build_registry", lambda: SearchProviderRegistry([Provider()]))
+    monkeypatch.setattr("src.search_discovery.cli.build_search_routes", lambda profile: [
+        SearchRoute("github_search", "vertical_project", "AI Agent", "tech_project", 100, "test route")
+    ])
+
+    run_discovery_command(
+        root=tmp_path,
+        profile_path=profile_path,
+        render_report=False,
+        render_analysis=True,
+        analysis_mode="model",
+        model_call=fake_model_call,
+        model_name="gpt-test",
+    )
+
+    analysis = json.loads((tmp_path / "data/search_discovery/processed/topic_analysis.json").read_text(encoding="utf-8"))
+    assert analysis["model_synthesis"]["overall_summary"]["core_conclusion"] == "模型结论"
+    assert "模型摘要" in (tmp_path / "reports/search_discovery/topic_analysis.md").read_text(encoding="utf-8")
