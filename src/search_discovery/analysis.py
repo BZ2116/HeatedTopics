@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from src.search_discovery.source_labels import search_engine_name
 from src.search_discovery.types import CandidateTopic, EnrichedContent, SearchResult
 
 SCHEMA_VERSION = "0.1"
@@ -55,6 +56,7 @@ def _statistics(
 def _topic_row(topic: CandidateTopic, evidence: list[EnrichedContent]) -> dict[str, Any]:
     topic_evidence = _evidence_for_topic(topic, evidence)
     source_ids = _unique(_hit_text(hit, "source_id") for hit in topic.source_hits)
+    search_engines = _unique(_hit_search_engine(hit) for hit in topic.source_hits)
     content_types = _unique(_hit_text(hit, "content_type") for hit in topic.source_hits)
     rule_summary = _rule_summary(topic, topic_evidence)
     return {
@@ -69,8 +71,11 @@ def _topic_row(topic: CandidateTopic, evidence: list[EnrichedContent]) -> dict[s
         "detail_level": topic.detail_level,
         "evidence_count": len(topic_evidence),
         "source_ids": source_ids,
+        "search_engines": search_engines,
         "content_types": content_types,
         "rule_summary": rule_summary,
+        "verification_summary": _verification_summary(topic, topic_evidence),
+        "suggested_titles": _suggested_titles(topic),
         "evidence": topic_evidence,
         "llm_context": _llm_context(topic, topic_evidence),
     }
@@ -92,6 +97,8 @@ def _evidence_for_topic(topic: CandidateTopic, evidence: list[EnrichedContent]) 
                 "content_quality": item.content_quality,
                 "evidence_confidence": item.evidence_confidence,
                 "published_at": item.published_at,
+                "source_type": _source_type(_source_id_for_evidence(item, topic), ""),
+                "source_name": _source_name(_source_id_for_evidence(item, topic)),
             }
         )
     if rows:
@@ -105,9 +112,22 @@ def _evidence_for_topic(topic: CandidateTopic, evidence: list[EnrichedContent]) 
             "content_quality": "low",
             "evidence_confidence": "low",
             "published_at": "",
+            "source_type": _source_type(_hit_text(hit, "source_id"), _hit_text(hit, "content_type")),
+            "source_name": _source_name(_hit_text(hit, "source_id")),
         }
         for hit in topic.source_hits
     ]
+
+
+def _source_id_for_evidence(item: EnrichedContent, topic: CandidateTopic) -> str:
+    item_url = item.url.rstrip("/")
+    item_title = item.title.strip()
+    for hit in topic.source_hits:
+        if item_url and item_url == _hit_text(hit, "url").rstrip("/"):
+            return _hit_text(hit, "source_id")
+        if item_title and item_title == _hit_text(hit, "title"):
+            return _hit_text(hit, "source_id")
+    return ""
 
 
 def _rule_summary(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[str, Any]:
@@ -165,6 +185,66 @@ def _verification_notes(topic: CandidateTopic, evidence: list[dict[str, Any]]) -
     if not any(row.get("published_at") for row in evidence):
         notes.append("缺少明确发布时间，建议打开来源页面复核时效性。")
     return notes or ["低风险，但不要把单一来源扩大为行业共识。"]
+
+
+def _verification_summary(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    source_count = len({str(hit.get("source_id", "")) for hit in topic.source_hits if hit.get("source_id")})
+    has_clear_publish_time = any(str(row.get("published_at", "")).strip() for row in evidence)
+    notes = _unique([*topic.verification_notes, *_verification_notes(topic, evidence)])
+    return {
+        "source_count": source_count,
+        "verification_score": topic.verification_score,
+        "evidence_level": topic.evidence_level,
+        "has_clear_publish_time": has_clear_publish_time,
+        "risk_label": _risk_label(topic.risk_level),
+        "confidence_label": _confidence_label(topic, source_count, has_clear_publish_time),
+        "risk_flags": topic.risk_flags,
+        "notes": notes,
+    }
+
+
+def _suggested_titles(topic: CandidateTopic) -> list[str]:
+    keyword_text = "、".join(topic.matched_keywords[:2]) or "关键词"
+    title = topic.title.strip()
+    if not title:
+        return []
+    return [
+        f"{title}，国内热点背后发生了什么？",
+        f"{title}为什么值得关注？一文梳理关键信号",
+        f"围绕{keyword_text}，{title}有哪些新变化？",
+    ]
+
+
+def _risk_label(risk_level: str) -> str:
+    return {"low": "低", "medium": "中", "high": "高"}.get(risk_level, "未知")
+
+
+def _confidence_label(topic: CandidateTopic, source_count: int, has_clear_publish_time: bool) -> str:
+    if topic.risk_level == "high" or source_count <= 1:
+        return "低"
+    if topic.risk_level == "medium" or not has_clear_publish_time:
+        return "中"
+    return "高"
+
+
+def _source_type(source_id: str, content_type: str) -> str:
+    if source_id == "github_search" or content_type == "repo":
+        return "技术项目"
+    if source_id in {"tianapi_news", "news_api_cn"} or content_type == "news":
+        return "新闻媒体"
+    if "official" in source_id or content_type in {"docs", "official"}:
+        return "官方/公告"
+    if content_type in {"community_post", "blog"}:
+        return "社区/自媒体"
+    if source_id:
+        return "搜索结果"
+    return "未知来源"
+
+
+def _source_name(source_id: str) -> str:
+    if not source_id:
+        return "未知来源"
+    return search_engine_name(source_id)
 
 
 def _llm_context(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[str, Any]:
@@ -234,6 +314,10 @@ def _hit_text(hit: dict[str, Any], key: str) -> str:
 def _hit_metrics(hit: dict[str, Any]) -> dict[str, Any]:
     metrics = hit.get("metrics")
     return metrics if isinstance(metrics, dict) else {}
+
+
+def _hit_search_engine(hit: dict[str, Any]) -> str:
+    return _hit_text(hit, "search_engine") or search_engine_name(_hit_text(hit, "source_id"))
 
 
 def _truncate(text: str, limit: int) -> str:

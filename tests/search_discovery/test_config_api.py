@@ -156,3 +156,46 @@ def test_wizard_command_with_skip_test_skips_all_connections(tmp_path, monkeypat
     assert test_calls == []
     assert "[SKIP]" in output
     assert "[TEST]" not in output
+
+
+def test_smoke_test_checks_configured_sources_once_with_minimal_results(tmp_path, monkeypatch, capsys):
+    (tmp_path / ".env").write_text("GITHUB_TOKEN=ghp_fake\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    def minimal_configs() -> dict[str, ApiSourceConfig]:
+        return {
+            "github_search": ApiSourceConfig(
+                source_id="github_search",
+                display_name="GitHub Search",
+                env_keys=["GITHUB_TOKEN"],
+                signup_url="https://github.com/settings/tokens",
+                description="test",
+                test_query="AI Agent",
+            ),
+            "tavily_search": ApiSourceConfig(
+                source_id="tavily_search",
+                display_name="Tavily Search",
+                env_keys=["TAVILY_API_KEY"],
+                signup_url="https://app.tavily.com/home",
+                description="test",
+                test_query="AI Agent",
+            ),
+        }
+
+    calls: list[tuple[str, int]] = []
+
+    def fake_test(source_id, root, *, max_results=10):
+        calls.append((source_id, max_results))
+        return ConnectionTestResult(source_id=source_id, status="ok", message=f"{source_id} ok", result_count=1)
+
+    monkeypatch.setattr("src.search_discovery.config_api.api_source_configs", minimal_configs)
+    monkeypatch.setattr("src.search_discovery.config_api.test_source_after_save", fake_test)
+
+    exit_code = run_config_api_command(["--smoke-test"])
+
+    output = capsys.readouterr().out
+    assert exit_code == 0
+    assert calls == [("github_search", 1)]
+    assert "[SMOKE] Testing configured sources with max_results=1" in output
+    assert "[OK] github_search ok" in output
+    assert "tavily_search" not in output

@@ -76,6 +76,7 @@ class SearchResult:
     query: str
     keyword_category: str
     title: str
+    search_engine: str = ""
     url: str = ""
     domain: str = ""
     snippet: str = ""
@@ -127,6 +128,10 @@ class CandidateTopic:
     summary: str
     open_questions: list[str] = field(default_factory=list)
     created_at: str = ""
+    verification_score: int = 0
+    evidence_level: str = "unknown"
+    verification_notes: list[str] = field(default_factory=list)
+    risk_flags: list[str] = field(default_factory=list)
     topic_score: int = 0
 
     def to_dict(self) -> dict[str, Any]:

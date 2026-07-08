@@ -105,6 +105,22 @@ def test_search_rows_uses_single_api_key_as_bearer_without_token_exchange(monkey
     assert rows[0]["title"] == "新版鉴权结果"
 
 
+def test_search_rows_accepts_minimal_result_limit(monkeypatch):
+    monkeypatch.setenv("QIANFAN_API_KEY", "bce-v3/ALTAK-new")
+    monkeypatch.delenv("QIANFAN_SECRET_KEY", raising=False)
+    p = QianfanSearchProvider.from_env()
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["resource_type_filter"] == [{"type": "web", "top_k": 1}]
+        return httpx.Response(200, json={"references": []})
+
+    p._client = httpx.Client(transport=_transport(responder), timeout=p.timeout_seconds)
+
+    rows = p.search_rows("AI", max_results=1)
+
+    assert rows == []
+
+
 def test_search_rows_reuses_cached_token(monkeypatch):
     monkeypatch.setenv("QIANFAN_API_KEY", "ak")
     monkeypatch.setenv("QIANFAN_SECRET_KEY", "sk")
@@ -220,10 +236,11 @@ def test_token_exchange_does_not_retry_on_401(monkeypatch):
     monkeypatch.setattr("src.search_discovery.providers_qianfan.time.sleep", lambda _s: None)
     rows = p.search_rows("x", fetched_at="2026-06-27T10:00:00+08:00", index=3)
     assert rows == [
-        {
-            "result_id": "baidu_qianfan_search_error_3",
-            "source_id": "baidu_qianfan_search",
-            "source_role": "",
+            {
+                "result_id": "baidu_qianfan_search_error_3",
+                "source_id": "baidu_qianfan_search",
+                "search_engine": "Baidu Qianfan Search",
+                "source_role": "",
             "query": "x",
             "keyword_category": "unknown",
             "title": "",

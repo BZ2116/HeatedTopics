@@ -53,3 +53,19 @@ def test_search_rows_parses_tavily_results(monkeypatch):
     assert rows[0]["published_at"] == "2026-06-30"
     assert rows[0]["metrics"]["score"] == 0.91
     assert rows[0]["raw_payload"]["raw_content"] == "AI Agent 国内进展详细内容"
+
+
+def test_search_rows_accepts_minimal_result_limit(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "tvly_fake")
+    provider = TavilySearchProvider.from_env()
+
+    def responder(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read().decode("utf-8"))
+        assert payload["max_results"] == 1
+        return httpx.Response(200, json={"results": []})
+
+    provider._client = httpx.Client(transport=_transport(responder), timeout=provider.timeout_seconds)
+
+    rows = provider.search_rows("AI Agent 最新进展", max_results=1)
+
+    assert rows == []

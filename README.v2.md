@@ -1,6 +1,11 @@
 # HeatedTopics v2 使用说明
 
-v2 是 HeatedTopics 的「搜索发现增强」链路，核心代码在 `src/search_discovery/`。它从创作者画像出发，自动生成搜索 query，路由到 GitHub、博查、阿里百炼、百度千帆、天聚数行、Tavily、七牛等搜索源，最后输出候选选题索引和 Markdown 推荐报告。
+v2 是 HeatedTopics 的「搜索发现增强」链路，核心代码在 `src/search_discovery/`。它从创作者画像出发，自动拆解用户关键词，生成搜索 query，路由到 GitHub、博查、阿里百炼、百度千帆、天聚数行、Tavily、七牛等搜索源，最后输出候选选题索引、证据文件和 Markdown 选题分析报告。
+
+当前重点面向「根据用户标签/关键词，发现适合内容生成参考的国内热点」。相比只把关键词丢给搜索 API，v2 会额外做两类质量处理：
+
+- 关键词拆解和匹配：把用户输入拆成领域词、实体词、事件词、内容角度、排除词和风险词，再用标题、摘要、正文做匹配评分。
+- 准确性和真实性：记录搜索结果总数、候选话题数、证据条目数；过滤“财经”“股票”“新浪财经客户端”这类泛词或频道页标题；对来源数量、新闻源、发布时间、官方信号和高风险表达做核验评分。
 
 它不替代 `README.md` 里的 DailyHot 热榜采集主流程。简单说：
 
@@ -28,16 +33,26 @@ uv run pytest tests/search_discovery -q
 ```powershell
 uv run python -m src.search_discovery.cli `
   --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
-  --render-report
+  --render-analysis `
+  --analysis-mode rule
 ```
 
 命令结束后会打印类似结果：
 
 ```json
-{"evidence_count": 12, "search_results_count": 35, "topics_count": 8}
+{"analysis_topics_count": 8, "evidence_count": 12, "search_results_count": 35, "topics_count": 8}
 ```
 
 如果某些 API key 没有配置，对应 source 会写入 `fetch_status=mock_unavailable` 的占位结果，不会阻断其他已配置 source。
+
+财经/A 股场景可以直接用内置画像小样例：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/finance_creator.json `
+  --render-analysis `
+  --analysis-mode rule
+```
 
 ## API 配置
 
@@ -146,6 +161,30 @@ uv run python -m src.search_discovery.config_api --test baidu_qianfan_search
 
 `--test` 不会修改 `.env`，适合手动改完 `.env` 后验证 key 是否可用。
 
+### 省 API 的批量冒烟测试
+
+如果只想确认「已配置的 source 能不能连上」，但不想跑完整搜索发现，可以用：
+
+```powershell
+uv run python -m src.search_discovery.config_api --smoke-test
+```
+
+这个命令会：
+
+- 只测试 `.env` 里已经配好的 source，缺 key 的 source 会跳过。
+- 每个 source 只调用一次。
+- 每次请求都使用 `max_results=1`，也就是让上游尽量只返回 1 条结果。
+- 不会生成搜索报告，也不会调用 LLM。
+
+适合刚配完 API key 后做低成本验证。示例输出：
+
+```text
+[SMOKE] Testing configured sources with max_results=1
+
+[OK] github_search connected successfully, returned 1 results.
+[OK] baidu_qianfan_search connected successfully, returned 1 results.
+```
+
 ### 手动编辑 `.env`
 
 也可以直接编辑 `.env`：
@@ -159,7 +198,17 @@ QIANFAN_SECRET_KEY=
 TIANAPI_KEY=
 TAVILY_API_KEY=
 QINIU_WEB_SEARCH_API_KEY=
+
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+OPENAI_MODEL=gpt-4.1-mini
+
+MINIMAX_API_KEY=
+MINIMAX_BASE_URL=https://api.minimax.io/v1
+MINIMAX_MODEL=MiniMax-M3
 ```
+
+如果把 `MINIMAX_BASE_URL` 指向 MiniMax 的 Anthropic 兼容端点（路径含 `/anthropic`），代码会自动切到 Anthropic Messages API（`x-api-key` 鉴权、`/v1/messages` 端点、不再带 `response_format` JSON 模式，依赖 prompt 约束 JSON 输出）。
 
 注意事项：
 
@@ -168,6 +217,7 @@ QINIU_WEB_SEARCH_API_KEY=
 - 当前 `baidu_qianfan_search` 使用千帆新版百度搜索接口 `https://qianfan.baidubce.com/v2/ai_search/web_search`，请求体包含 `messages`、`search_source=baidu_search_v2` 和 `resource_type_filter`。
 - 如果你使用旧版千帆 `API Key + Secret Key` 凭证，则同时配置 `QIANFAN_API_KEY` 和 `QIANFAN_SECRET_KEY`，项目会先调用 `https://aip.baidubce.com/oauth/2.0/token` 换取 `access_token`。
 - 任意单个 source 缺失或失败都不会让 v2 全流程崩溃，只会在结果中记录不可用状态。
+- `MINIMAX_*` / `OPENAI_*` 只用于 `--analysis-mode model` 的归纳总结，不影响搜索 API 的连通性。
 - `.env` 包含密钥，不要提交到 Git。
 
 ## 运行搜索发现
@@ -207,12 +257,59 @@ uv run python -m src.search_discovery.cli `
 | `data/search_discovery/processed/topic_analysis.json` | 面向程序和大语言模型的结构化统计、证据和话题上下文 |
 | `reports/search_discovery/topic_analysis.md` | 面向用户的选题分析报告 |
 
-`--analysis-mode rule` 不需要模型 key。`--analysis-mode model` 会调用 OpenAI-compatible Chat API，为总体归纳和每个话题生成建议：
+`--analysis-mode rule` 不需要模型 key。`--analysis-mode model` 会调用 OpenAI-compatible Chat API，为总体归纳和每个话题生成建议。
+
+`topic_analysis.md` 的稳定结构如下：
+
+1. `# 搜索发现选题分析`：报告标题。
+2. `## 总览`：包含搜索结果总数、进入候选话题数、证据条目数，以及本轮候选话题覆盖情况。
+3. `## 话题速览`：表格列出话题、匹配分、核验分、证据等级、来源数、风险等级和可用内容角度。
+4. `## 重点话题`：逐个话题展开，包含摘要、为什么值得写、创作角度、证据与核验提示。
+5. `## 数据统计`：展示总话题数、搜索结果总数、证据条目、平均匹配分、平均核验分等指标。
+6. `## 风险提示`：列出单一来源、缺少发布时间、高风险主题等需要人工复核的点。
+
+报告里的“话题”应该是具体事件、具体帖子、具体政策变化或具体市场异动，不应该是“财经”“股票”这种输入关键词本身，也不应该是“新浪财经客户端”这类来源或频道名称。
+
+如果使用 MiniMax，推荐直接配置 `MINIMAX_*`：
+
+```text
+MINIMAX_API_KEY=
+MINIMAX_BASE_URL=https://api.minimax.io/v1
+MINIMAX_MODEL=MiniMax-M3
+```
+
+如果使用其他 OpenAI-compatible 服务，再配置 `OPENAI_*`：
 
 ```text
 OPENAI_API_KEY=
 OPENAI_BASE_URL=
 OPENAI_MODEL=
+```
+
+配置步骤：
+
+1. 选择模型服务。MiniMax 可直接使用上面的 `MINIMAX_*`；其他兼容 `/chat/completions` 的网关使用 `OPENAI_*`。
+2. 在 `.env` 中填写：
+   - MiniMax：`MINIMAX_API_KEY`、`MINIMAX_BASE_URL`、`MINIMAX_MODEL`。
+   - 其他服务：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`。
+   - `*_BASE_URL` 填接口根地址，不带 `/chat/completions`。
+   - 如果 `MINIMAX_BASE_URL` 含 `/anthropic`，自动改用 Anthropic Messages API（`/v1/messages`、`x-api-key` 鉴权），不依赖 `response_format`。
+3. 先用 `rule` 模式确认搜索和统计输出正常：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
+  --render-analysis `
+  --analysis-mode rule
+```
+
+4. 再启用模型归纳：
+
+```powershell
+uv run python -m src.search_discovery.cli `
+  --profile config/search_discovery/creator_profiles/tech_ai_creator.json `
+  --render-analysis `
+  --analysis-mode model
 ```
 
 模型调用失败时，流程仍会输出规则版分析，并在 `topic_analysis.json` 的 `model_error` 字段记录原因。
@@ -254,8 +351,48 @@ OPENAI_MODEL=
 | `track_tags` | 领域标签，作为 query 候选关键词 |
 | `custom_keywords` | 优先级最高的关键词；存在时会优先用于 query |
 | `content_modes` | 内容形态，例如趋势观察、工具测评、教程实践，也会影响 intent 判断 |
+| `platforms` | 期望内容发布平台，例如小红书、微博、公众号；当前主要作为画像上下文保留 |
+| `content_goal` | 本轮内容目标，例如涨粉、转化、观点输出；用于后续生成策略扩展 |
+| `exclude_keywords` | 排除词；匹配到这些词时会降低匹配分，适合屏蔽不想覆盖的主题 |
 
 新增画像时，可以复制 `config/search_discovery/creator_profiles/tech_ai_creator.json`，改名后调整字段，再用 `--profile` 指向新文件。
+
+推荐把用户背景数据标准化成下面这种结构，再传给 `--profile`：
+
+```json
+{
+  "creator_id": "creator_finance_001",
+  "role": "财经类博主（A 股市场观察、政策解读与个股复盘）",
+  "profile_type": "business_startup_creator",
+  "track_tags": ["A股", "股票", "财经", "宏观经济", "行业政策"],
+  "custom_keywords": ["A股", "央行", "涨停", "复盘", "投资"],
+  "content_modes": ["市场观察", "复盘分析", "新闻解读"],
+  "platforms": ["公众号", "小红书"],
+  "content_goal": "为内容生成系统提供可写的国内热点选题",
+  "exclude_keywords": ["美股", "港股", "纯英文资讯"]
+}
+```
+
+字段填写建议：
+
+- `track_tags` 放长期稳定领域，例如 A 股、教育、医疗、AI、消费、本地生活。
+- `custom_keywords` 放本轮用户真正想搜的词，优先级高于领域标签。
+- `content_modes` 放输出方式，不要混入泛关键词，例如趋势观察、复盘分析、避坑清单、观点评论。
+- `exclude_keywords` 用来控制噪音，尤其适合国内热点任务中过滤海外市场、英文站点或不相关品类。
+
+## 国内热点质量策略
+
+面向国内热点画像时，v2 会启用额外的质量过滤和修复逻辑：
+
+| 问题类型 | 处理方式 |
+| --- | --- |
+| 泛关键词标题，例如“财经”“股票”“新闻” | 不直接作为话题；如果摘要里有具体事件，会尝试从摘要抽取具体标题 |
+| 频道/客户端标题，例如“新浪财经客户端”“A股动态” | 优先过滤；有具体事件线索时修复成事件标题 |
+| 纯英文或海外站点结果 | 对国内热点画像默认过滤，避免污染选题池 |
+| 单一来源或缺少发布时间 | 保留但降低核验评分，并在报告中提示复核 |
+| 高风险表达，例如“网传”“内幕”“稳赚” | 降低真实性评分，并输出风险提示 |
+
+这套规则的目标不是替代人工判断，而是把明显不适合作为内容生成参考的结果先拦掉，把“可写的具体话题”排到前面。
 
 ## 路由规则
 

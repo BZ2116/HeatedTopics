@@ -103,7 +103,7 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
             return f"qianfan_token_{upstream_error}"
         return "token_exchange_failed"
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         if self._is_single_api_key(self._api_key):
             access_token = self._api_key
         else:
@@ -119,7 +119,7 @@ class QianfanSearchProvider(BaseHTTPSearchProvider):
             content=json.dumps({
                 "messages": [{"content": query, "role": "user"}],
                 "search_source": "baidu_search_v2",
-                "resource_type_filter": [{"type": "web", "top_k": 10}],
+                "resource_type_filter": [{"type": "web", "top_k": max(1, min(max_results, 10))}],
             }),
         )
 

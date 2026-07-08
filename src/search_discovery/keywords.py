@@ -1,3 +1,4 @@
+from src.search_discovery.query_intelligence import build_domestic_queries
 from src.search_discovery.types import CreatorProfile, QueryBundle
 
 
@@ -43,6 +44,9 @@ def generate_query_bundles(
     keywords = _query_keywords(profile)
     bundles: list[QueryBundle] = []
     for category in selected_categories:
+        if category == "topic_discovery" and _uses_domestic_hot_queries(profile):
+            bundles.append(QueryBundle(category=category, queries=build_domestic_queries(profile, limit=max_queries_per_category)))
+            continue
         templates = QUERY_TEMPLATES.get(category, QUERY_TEMPLATES["topic_discovery"])
         bundles.append(
             QueryBundle(
@@ -51,6 +55,10 @@ def generate_query_bundles(
             )
         )
     return bundles
+
+
+def _uses_domestic_hot_queries(profile: CreatorProfile) -> bool:
+    return profile.profile_type in {"general_hot_topic_creator", "business_startup_creator", "domestic_hot_topic_creator"}
 
 
 def _query_keywords(profile: CreatorProfile) -> list[str]:

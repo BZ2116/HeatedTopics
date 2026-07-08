@@ -8,8 +8,11 @@ from src.search_discovery.providers import MockProvider, SearchProviderRegistry
 class FakeProvider:
     source_id: str
     rows: list[dict[str, object]]
+    calls: list[dict[str, object]] | None = None
 
     def search_rows(self, query, **kwargs):
+        if self.calls is not None:
+            self.calls.append({"query": query, **kwargs})
         return self.rows
 
 
@@ -52,3 +55,27 @@ def test_test_source_connection_reports_provider_error_row():
     assert result.status == "auth_failed"
     assert result.error_type == "token_exchange_failed"
     assert "token_exchange_failed" in result.message
+
+
+def test_test_source_connection_passes_minimal_result_limit():
+    calls: list[dict[str, object]] = []
+    registry = SearchProviderRegistry([
+        FakeProvider(
+            "tavily_search",
+            [{"title": "A", "url": "https://example.com", "snippet": "summary"}],
+            calls=calls,
+        )
+    ])
+
+    result = test_source_connection("tavily_search", registry=registry, query="AI Agent 最新进展", max_results=1)
+
+    assert result.status == "ok"
+    assert calls == [
+        {
+            "query": "AI Agent 最新进展",
+            "keyword_category": "connection_test",
+            "fetched_at": "",
+            "index": 0,
+            "max_results": 1,
+        }
+    ]

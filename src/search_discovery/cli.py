@@ -8,7 +8,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from src.core_pipeline.model_topic_summarizer import DEFAULT_MODEL, call_openai_compatible_chat
+from src.core_pipeline.model_topic_summarizer import call_openai_compatible_chat, resolve_openai_compatible_chat_config
 from src.search_discovery.analysis import build_topic_analysis
 from src.search_discovery.analysis_render import render_topic_analysis_markdown
 from src.search_discovery.base_provider import make_error_row
@@ -174,7 +174,13 @@ def run_discovery_command(
         paths["report"].write_text(render_topics_markdown(topics, generated_at), encoding="utf-8")
     analysis_topics_count = 0
     if render_analysis:
-        model = model_name or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL
+        model_config = None
+        if analysis_mode == "model":
+            try:
+                model_config = resolve_openai_compatible_chat_config(model=model_name, api_key=None, base_url=None)
+            except RuntimeError:
+                model_config = {"model": model_name or os.environ.get("OPENAI_MODEL", "")}
+        model = str((model_config or {}).get("model") or model_name or "")
         analysis = build_topic_analysis(
             profile_path=profile_path,
             generated_at=generated_at,

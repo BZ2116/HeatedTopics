@@ -1,8 +1,11 @@
 import time
 from dataclasses import dataclass, field
+from inspect import signature
 from typing import Callable
 
 import httpx
+
+from src.search_discovery.source_labels import search_engine_name
 
 
 @dataclass
@@ -40,6 +43,7 @@ def make_error_row(
     return {
         "result_id": f"{source_id}_error_{index}",
         "source_id": source_id,
+        "search_engine": search_engine_name(source_id),
         "source_role": "",
         "query": query,
         "keyword_category": category,
@@ -87,9 +91,10 @@ class BaseHTTPSearchProvider:
         keyword_category: str = "unknown",
         fetched_at: str = "",
         index: int = 0,
+        max_results: int = 10,
     ) -> list[dict[str, object]]:
         try:
-            request = self._build_request(query)
+            request = self._build_limited_request(query, max_results=max_results)
         except ProviderError as exc:
             return [make_error_row(
                 source_id=self.source_id,
@@ -178,7 +183,12 @@ class BaseHTTPSearchProvider:
         # 1s, 2s, 4s
         self._bucket.sleep(2 ** attempt)
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_limited_request(self, query: str, *, max_results: int) -> httpx.Request:
+        if "max_results" in signature(self._build_request).parameters:
+            return self._build_request(query, max_results=max_results)
+        return self._build_request(query)
+
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         raise NotImplementedError
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:

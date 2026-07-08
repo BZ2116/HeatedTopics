@@ -71,3 +71,22 @@ def test_generate_query_bundles_round_robins_templates_across_keywords():
         "MCP 热点",
         "RAG 热点",
     ]
+
+
+def test_generate_query_bundles_uses_domestic_intelligence_for_hot_topics():
+    profile = CreatorProfile(
+        creator_id="creator_001",
+        role="汽车博主",
+        profile_type="general_hot_topic_creator",
+        track_tags=["新能源车"],
+        custom_keywords=["比亚迪", "价格战", "官方回应"],
+    )
+
+    bundles = generate_query_bundles(profile, categories=["topic_discovery"], max_queries_per_category=4)
+
+    assert bundles[0].queries == [
+        "比亚迪 价格战 最新",
+        "比亚迪 官方回应 最新",
+        "新能源车 价格战 最新",
+        "新能源车 官方回应 最新",
+    ]

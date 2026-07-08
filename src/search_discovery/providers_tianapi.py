@@ -21,11 +21,11 @@ class TianAPINewsProvider(BaseHTTPSearchProvider):
             return None
         return cls(api_key=api_key)
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         return httpx.Request(
             "GET",
             "https://apis.tianapi.com/generalnews/index",
-            params={"key": self._api_key, "word": query, "num": 10},
+            params={"key": self._api_key, "word": query, "num": max(1, min(max_results, 10))},
         )
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:

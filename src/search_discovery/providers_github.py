@@ -30,11 +30,11 @@ class GitHubSearchProvider(BaseHTTPSearchProvider):
             headers["Authorization"] = f"Bearer {self._token}"
         return headers
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         return httpx.Request(
             "GET",
             "https://api.github.com/search/repositories",
-            params={"q": query, "sort": "stars", "order": "desc", "per_page": 10},
+            params={"q": query, "sort": "stars", "order": "desc", "per_page": max(1, min(max_results, 10))},
             headers=self._auth_headers(),
         )
 

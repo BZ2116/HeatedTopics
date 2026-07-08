@@ -30,9 +30,9 @@ def render_topics_markdown(topics: list[CandidateTopic], generated_at: str) -> s
         for hit in topic.source_hits:
             title = str(hit.get("title", "untitled"))
             url = str(hit.get("url", ""))
-            source_id = str(hit.get("source_id", ""))
+            search_engine = str(hit.get("search_engine") or hit.get("source_id", ""))
             if url:
-                lines.append(f"  - `{source_id}` [{title}]({url}){_hit_suffix(hit)}")
+                lines.append(f"  - `{search_engine}` [{title}]({url}){_hit_suffix(hit)}")
         lines.extend(
             [
                 f"- 可信度：{confidence}",

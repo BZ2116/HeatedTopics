@@ -14,6 +14,7 @@ def run_config_api_command(argv: list[str] | None = None) -> int:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("--set", dest="set_source")
     parser.add_argument("--test", dest="test_source")
+    parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--wizard", action="store_true")
     parser.add_argument("--no-test-after-set", action="store_true")
     parser.add_argument("--no-test-after-wizard", action="store_true")
@@ -32,6 +33,8 @@ def run_config_api_command(argv: list[str] | None = None) -> int:
         result = test_source_after_save(args.test_source, root)
         _print_test_result(result)
         return 0 if result.status == "ok" else 1
+    if args.smoke_test:
+        return _smoke_test(root, env_path)
     if args.wizard:
         return _wizard(root, env_path, skip_test=args.no_test_after_wizard)
 
@@ -93,11 +96,31 @@ def _wizard(root: Path, env_path: Path, *, skip_test: bool = False) -> int:
     return 0
 
 
-def test_source_after_save(source_id: str, root: Path) -> ConnectionTestResult:
+def _smoke_test(root: Path, env_path: Path) -> int:
+    values = read_env_values(env_path)
+    print("[SMOKE] Testing configured sources with max_results=1\n")
+    configured = [
+        source_id
+        for source_id, config in api_source_configs().items()
+        if not _missing_env_keys(source_id, config.env_keys, values)
+    ]
+    if not configured:
+        print("[MISS] No configured sources found.")
+        return 1
+    failures = 0
+    for source_id in configured:
+        result = test_source_after_save(source_id, root, max_results=1)
+        _print_test_result(result)
+        if result.status != "ok":
+            failures += 1
+    return 0 if failures == 0 else 1
+
+
+def test_source_after_save(source_id: str, root: Path, *, max_results: int = 10) -> ConnectionTestResult:
     load_dotenv(root / ".env", override=True)
     config = get_api_source_config(source_id)
     registry = _build_registry()
-    return test_source_connection(source_id, registry=registry, query=config.test_query)
+    return test_source_connection(source_id, registry=registry, query=config.test_query, max_results=max_results)
 
 
 def _missing_env_keys(source_id: str, env_keys: list[str], values: dict[str, str]) -> list[str]:

@@ -3,6 +3,7 @@ from typing import Protocol
 from urllib.parse import urlparse
 
 from src.search_discovery.types import SearchResult
+from src.search_discovery.source_labels import search_engine_name
 
 
 class SearchProvider(Protocol):
@@ -68,6 +69,7 @@ def normalize_provider_rows(
             query=query,
             keyword_category=keyword_category,
             title=title,
+            search_engine=str(row.get("search_engine", "")) or search_engine_name(source_id),
             url=url,
             domain=_domain(url),
             snippet=snippet,

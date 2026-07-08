@@ -43,6 +43,8 @@ def test_normalize_provider_rows_keeps_route_metadata():
     assert results[0].route_weight == 100
     assert results[0].route_reason == "GitHub route reason"
     assert results[0].matched_keywords == ["AI Agent"]
+    assert results[0].search_engine == "GitHub Search"
+    assert results[0].to_dict()["search_engine"] == "GitHub Search"
 
 
 def test_registry_calls_matching_provider():
@@ -61,4 +63,5 @@ def test_registry_calls_matching_provider():
     )
 
     assert results[0].source_id == "baidu_qianfan_search"
+    assert results[0].search_engine == "Baidu Qianfan Search"
     assert results[0].url == "https://example.com/a"

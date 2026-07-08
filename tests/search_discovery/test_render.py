@@ -91,3 +91,32 @@ def test_render_topics_markdown_includes_github_project_details():
     assert "forks: 88" in markdown
     assert "language: Python" in markdown
     assert "recently recommended" in markdown
+
+
+def test_render_topics_markdown_displays_search_engine_name():
+    topic = CandidateTopic(
+        topic_id="search_topic_001",
+        title="AI Agent 项目",
+        matched_keywords=["AI Agent"],
+        keyword_categories=["tech_project"],
+        profile_match_score=100,
+        freshness="breaking",
+        detail_level="high",
+        risk_level="low",
+        source_hits=[
+            {
+                "source_id": "github_search",
+                "search_engine": "GitHub Search",
+                "title": "owner/agent",
+                "url": "https://github.com/owner/agent",
+                "content_type": "repo",
+                "source_weight": 100,
+                "metrics": {},
+            }
+        ],
+        summary="AI Agent 项目",
+    )
+
+    markdown = render_topics_markdown([topic], generated_at="2026-06-29T12:00:00+08:00")
+
+    assert "`GitHub Search` [owner/agent]" in markdown

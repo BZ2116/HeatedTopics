@@ -25,7 +25,7 @@ class BochaSearchProvider(BaseHTTPSearchProvider):
             return None
         return cls(api_key=key)
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         return httpx.Request(
             "POST",
             self.ENDPOINT,
@@ -34,7 +34,7 @@ class BochaSearchProvider(BaseHTTPSearchProvider):
                 "Content-Type": "application/json",
             },
             # Bocha returns a `summary` field when True, in addition to snippet.
-            content=json.dumps({"query": query, "summary": True, "count": 10}),
+            content=json.dumps({"query": query, "summary": True, "count": max(1, min(max_results, 10))}),
         )
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:

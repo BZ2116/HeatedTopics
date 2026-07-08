@@ -22,7 +22,7 @@ class QiniuWebSearchProvider(BaseHTTPSearchProvider):
             return None
         return cls(api_key=api_key)
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         return httpx.Request(
             "POST",
             "https://api.qiniu.com/ai/search/v1/web",
@@ -30,7 +30,7 @@ class QiniuWebSearchProvider(BaseHTTPSearchProvider):
                 "Authorization": f"Bearer {self._api_key}",
                 "Content-Type": "application/json",
             },
-            content=json.dumps({"query": query, "count": 10}),
+            content=json.dumps({"query": query, "count": max(1, min(max_results, 10))}),
         )
 
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:

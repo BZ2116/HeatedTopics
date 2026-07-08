@@ -22,7 +22,7 @@ class TavilySearchProvider(BaseHTTPSearchProvider):
             return None
         return cls(api_key=api_key)
 
-    def _build_request(self, query: str) -> httpx.Request:
+    def _build_request(self, query: str, *, max_results: int = 10) -> httpx.Request:
         return httpx.Request(
             "POST",
             "https://api.tavily.com/search",
@@ -36,7 +36,7 @@ class TavilySearchProvider(BaseHTTPSearchProvider):
                     "topic": "news",
                     "country": "china",
                     "search_depth": "advanced",
-                    "max_results": 10,
+                    "max_results": max(1, min(max_results, 10)),
                     "include_answer": False,
                     "include_raw_content": True,
                 }

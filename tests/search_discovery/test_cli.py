@@ -228,7 +228,7 @@ def test_run_discovery_command_writes_rule_analysis(tmp_path, monkeypatch):
     analysis = json.loads(analysis_path.read_text(encoding="utf-8"))
     assert analysis["statistics"]["total_topics"] == 1
     assert analysis["model_synthesis"] is None
-    assert "选题分析报告" in report_path.read_text(encoding="utf-8")
+    assert "国内热点匹配报告" in report_path.read_text(encoding="utf-8")
 
 
 def test_run_discovery_command_writes_model_analysis(tmp_path, monkeypatch):
@@ -268,3 +268,40 @@ def test_run_discovery_command_writes_model_analysis(tmp_path, monkeypatch):
     analysis = json.loads((tmp_path / "data/search_discovery/processed/topic_analysis.json").read_text(encoding="utf-8"))
     assert analysis["model_synthesis"]["overall_summary"]["core_conclusion"] == "模型结论"
     assert "模型摘要" in (tmp_path / "reports/search_discovery/topic_analysis.md").read_text(encoding="utf-8")
+
+
+def test_run_discovery_command_uses_minimax_model_env_for_model_analysis(tmp_path, monkeypatch):
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(
+        json.dumps({"creator_id": "creator_001", "role": "科技类博主", "profile_type": "tech_ai_creator", "custom_keywords": ["AI Agent"]}),
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-M2.7")
+
+    class Provider:
+        source_id = "github_search"
+
+        def search_rows(self, query, **kwargs):
+            return [{"title": "agent/repo", "url": "https://github.com/agent/repo", "snippet": "AI Agent repo", "content_type": "repo"}]
+
+    def fake_model_call(messages):
+        return {"overall_summary": {"core_conclusion": "MiniMax 结论"}, "topic_suggestions": {}}
+
+    monkeypatch.setattr("src.search_discovery.cli._build_registry", lambda: SearchProviderRegistry([Provider()]))
+    monkeypatch.setattr("src.search_discovery.cli.build_search_routes", lambda profile: [
+        SearchRoute("github_search", "vertical_project", "AI Agent", "tech_project", 100, "test route")
+    ])
+
+    run_discovery_command(
+        root=tmp_path,
+        profile_path=profile_path,
+        render_analysis=True,
+        analysis_mode="model",
+        model_call=fake_model_call,
+    )
+
+    analysis = json.loads((tmp_path / "data/search_discovery/processed/topic_analysis.json").read_text(encoding="utf-8"))
+    assert analysis["model_synthesis"]["model"] == "MiniMax-M2.7"

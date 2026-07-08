@@ -37,6 +37,10 @@ def _topic(**overrides):
         "summary": "AI Agent 工具链在开源项目和中文资料中持续升温。",
         "open_questions": [],
         "created_at": "2026-06-30T10:00:00+08:00",
+        "verification_score": 82,
+        "evidence_level": "strong",
+        "verification_notes": ["多个独立来源指向同一话题，基础可信度较高。"],
+        "risk_flags": [],
         "topic_score": 73,
     }
     base.update(overrides)
@@ -67,8 +71,8 @@ def test_build_topic_analysis_counts_statistics_and_topic_features():
         _result("r2", "baidu_qianfan_search", "AI Agent 分析", content_type="web"),
     ]
     evidence = [
-        EnrichedContent(result_id="r1", url="https://github.com/agent/repo", title="agent/repo", content="开源项目证据", content_quality="high", evidence_confidence="high"),
-        EnrichedContent(result_id="r2", url="https://example.com/agent", title="AI Agent 分析", content="中文资料证据", content_quality="medium", evidence_confidence="medium"),
+        EnrichedContent(result_id="r1", url="https://github.com/agent/repo", title="agent/repo", content="开源项目证据", published_at="2026-06-30T09:00:00+08:00", content_quality="high", evidence_confidence="high"),
+        EnrichedContent(result_id="r2", url="https://example.com/agent", title="AI Agent 分析", content="中文资料证据", published_at="2026-06-30T09:30:00+08:00", content_quality="medium", evidence_confidence="medium"),
     ]
 
     analysis = build_topic_analysis(
@@ -95,9 +99,23 @@ def test_build_topic_analysis_counts_statistics_and_topic_features():
     assert row["priority"] == "high"
     assert row["evidence_count"] == 2
     assert row["source_ids"] == ["github_search", "baidu_qianfan_search"]
+    assert row["search_engines"] == ["GitHub Search", "Baidu Qianfan Search"]
     assert row["content_types"] == ["repo", "web"]
     assert row["rule_summary"]["recommended_format"] == "research_note"
     assert "recently recommended" in " ".join(row["rule_summary"]["verification_notes"])
+    assert row["verification_summary"]["source_count"] == 2
+    assert row["verification_summary"]["verification_score"] == 82
+    assert row["verification_summary"]["evidence_level"] == "strong"
+    assert row["verification_summary"]["has_clear_publish_time"] is True
+    assert row["verification_summary"]["risk_label"] == "低"
+    assert row["verification_summary"]["confidence_label"] == "高"
+    assert row["suggested_titles"] == [
+        "AI Agent 工具链，国内热点背后发生了什么？",
+        "AI Agent 工具链为什么值得关注？一文梳理关键信号",
+        "围绕AI Agent、MCP，AI Agent 工具链有哪些新变化？",
+    ]
+    assert row["evidence"][0]["source_type"] == "技术项目"
+    assert row["evidence"][0]["source_name"] == "GitHub Search"
     assert row["llm_context"]["source_titles"] == ["agent/repo", "AI Agent 分析"]
     assert row["llm_context"]["evidence_bullets"][0].startswith("agent/repo:")
 

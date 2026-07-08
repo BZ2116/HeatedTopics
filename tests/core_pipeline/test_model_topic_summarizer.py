@@ -1,8 +1,44 @@
 from src.core_pipeline.model_topic_summarizer import (
     build_creator_topic_synthesis,
     build_model_summaries,
+    call_openai_compatible_chat,
     compact_topic_for_model,
+    resolve_openai_compatible_chat_config,
 )
+import json
+import urllib.request
+from contextlib import contextmanager
+
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload.encode("utf-8") if isinstance(payload, str) else payload
+
+    def read(self):
+        return self._payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+@contextmanager
+def _stub_urlopen(captured, response_payload):
+    def fake(request, timeout=0):
+        captured["url"] = request.full_url
+        captured["headers"] = dict(request.header_items())
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        captured["timeout"] = timeout
+        return _FakeResponse(json.dumps(response_payload))
+
+    original = urllib.request.urlopen
+    urllib.request.urlopen = fake
+    try:
+        yield
+    finally:
+        urllib.request.urlopen = original
 
 
 def test_compact_topic_for_model_keeps_high_signal_card_fields():
@@ -125,3 +161,91 @@ def test_build_model_summaries_extracts_card_compatible_fields():
             "tracking_hint": "跟进一分一段表。",
         }
     }
+
+
+def test_resolve_openai_compatible_chat_config_uses_minimax_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+
+    config = resolve_openai_compatible_chat_config(model=None, api_key=None, base_url=None)
+
+    assert config == {
+        "api_key": "minimax-key",
+        "base_url": "https://api.minimax.io/v1",
+        "model": "MiniMax-M3",
+    }
+
+
+def test_resolve_openai_compatible_chat_config_prefers_minimax_over_default_openai_model(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
+    monkeypatch.setenv("MINIMAX_MODEL", "MiniMax-M2.7")
+
+    config = resolve_openai_compatible_chat_config(model="gpt-4.1-mini", api_key=None, base_url=None)
+
+    assert config["model"] == "MiniMax-M2.7"
+
+
+def test_call_openai_compatible_chat_dispatches_to_anthropic_when_url_matches():
+    captured: dict = {}
+    with _stub_urlopen(captured, {"content": [{"type": "text", "text": '{"a":1}'}]}):
+        result = call_openai_compatible_chat(
+            messages=[
+                {"role": "system", "content": "你是严谨助手。只输出 JSON。"},
+                {"role": "user", "content": "归纳这段话"},
+            ],
+            model="MiniMax-M3",
+            api_key="minimax-key",
+            base_url="https://api.minimaxi.com/anthropic",
+        )
+
+    assert result == {"a": 1}
+    assert captured["url"] == "https://api.minimaxi.com/anthropic/v1/messages"
+    assert captured["headers"].get("X-api-key") == "minimax-key"
+    assert captured["headers"].get("Anthropic-version") == "2023-06-01"
+    assert captured["body"]["model"] == "MiniMax-M3"
+    assert captured["body"]["system"] == "你是严谨助手。只输出 JSON。"
+    assert all(m["role"] != "system" for m in captured["body"]["messages"])
+    assert "max_tokens" in captured["body"]
+
+
+def test_call_openai_compatible_chat_keeps_openai_path_for_default_url():
+    captured: dict = {}
+    with _stub_urlopen(captured, {"choices": [{"message": {"content": '{"k":"v"}'}}]}):
+        result = call_openai_compatible_chat(
+            messages=[
+                {"role": "system", "content": "只输出 JSON"},
+                {"role": "user", "content": "hello"},
+            ],
+            model="gpt-test",
+            api_key="openai-key",
+            base_url="https://api.openai.com/v1",
+        )
+
+    assert result == {"k": "v"}
+    assert captured["url"] == "https://api.openai.com/v1/chat/completions"
+    assert captured["headers"].get("Authorization") == "Bearer openai-key"
+    body = captured["body"]
+    assert body["messages"][0]["role"] == "system"
+    assert body["response_format"] == {"type": "json_object"}
+
+
+def test_call_anthropic_chat_parses_multiple_text_blocks_into_json():
+    captured: dict = {}
+    response = {
+        "content": [
+            {"type": "text", "text": '{"hello"'},
+            {"type": "text", "text": ': "world"}'},
+        ]
+    }
+    with _stub_urlopen(captured, response):
+        result = call_openai_compatible_chat(
+            messages=[{"role": "user", "content": "ping"}],
+            model="MiniMax-M3",
+            api_key="k",
+            base_url="https://api.minimaxi.com/anthropic",
+        )
+
+    assert result == {"hello": "world"}

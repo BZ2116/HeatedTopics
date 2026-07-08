@@ -7,6 +7,12 @@ from typing import Any, Callable
 SCHEMA_VERSION = "1.0"
 DEFAULT_MODEL = "gpt-4.1-mini"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MINIMAX_MODEL = "MiniMax-M3"
+DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1"
+
+ANTHROPIC_MESSAGES_PATH = "/v1/messages"
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_DEFAULT_MAX_TOKENS = 8192
 
 ModelCall = Callable[[list[dict[str, str]]], dict[str, Any]]
 
@@ -144,10 +150,34 @@ def call_openai_compatible_chat(
     base_url: str | None = None,
     timeout_seconds: int = 60,
 ) -> dict[str, Any]:
-    key = api_key or os.environ.get("OPENAI_API_KEY")
-    if not key:
-        raise RuntimeError("summary-mode=model requires OPENAI_API_KEY or an injected model_call")
-    endpoint = (base_url or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL).rstrip("/") + "/chat/completions"
+    config = resolve_openai_compatible_chat_config(model=model, api_key=api_key, base_url=base_url)
+    base = config["base_url"].rstrip("/")
+    if "/anthropic" in base:
+        return _call_anthropic_chat(
+            messages=messages,
+            model=config["model"],
+            api_key=config["api_key"],
+            base_url=base,
+            timeout_seconds=timeout_seconds,
+        )
+    return _call_openai_chat(
+        messages=messages,
+        model=config["model"],
+        api_key=config["api_key"],
+        base_url=base,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _call_openai_chat(
+    *,
+    messages: list[dict[str, str]],
+    model: str,
+    api_key: str,
+    base_url: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    endpoint = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
         "messages": messages,
@@ -158,7 +188,7 @@ def call_openai_compatible_chat(
         endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -170,6 +200,92 @@ def call_openai_compatible_chat(
     if not isinstance(parsed, dict):
         raise ValueError("Model response JSON must be an object")
     return parsed
+
+
+def _call_anthropic_chat(
+    *,
+    messages: list[dict[str, str]],
+    model: str,
+    api_key: str,
+    base_url: str,
+    timeout_seconds: int,
+    max_tokens: int = ANTHROPIC_DEFAULT_MAX_TOKENS,
+) -> dict[str, Any]:
+    endpoint = base_url.rstrip("/") + ANTHROPIC_MESSAGES_PATH
+    system_prompt, conversation = _split_system(messages)
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": conversation,
+        "max_tokens": max_tokens,
+        "temperature": 0.2,
+    }
+    if system_prompt:
+        payload["system"] = system_prompt
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    content_blocks = data.get("content") or []
+    text_parts = [
+        block.get("text", "")
+        for block in content_blocks
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    text = "".join(text_parts).strip()
+    if not text:
+        raise ValueError("Anthropic response did not contain a text block")
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Model response JSON must be an object")
+    return parsed
+
+
+def _split_system(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]]:
+    system_parts: list[str] = []
+    conversation: list[dict[str, str]] = []
+    for message in messages:
+        role = str(message.get("role", ""))
+        content = str(message.get("content", ""))
+        if role == "system":
+            if content:
+                system_parts.append(content)
+        elif content:
+            conversation.append({"role": role, "content": content})
+    return "\n\n".join(system_parts), conversation
+
+
+def resolve_openai_compatible_chat_config(
+    *,
+    model: str | None,
+    api_key: str | None,
+    base_url: str | None,
+) -> dict[str, str]:
+    openai_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+    minimax_key = os.environ.get("MINIMAX_API_KEY", "")
+    if openai_key:
+        return {
+            "api_key": openai_key,
+            "base_url": base_url or os.environ.get("OPENAI_BASE_URL") or DEFAULT_BASE_URL,
+            "model": model or os.environ.get("OPENAI_MODEL") or DEFAULT_MODEL,
+        }
+    if minimax_key:
+        use_model = model
+        if not use_model or use_model == DEFAULT_MODEL:
+            use_model = os.environ.get("MINIMAX_MODEL") or DEFAULT_MINIMAX_MODEL
+        return {
+            "api_key": minimax_key,
+            "base_url": base_url or os.environ.get("MINIMAX_BASE_URL") or DEFAULT_MINIMAX_BASE_URL,
+            "model": use_model,
+        }
+    raise RuntimeError("summary-mode=model requires OPENAI_API_KEY, MINIMAX_API_KEY, or an injected model_call")
 
 
 def _normalize_topic_summaries(raw: dict[str, Any], topic_titles: list[str]) -> dict[str, dict[str, Any]]:

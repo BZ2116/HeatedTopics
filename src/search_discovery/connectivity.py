@@ -17,6 +17,7 @@ def test_source_connection(
     *,
     registry: SearchProviderRegistry,
     query: str,
+    max_results: int = 10,
 ) -> ConnectionTestResult:
     provider = registry.providers.get(source_id)
     if provider is None or isinstance(provider, MockProvider):
@@ -27,7 +28,13 @@ def test_source_connection(
             error_type="missing_key",
         )
 
-    rows = provider.search_rows(query, keyword_category="connection_test", fetched_at="", index=0)
+    rows = provider.search_rows(
+        query,
+        keyword_category="connection_test",
+        fetched_at="",
+        index=0,
+        max_results=max_results,
+    )
     error_rows = [row for row in rows if str(row.get("fetch_status", "ok")) != "ok"]
     if error_rows:
         first = error_rows[0]

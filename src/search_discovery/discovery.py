@@ -1,7 +1,11 @@
 from datetime import datetime, timezone, timedelta
 
+from src.search_discovery.query_intelligence import matched_terms, score_text_match, split_user_terms
 from src.search_discovery.ranking import score_topic
+from src.search_discovery.source_labels import search_engine_name
+from src.search_discovery.topic_quality import topic_result_candidate
 from src.search_discovery.types import CandidateTopic, CreatorProfile, EnrichedContent, SearchResult
+from src.search_discovery.verification import assess_topic_verification
 
 
 def cluster_results(
@@ -11,11 +15,15 @@ def cluster_results(
     source_weights: dict[str, int],
 ) -> list[CandidateTopic]:
     content_by_result_id = {content.result_id: content for content in contents}
+    structured_terms = split_user_terms(profile)
     grouped: dict[str, list[SearchResult]] = {}
     for result in results:
         if result.fetch_status != "ok":
             continue
-        grouped.setdefault(_cluster_key(result), []).append(result)
+        candidate = topic_result_candidate(profile, result)
+        if candidate is None:
+            continue
+        grouped.setdefault(_cluster_key(candidate), []).append(candidate)
 
     topics: list[CandidateTopic] = []
     created_at = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
@@ -27,19 +35,25 @@ def cluster_results(
             for part in [result.title, result.snippet, content_by_result_id.get(result.result_id, _EMPTY_CONTENT).content]
             if part
         )
-        matched_keywords = _matched_keywords(profile.all_keywords(), text)
+        matched_keywords = matched_terms(structured_terms, title=group[0].title, snippet=" ".join(result.snippet for result in group), content=text)
+        match_score = score_text_match(structured_terms, title=group[0].title, snippet=" ".join(result.snippet for result in group), content=text)
+        verification = assess_topic_verification(group, group_contents, text=text)
         topic = CandidateTopic(
             topic_id=f"search_topic_{index:03d}",
             title=group[0].title,
             matched_keywords=matched_keywords,
             keyword_categories=_unique([result.keyword_category for result in group]),
-            profile_match_score=_profile_match_score(matched_keywords, profile.all_keywords()),
+            profile_match_score=match_score or _profile_match_score(matched_keywords, profile.all_keywords()),
             freshness="breaking" if any(result.published_at or "最新" in result.query for result in group) else "ongoing",
             detail_level=_best_detail_level(group_contents),
             risk_level=_risk_level(text),
             source_hits=_source_hits(group, source_weights),
             summary=_summary(group[0], group_contents),
             created_at=created_at,
+            verification_score=verification.verification_score,
+            evidence_level=verification.evidence_level,
+            verification_notes=verification.verification_notes,
+            risk_flags=verification.risk_flags,
         )
         topics.append(CandidateTopic(**{**topic.to_dict(), "topic_score": score_topic(topic)}))
     return sorted(topics, key=lambda row: row.topic_score, reverse=True)
@@ -90,6 +104,7 @@ def _source_hits(results: list[SearchResult], source_weights: dict[str, int]) ->
         hits.append(
             {
                 "source_id": result.source_id,
+                "search_engine": result.search_engine or search_engine_name(result.source_id),
                 "title": result.title,
                 "url": result.url,
                 "content_type": result.content_type,
