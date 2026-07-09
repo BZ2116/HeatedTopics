@@ -1,0 +1,27 @@
+{
+  "creator_id": "穷游周末",
+  "role": "预算敏感型旅行爱好者，专做两天一夜、学生党、打工人短途攻略，帮你少花钱也玩得舒服。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "旅行攻略"
+  ],
+  "custom_keywords": [
+    "穷游",
+    "周末游",
+    "短途",
+    "学生党",
+    "省钱"
+  ],
+  "content_modes": [
+    "攻略",
+    "省钱技巧",
+    "路线推荐",
+    "体验分享"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

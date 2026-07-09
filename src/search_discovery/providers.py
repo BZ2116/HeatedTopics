@@ -38,12 +38,14 @@ class SearchProviderRegistry:
         keyword_category: str,
         fetched_at: str,
         index: int = 0,
+        max_results: int = 10,
     ) -> list[SearchResult]:
         provider = self._providers.get(source_id)
         if provider is None:
             return []
         rows = provider.search_rows(
             query, keyword_category=keyword_category, fetched_at=fetched_at, index=index,
+            max_results=max_results,
         )
         return normalize_provider_rows(rows, source_id, source_role, query, keyword_category, fetched_at)
 

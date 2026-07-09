@@ -1,0 +1,37 @@
+{
+  "creator_id": "creator_产业链分析",
+  "role": "用一张图讲清新能源、机器人、AI硬件等热门产业链，专注上中下游关系和公司分工。",
+  "profile_type": "business_startup_creator",
+  "track_tags": [
+    "财经",
+    "理财",
+    "宏观经济",
+    "股市",
+    "消费",
+    "产业链"
+  ],
+  "custom_keywords": [
+    "新能源",
+    "机器人",
+    "AI硬件",
+    "产业链",
+    "供应链"
+  ],
+  "content_modes": [
+    "产业链图解",
+    "上中下游",
+    "公司分工",
+    "行业全景"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": [
+    "美股",
+    "港股",
+    "币圈",
+    "纯英文资讯"
+  ]
+}

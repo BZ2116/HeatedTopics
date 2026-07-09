@@ -1,0 +1,27 @@
+{
+  "creator_id": "低能量自救",
+  "role": "经常内耗但努力自救的普通人，分享低能量时期的学习、生活和情绪整理方法，陪你慢慢恢复状态。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "情绪疗愈"
+  ],
+  "custom_keywords": [
+    "内耗",
+    "情绪",
+    "低能量",
+    "自我整理",
+    "恢复"
+  ],
+  "content_modes": [
+    "经验分享",
+    "情绪整理",
+    "低能量指南",
+    "恢复方法"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

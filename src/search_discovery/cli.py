@@ -24,29 +24,29 @@ from src.search_discovery.history import (
 from src.search_discovery.io import write_json, write_jsonl
 from src.search_discovery.model_analysis import build_model_topic_analysis
 from src.search_discovery.providers import MockProvider, SearchProviderRegistry, normalize_provider_rows
-from src.search_discovery.providers_bailian import BailianWebSearchProvider
-from src.search_discovery.providers_bocha import BochaSearchProvider
-from src.search_discovery.providers_github import GitHubSearchProvider
-from src.search_discovery.providers_qianfan import QianfanSearchProvider
-from src.search_discovery.providers_qiniu import QiniuWebSearchProvider
-from src.search_discovery.providers_tavily import TavilySearchProvider
-from src.search_discovery.providers_tianapi import TianAPINewsProvider
 from src.search_discovery.render import render_topics_markdown
 from src.search_discovery.routing import build_search_routes
 from src.search_discovery.types import CreatorProfile, SearchResult
 
-_REAL_PROVIDER_CLASSES = [
-    GitHubSearchProvider,
-    BochaSearchProvider,
-    BailianWebSearchProvider,
-    QianfanSearchProvider,
-    TianAPINewsProvider,
-    TavilySearchProvider,
-    QiniuWebSearchProvider,
-]
-
 
 def _build_registry() -> SearchProviderRegistry:
+    from src.search_discovery.providers_bailian import BailianWebSearchProvider
+    from src.search_discovery.providers_bocha import BochaSearchProvider
+    from src.search_discovery.providers_github import GitHubSearchProvider
+    from src.search_discovery.providers_qianfan import QianfanSearchProvider
+    from src.search_discovery.providers_qiniu import QiniuWebSearchProvider
+    from src.search_discovery.providers_tavily import TavilySearchProvider
+    from src.search_discovery.providers_tianapi import TianAPINewsProvider
+
+    _REAL_PROVIDER_CLASSES = [
+        GitHubSearchProvider,
+        BochaSearchProvider,
+        BailianWebSearchProvider,
+        QianfanSearchProvider,
+        TianAPINewsProvider,
+        TavilySearchProvider,
+        QiniuWebSearchProvider,
+    ]
     providers: list[object] = []
     for cls in _REAL_PROVIDER_CLASSES:
         real = cls.from_env()
@@ -87,11 +87,13 @@ def run_discovery_command(
     analysis_mode: str = "rule",
     model_call: Callable[[list[dict[str, str]]], dict[str, Any]] | None = None,
     model_name: str | None = None,
+    max_results_per_source: int = 10,
+    max_age_days: int = 90,
 ) -> dict[str, int]:
     load_dotenv(root / ".env")
     profile = CreatorProfile.from_dict(json.loads(profile_path.read_text(encoding="utf-8")))
     generated_at = _now_shanghai()
-    paths = _output_paths(root)
+    paths = _output_paths(root, profile.creator_id, generated_at)
     history = read_recommendation_history(paths["history"])
     routes = build_search_routes(profile)
     registry = _build_registry()
@@ -135,6 +137,7 @@ def run_discovery_command(
             keyword_category=route.intent,
             fetched_at=generated_at,
             index=counter,
+            max_results=max_results_per_source,
         )
         results.extend(
             [
@@ -157,21 +160,11 @@ def run_discovery_command(
     )
     enriched = enrich_results(results)
     source_weights = profile_source_weights(profile.profile_type)
-    topics = cluster_results(profile, results, enriched, source_weights=source_weights)
+    topics = cluster_results(profile, results, enriched, source_weights=source_weights, max_age_days=max_age_days)
+    paths["raw_results"].parent.mkdir(parents=True, exist_ok=True)
+    paths["analysis_report"].parent.mkdir(parents=True, exist_ok=True)
     write_jsonl(paths["raw_results"], [result.to_dict() for result in results])
     write_jsonl(paths["evidence"], [content.to_dict() for content in enriched])
-    write_json(
-        paths["topic_index"],
-        {
-            "schema_version": "0.1",
-            "generated_at": generated_at,
-            "profile": profile_path.as_posix(),
-            "topics": [topic.to_dict() for topic in topics],
-        },
-    )
-    if render_report:
-        paths["report"].parent.mkdir(parents=True, exist_ok=True)
-        paths["report"].write_text(render_topics_markdown(topics, generated_at), encoding="utf-8")
     analysis_topics_count = 0
     if render_analysis:
         model_config = None
@@ -187,6 +180,8 @@ def run_discovery_command(
             topics=topics,
             results=results,
             evidence=enriched,
+            content_modes=profile.content_modes,
+            search_routes=[r.to_dict() for r in routes],
         )
         if analysis_mode == "model":
             call = model_call or (lambda messages: call_openai_compatible_chat(messages, model=model))
@@ -199,7 +194,6 @@ def run_discovery_command(
             key = "model_error" if model_result.get("mode") == "model_error" else "model_synthesis"
             analysis[key] = model_result
         write_json(paths["topic_analysis"], analysis)
-        paths["analysis_report"].parent.mkdir(parents=True, exist_ok=True)
         paths["analysis_report"].write_text(render_topic_analysis_markdown(analysis), encoding="utf-8")
         analysis_topics_count = len(analysis["topics"])
     updated_history = update_recommendation_history(history, results, recommended_at=generated_at)
@@ -212,15 +206,17 @@ def run_discovery_command(
     }
 
 
-def _output_paths(root: Path) -> dict[str, Path]:
+def _output_paths(root: Path, creator_id: str, generated_at: str) -> dict[str, Path]:
+    uid = creator_id
+    data_dir = root / "data" / "search_discovery" / uid
+    report_dir = root / "reports" / "search_discovery" / uid
     return {
-        "raw_results": root / "data/search_discovery/raw/search_results.jsonl",
-        "evidence": root / "data/search_discovery/evidence/search_content_evidence.jsonl",
-        "topic_index": root / "data/search_discovery/processed/search_topic_index.json",
-        "report": root / "reports/search_discovery/search_topic_recommendations.md",
+        "raw_results": data_dir / f"{uid}_raw.jsonl",
+        "evidence": data_dir / f"{uid}_evidence.jsonl",
+        "topic_index": data_dir / f"{uid}_topic_index.json",
+        "topic_analysis": data_dir / f"{uid}_topic_analysis.json",
+        "analysis_report": report_dir / f"{uid}.md",
         "history": root / "data/search_discovery/history/recommended_topics.json",
-        "topic_analysis": root / "data/search_discovery/processed/topic_analysis.json",
-        "analysis_report": root / "reports/search_discovery/topic_analysis.md",
     }
 
 
@@ -243,6 +239,8 @@ def main() -> None:
     parser.add_argument("--render-report", action="store_true")
     parser.add_argument("--render-analysis", action="store_true")
     parser.add_argument("--analysis-mode", choices=("rule", "model"), default="rule")
+    parser.add_argument("--max-results", type=int, default=5)
+    parser.add_argument("--max-age", type=int, default=90, help="过滤多久内的结果（天），默认90天")
     args = parser.parse_args()
     counts = run_discovery_command(
         Path("."),
@@ -250,6 +248,8 @@ def main() -> None:
         render_report=args.render_report,
         render_analysis=args.render_analysis,
         analysis_mode=args.analysis_mode,
+        max_results_per_source=args.max_results,
+        max_age_days=args.max_age,
     )
     print(json.dumps(counts, ensure_ascii=False, sort_keys=True))
 

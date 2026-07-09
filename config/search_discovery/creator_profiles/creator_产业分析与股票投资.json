@@ -1,0 +1,38 @@
+{
+  "creator_id": "creator_产业分析与股票投资",
+  "role": "人大计算机本科，北大光华金融硕士。深耕tmt行业多年，对人形机器人产业具有独到见解",
+  "profile_type": "business_startup_creator",
+  "track_tags": [
+    "财经",
+    "理财",
+    "宏观经济",
+    "股市",
+    "消费",
+    "产业链"
+  ],
+  "custom_keywords": [
+    "人形机器人",
+    "TMT",
+    "股票",
+    "产业分析",
+    "投资"
+  ],
+  "content_modes": [
+    "产业分析",
+    "股票研究",
+    "TMT",
+    "人形机器人",
+    "投资逻辑"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": [
+    "美股",
+    "港股",
+    "币圈",
+    "纯英文资讯"
+  ]
+}

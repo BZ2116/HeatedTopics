@@ -1,0 +1,27 @@
+{
+  "creator_id": "非遗与民俗",
+  "role": "喜欢研究地方习俗、节气、非遗和老手艺，用短内容记录传统文化里的生活智慧和审美细节。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "文化生活"
+  ],
+  "custom_keywords": [
+    "非遗",
+    "民俗",
+    "节气",
+    "传统手艺",
+    "地方文化"
+  ],
+  "content_modes": [
+    "非遗记录",
+    "民俗研究",
+    "节气生活",
+    "传统手艺"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

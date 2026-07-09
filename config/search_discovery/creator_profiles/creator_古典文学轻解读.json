@@ -1,0 +1,32 @@
+{
+  "creator_id": "creator_古典文学轻解读",
+  "role": "把诗词、古文和人物故事讲得像聊天一样，不做艰深考据，专注讲清情绪、命运和古人的生活感。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "文化",
+    "城市",
+    "历史",
+    "美食",
+    "旅行",
+    "非遗"
+  ],
+  "custom_keywords": [
+    "诗词",
+    "古文",
+    "历史人物",
+    "古典文学",
+    "故事"
+  ],
+  "content_modes": [
+    "古文解读",
+    "人物故事",
+    "情绪分析",
+    "古典新说"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

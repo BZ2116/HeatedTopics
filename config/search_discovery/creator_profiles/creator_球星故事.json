@@ -1,0 +1,36 @@
+{
+  "creator_id": "creator_球星故事",
+  "role": "专讲球员成长、转会和高光低谷的足球叙事号，用故事感写梅西、C罗、新星和冷门球员的人生线。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "足球",
+    "体育",
+    "战术",
+    "球星",
+    "赛事"
+  ],
+  "custom_keywords": [
+    "梅西",
+    "C罗",
+    "球星",
+    "转会",
+    "高光"
+  ],
+  "content_modes": [
+    "人物故事",
+    "成长叙事",
+    "转会分析",
+    "高光时刻"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": [
+    "篮球",
+    "网球",
+    "奥运会",
+    "电竞"
+  ]
+}

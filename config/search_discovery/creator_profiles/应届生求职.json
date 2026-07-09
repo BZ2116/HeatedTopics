@@ -1,0 +1,27 @@
+{
+  "creator_id": "应届生求职",
+  "role": "经济学背景的实习打工人，专注拆解简历、面试和校招选择，用普通学生能听懂的话讲清职场入门。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "职场成长"
+  ],
+  "custom_keywords": [
+    "简历",
+    "面试",
+    "校招",
+    "实习",
+    "Offer"
+  ],
+  "content_modes": [
+    "简历指导",
+    "面试技巧",
+    "职业规划",
+    "信息差拆解"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

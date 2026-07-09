@@ -1,5 +1,6 @@
 import re
 from dataclasses import replace
+from datetime import datetime, timezone, timedelta
 
 from src.search_discovery.types import CreatorProfile, SearchResult
 
@@ -82,7 +83,10 @@ def topic_result_candidate(profile: CreatorProfile, result: SearchResult) -> Sea
     if not title:
         return None
 
-    if not _has_chinese_signal(f"{title} {result.snippet}"):
+    # Recent results (≤30 days): skip Chinese signal check since trending topics
+    # may appear in English first. Still apply all other quality checks.
+    is_recent = _is_recent_result(result, max_age_days=30)
+    if not is_recent and not _has_chinese_signal(f"{title} {result.snippet}"):
         return None
 
     if _is_exact_profile_keyword(title, profile) or title in GENERIC_TOPIC_TITLES:
@@ -194,3 +198,35 @@ def _has_chinese_signal(value: str) -> bool:
 
 def _normalize_title(value: str) -> str:
     return value.strip().lower().replace(" ", "")
+
+
+def _is_recent_result(result: SearchResult, max_age_days: int) -> bool:
+    if not result.published_at:
+        return False
+    pub = _parse_datetime(result.published_at)
+    if pub is None:
+        return False
+    now = datetime.now(timezone(timedelta(hours=8)))
+    return (now - pub).days <= max_age_days
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=8)))
+        except Exception:
+            pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        return parsedate_to_datetime(value).astimezone(timezone(timedelta(hours=8)))
+    except Exception:
+        return None

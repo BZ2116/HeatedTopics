@@ -1,0 +1,32 @@
+{
+  "creator_id": "creator_大学生效率",
+  "role": "双专业本科生，分享备考、论文、汇报和科研入门经验，主打把复杂任务拆成可执行清单。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "学习",
+    "备考",
+    "论文",
+    "科研",
+    "大学生",
+    "效率"
+  ],
+  "custom_keywords": [
+    "备考",
+    "论文",
+    "汇报",
+    "科研",
+    "学习方法"
+  ],
+  "content_modes": [
+    "经验分享",
+    "清单式",
+    "工具测评",
+    "学习技巧"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

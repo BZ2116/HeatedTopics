@@ -1,0 +1,27 @@
+{
+  "creator_id": "社科通识",
+  "role": "把经济学、社会学和历史书讲成生活问题的人，专注用一本书解释一个现实困惑。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "读书成长"
+  ],
+  "custom_keywords": [
+    "经济学",
+    "社会学",
+    "历史",
+    "通识",
+    "书单"
+  ],
+  "content_modes": [
+    "书评",
+    "概念解释",
+    "生活应用",
+    "跨学科"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

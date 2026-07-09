@@ -1,0 +1,32 @@
+{
+  "creator_id": "creator_城市漫游",
+  "role": "爱逛博物馆和老街的城市观察者，用短故事讲建筑、地名和地方文化，适合周末不知道去哪的人。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "文化",
+    "城市",
+    "历史",
+    "美食",
+    "旅行",
+    "非遗"
+  ],
+  "custom_keywords": [
+    "博物馆",
+    "老街",
+    "城市探索",
+    "建筑",
+    "地方文化"
+  ],
+  "content_modes": [
+    "短故事",
+    "建筑解读",
+    "地方文化",
+    "周末去哪"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

@@ -1,0 +1,27 @@
+{
+  "creator_id": "普通男生改造",
+  "role": "不走潮牌路线的普通男生穿搭记录，主打干净、显高、通勤和学生党预算，解决不会买衣服的问题。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "穿搭审美"
+  ],
+  "custom_keywords": [
+    "穿搭",
+    "男生",
+    "通勤",
+    "学生党",
+    "预算"
+  ],
+  "content_modes": [
+    "穿搭记录",
+    "改造过程",
+    "购物建议",
+    "学生党"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

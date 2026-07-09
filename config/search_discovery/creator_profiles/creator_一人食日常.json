@@ -1,0 +1,31 @@
+{
+  "creator_id": "creator_一人食日常",
+  "role": "独居厨房实验员，记录低预算、低失败率的一人食做法，不追求精致，只追求好吃、省事、有烟火气。",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": [
+    "美食",
+    "烹饪",
+    "一人食",
+    "食谱",
+    "厨房"
+  ],
+  "custom_keywords": [
+    "一人食",
+    "快手菜",
+    "低预算",
+    "食谱",
+    "独居"
+  ],
+  "content_modes": [
+    "食谱",
+    "快手",
+    "低失败率",
+    "独居生活"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

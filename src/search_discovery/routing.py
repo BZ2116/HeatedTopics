@@ -1,5 +1,5 @@
 from src.search_discovery.config import source_registry
-from src.search_discovery.domestic_sources import domestic_query_for_source, domestic_source_plan
+from src.search_discovery.domestic_sources import DOMESTIC_SOURCE_PRIORITIES, build_source_queries, domestic_source_plan
 from src.search_discovery.github_query import build_github_query
 from src.search_discovery.types import CreatorProfile, SearchRoute
 
@@ -52,7 +52,7 @@ INTENT_BOOSTS = {
     },
     "news_trend": {
         "github_search": -20,
-        "juejin_content": -10,
+        "juejin_search": -10,
         "baidu_qianfan_search": 15,
         "news_api_cn": 20,
         "tavily_search": 15,
@@ -73,12 +73,6 @@ INTENT_BOOSTS = {
     },
 }
 
-SOURCE_QUERY_TEMPLATES = {
-    "news_api_cn": "{keywords} 最新 发布 融资 应用",
-    "baidu_qianfan_search": "{keywords} 最新进展 行业动态 应用",
-    "juejin_content": "{keywords} 教程 实践 案例 开发者",
-}
-
 
 def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
     intent = classify_search_intent(profile)
@@ -88,67 +82,33 @@ def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
     boosts = INTENT_BOOSTS.get(intent, INTENT_BOOSTS["content_angle"])
 
     domestic_plan = domestic_source_plan(intent)
-    if domestic_plan:
-        routes: list[SearchRoute] = []
-        for planned in domestic_plan:
-            source = sources.get(planned.source_id)
-            if source is None:
-                continue
+    if not domestic_plan:
+        domestic_plan = [
+            *DOMESTIC_SOURCE_PRIORITIES.get("news_trend", []),
+            *DOMESTIC_SOURCE_PRIORITIES.get("product_trend", []),
+        ]
+    routes: list[SearchRoute] = []
+
+    for planned in domestic_plan:
+        source = sources.get(planned.source_id)
+        if source is None:
+            continue
+        source_queries = build_source_queries(planned.source_id, keywords, intent, profile.content_modes)
+        for query, query_angle in source_queries:
+            weight = max(5, planned.weight - 5)  # 每个 angle 略降权重
             routes.append(
                 SearchRoute(
                     source_id=planned.source_id,
                     source_role=source.source_role,
-                    query=domestic_query_for_source(planned.source_id, keywords, intent),
+                    query=query,
+                    query_angle=query_angle,
                     intent=intent,
-                    weight=planned.weight,
+                    weight=weight,
                     reason=_route_reason(profile, planned.source_id, intent),
                 )
             )
-        github_weight = base_weights.get("github_search", 0) + boosts.get("github_search", 0)
-        if github_weight > 0 and "github_search" in sources:
-            source = sources["github_search"]
-            routes.append(
-                SearchRoute(
-                    source_id="github_search",
-                    source_role=source.source_role,
-                    query=build_github_query(profile),
-                    intent="tech_project",
-                    weight=max(5, github_weight - 30),
-                    reason=_route_reason(profile, "github_search", "tech_project"),
-                )
-            )
-        return sorted(routes, key=lambda route: route.weight, reverse=True)
 
-    routes: list[SearchRoute] = []
-    for source_id, template in SOURCE_QUERY_TEMPLATES.items():
-        weight = max(0, min(100, base_weights.get(source_id, 0) + boosts.get(source_id, 0)))
-        if weight <= 0:
-            continue
-        source = sources[source_id]
-        routes.append(
-            SearchRoute(
-                source_id=source_id,
-                source_role=source.source_role,
-                query=template.format(keywords=keywords),
-                intent=intent,
-                weight=weight,
-                reason=_route_reason(profile, source_id, intent),
-            )
-        )
-    tavily_weight = max(0, min(100, base_weights.get("tavily_search", 0) + boosts.get("tavily_search", 0)))
-    if tavily_weight > 0 and "tavily_search" in sources:
-        source = sources["tavily_search"]
-        routes.append(
-            SearchRoute(
-                source_id="tavily_search",
-                source_role=source.source_role,
-                query=f"{keywords} latest news background",
-                intent=intent,
-                weight=tavily_weight,
-                reason=_route_reason(profile, "tavily_search", intent),
-            )
-        )
-    github_weight = max(0, min(100, base_weights.get("github_search", 0) + boosts.get("github_search", 0)))
+    github_weight = base_weights.get("github_search", 0) + boosts.get("github_search", 0)
     if github_weight > 0 and "github_search" in sources:
         source = sources["github_search"]
         routes.append(
@@ -156,11 +116,13 @@ def build_search_routes(profile: CreatorProfile) -> list[SearchRoute]:
                 source_id="github_search",
                 source_role=source.source_role,
                 query=build_github_query(profile),
-                intent=intent,
-                weight=github_weight,
-                reason=_route_reason(profile, "github_search", intent),
+                query_angle="开源项目",
+                intent="tech_project",
+                weight=max(5, github_weight - 30),
+                reason=_route_reason(profile, "github_search", "tech_project"),
             )
         )
+
     return sorted(routes, key=lambda route: route.weight, reverse=True)
 
 

@@ -60,6 +60,7 @@ class SearchRoute:
     source_id: str
     source_role: str
     query: str
+    query_angle: str
     intent: str
     weight: int
     reason: str

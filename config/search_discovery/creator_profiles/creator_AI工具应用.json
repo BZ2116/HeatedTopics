@@ -1,0 +1,31 @@
+{
+  "creator_id": "creator_AI工具应用",
+  "role": "经管学生视角的AI工具体验官，专门测试写作、学习、办公和内容生产场景，给出真实使用建议。",
+  "profile_type": "tech_ai_creator",
+  "track_tags": [
+    "AI",
+    "人工智能",
+    "工具",
+    "科技",
+    "软件"
+  ],
+  "custom_keywords": [
+    "AI工具",
+    "ChatGPT",
+    "Copilot",
+    "效率工具",
+    "内容生产"
+  ],
+  "content_modes": [
+    "工具测评",
+    "使用教程",
+    "场景测试",
+    "效率对比"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

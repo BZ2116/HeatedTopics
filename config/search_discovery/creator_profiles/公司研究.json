@@ -1,0 +1,27 @@
+{
+  "creator_id": "公司研究",
+  "role": "喜欢拆财报和商业模式的研究型博主，用一家公司讲清一个行业逻辑，适合想入门基本面的人。",
+  "profile_type": "business_startup_creator",
+  "track_tags": [
+    "财经商业"
+  ],
+  "custom_keywords": [
+    "财报",
+    "商业模式",
+    "行业分析",
+    "基本面",
+    "估值"
+  ],
+  "content_modes": [
+    "财报拆解",
+    "商业模式",
+    "行业逻辑",
+    "估值分析"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

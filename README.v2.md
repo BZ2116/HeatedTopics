@@ -54,6 +54,49 @@ uv run python -m src.search_discovery.cli `
   --analysis-mode rule
 ```
 
+## 用户画像检索库
+
+真实用户画像以 Excel 中的 `一级赛道`、`二级赛道`、`人设` 三列为准。不要把真实画像直接提交到 `config/search_discovery/creator_profiles/`；该目录只保留可公开的样例配置。真实画像转换后的检索数据写入 `data/search_discovery/personas/`，该目录已被 `.gitignore` 忽略。
+
+转换命令：
+
+```powershell
+uv run python -m src.search_discovery.persona_profiles `
+  --input "E:\path\to\人设数据收集.xlsx" `
+  --output-dir data/search_discovery/personas
+```
+
+输出文件：
+
+| 路径 | 内容 |
+| --- | --- |
+| `data/search_discovery/personas/persona_profiles.jsonl` | 画像检索文档，每行包含 `profile_id`、赛道、人设、关键词、内容模式和 `retrieval_text`。 |
+| `data/search_discovery/personas/creator_profiles.jsonl` | v2 搜索发现链路可复用的 `CreatorProfile` 兼容格式。 |
+| `data/search_discovery/personas/persona_index.json` | 不含完整人设正文的本地索引摘要，用于快速查看画像数量、赛道和来源行号。 |
+
+标准画像文档格式：
+
+```json
+{
+  "schema_version": "0.1",
+  "profile_id": "persona_0001",
+  "primary_track": "职场成长",
+  "secondary_track": "应届生求职",
+  "persona_text": "Excel 中的人设原文",
+  "profile_type": "general_hot_topic_creator",
+  "track_tags": ["职场成长", "应届生求职"],
+  "custom_keywords": ["简历", "面试", "校招"],
+  "content_modes": ["案例拆解", "避坑清单"],
+  "retrieval_text": "用于 BM25 或向量召回的拼接文本",
+  "sensitivity_level": "internal",
+  "source": {
+    "file": "人设数据收集.xlsx",
+    "sheet": "工作表1",
+    "row": 2
+  }
+}
+```
+
 ## API 配置
 
 v2 的 API key 写在项目根目录的 `.env`。第一次运行配置助手时，如果 `.env` 不存在，会自动从 `.env.example` 复制一份。

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,15 +15,18 @@ def build_topic_analysis(
     topics: list[CandidateTopic],
     results: list[SearchResult],
     evidence: list[EnrichedContent],
+    content_modes: list[str],
+    search_routes: list[dict[str, Any]] | None = None,
     model_synthesis: dict[str, Any] | None = None,
     model_error: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    topic_rows = [_topic_row(topic, evidence) for topic in topics]
+    topic_rows = [_topic_row(topic, evidence, content_modes) for topic in topics]
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": generated_at,
         "profile": profile_path.as_posix(),
         "statistics": _statistics(topics, results, evidence),
+        "search_queries": search_routes or [],
         "topics": topic_rows,
         "model_synthesis": model_synthesis,
         "model_error": model_error,
@@ -53,12 +57,12 @@ def _statistics(
     }
 
 
-def _topic_row(topic: CandidateTopic, evidence: list[EnrichedContent]) -> dict[str, Any]:
+def _topic_row(topic: CandidateTopic, evidence: list[EnrichedContent], content_modes: list[str]) -> dict[str, Any]:
     topic_evidence = _evidence_for_topic(topic, evidence)
     source_ids = _unique(_hit_text(hit, "source_id") for hit in topic.source_hits)
     search_engines = _unique(_hit_search_engine(hit) for hit in topic.source_hits)
     content_types = _unique(_hit_text(hit, "content_type") for hit in topic.source_hits)
-    rule_summary = _rule_summary(topic, topic_evidence)
+    rule_summary = _rule_summary(topic, topic_evidence, content_modes)
     return {
         "topic_id": topic.topic_id,
         "title": topic.title,
@@ -130,11 +134,11 @@ def _source_id_for_evidence(item: EnrichedContent, topic: CandidateTopic) -> str
     return ""
 
 
-def _rule_summary(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def _rule_summary(topic: CandidateTopic, evidence: list[dict[str, Any]], content_modes: list[str]) -> dict[str, Any]:
     return {
         "one_line_summary": _truncate(topic.summary, 180),
         "why_it_matters": _why_it_matters(topic),
-        "creator_angles": _creator_angles(topic),
+        "creator_angles": _creator_angles(topic, content_modes),
         "recommended_format": _recommended_format(topic),
         "verification_notes": _verification_notes(topic, evidence),
     }
@@ -146,7 +150,9 @@ def _why_it_matters(topic: CandidateTopic) -> str:
     return f"该话题命中 {keyword_text}，来自 {source_count} 个来源，当前评分 {topic.topic_score}，适合进入选题池继续核验。"
 
 
-def _creator_angles(topic: CandidateTopic) -> list[str]:
+def _creator_angles(topic: CandidateTopic, content_modes: list[str]) -> list[str]:
+    if content_modes:
+        return content_modes[:3]
     categories = set(topic.keyword_categories)
     if "tech_project" in categories:
         return ["项目拆解", "工具对比", "实现教程"]
@@ -197,7 +203,7 @@ def _verification_summary(topic: CandidateTopic, evidence: list[dict[str, Any]])
         "evidence_level": topic.evidence_level,
         "has_clear_publish_time": has_clear_publish_time,
         "risk_label": _risk_label(topic.risk_level),
-        "confidence_label": _confidence_label(topic, source_count, has_clear_publish_time),
+        "confidence_label": _confidence_label(topic.verification_score),
         "risk_flags": topic.risk_flags,
         "notes": notes,
     }
@@ -219,12 +225,12 @@ def _risk_label(risk_level: str) -> str:
     return {"low": "低", "medium": "中", "high": "高"}.get(risk_level, "未知")
 
 
-def _confidence_label(topic: CandidateTopic, source_count: int, has_clear_publish_time: bool) -> str:
-    if topic.risk_level == "high" or source_count <= 1:
-        return "低"
-    if topic.risk_level == "medium" or not has_clear_publish_time:
+def _confidence_label(verification_score: int) -> str:
+    if verification_score >= 85:
+        return "高"
+    if verification_score >= 65:
         return "中"
-    return "高"
+    return "低"
 
 
 def _source_type(source_id: str, content_type: str) -> str:
@@ -248,8 +254,11 @@ def _source_name(source_id: str) -> str:
 
 
 def _llm_context(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    all_text = " ".join(str(row.get("content_excerpt", "")) for row in evidence[:3] if row.get("content_excerpt"))
+    content_summary = _extract_content_summary(all_text)
     return {
         "compact_summary": _truncate(topic.summary, 320),
+        "content_summary": content_summary,
         "evidence_bullets": [
             f"{row.get('title', '')}: {_truncate(str(row.get('content_excerpt', '')), 160)}"
             for row in evidence[:5]
@@ -262,6 +271,60 @@ def _llm_context(topic: CandidateTopic, evidence: list[dict[str, Any]]) -> dict[
         },
         "risk_flags": _verification_notes(topic, evidence),
     }
+
+
+def _extract_content_summary(text: str) -> dict[str, Any]:
+    if not text.strip():
+        return {"core_insight": "", "key_points": []}
+
+    core_insight = ""
+    sentences = _split_sentences(text)
+    for s in sentences:
+        s = s.strip()
+        if len(s) > 15 and not _is_noise_sentence(s):
+            core_insight = s
+            break
+
+    key_points: list[str] = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # 编号列表：1、2、3 或 1. 2. 或 ★ ● ◆
+        if re.match(r"^\d+[.、]", line) or re.match(r"^[一二三四五六七八九十][、.]", line):
+            cleaned = re.sub(r"^[一二三四五六七八九十\d][.、\s]+", "", line)
+            if len(cleaned) > 4:
+                key_points.append(cleaned[:150])
+        elif re.match(r"^[*★●◆✦✱\-]", line):
+            cleaned = line.lstrip("*★●◆✦✱- ")
+            if len(cleaned) > 4:
+                key_points.append(cleaned[:150])
+        elif "建议" in line or "注意" in line or "可以" in line or "应该" in line or "关键" in line or "核心" in line:
+            if len(line) > 10 and len(line) < 200:
+                key_points.append(line[:150])
+
+    seen = set()
+    deduped: list[str] = []
+    for p in key_points:
+        norm = p.lower()[:60]
+        if norm not in seen and len(deduped) < 8:
+            seen.add(norm)
+            deduped.append(p)
+
+    return {
+        "core_insight": core_insight[:200],
+        "key_points": deduped,
+    }
+
+
+def _split_sentences(text: str) -> list[str]:
+    text = re.sub(r"[。！？\.]+", lambda m: m.group(0) + "\n", text)
+    return [s.strip() for s in text.split("\n") if s.strip()]
+
+
+def _is_noise_sentence(s: str) -> bool:
+    noise = {"新浪财经", "东方财富", "微信公众号", "加载中", "点击查看", "更多精彩", "热门推荐", "相关阅读", "分享", "收藏"}
+    return any(n in s for n in noise) or len(s) < 10
 
 
 def _priority(score: int) -> str:

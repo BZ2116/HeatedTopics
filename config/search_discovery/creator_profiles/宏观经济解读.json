@@ -1,0 +1,27 @@
+{
+  "creator_id": "宏观经济解读",
+  "role": "经济学学生视角，专门把政策、利率、就业和房价讲成普通人能听懂的话，不预测暴富，只解释变化。",
+  "profile_type": "business_startup_creator",
+  "track_tags": [
+    "财经商业"
+  ],
+  "custom_keywords": [
+    "政策",
+    "利率",
+    "就业",
+    "房价",
+    "CPI"
+  ],
+  "content_modes": [
+    "政策解读",
+    "数据解读",
+    "趋势分析",
+    "生活影响"
+  ],
+  "platforms": [
+    "小红书",
+    "公众号"
+  ],
+  "content_goal": "为内容生成系统提供可写的热点选题",
+  "exclude_keywords": []
+}

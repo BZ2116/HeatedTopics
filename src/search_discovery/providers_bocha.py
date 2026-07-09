@@ -40,7 +40,7 @@ class BochaSearchProvider(BaseHTTPSearchProvider):
     def _parse_response(self, response: httpx.Response, query: str) -> list[dict[str, object]]:
         body = response.json()
         code = body.get("code", 0)
-        if code != 0:
+        if code != 0 and code != 200:
             raise ProviderError("upstream_failed", f"bocha_code_{code}")
         webpages = body.get("data", {}).get("webPages", {}).get("value", [])
         rows: list[dict[str, object]] = []

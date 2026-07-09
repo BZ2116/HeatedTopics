@@ -1,3 +1,7 @@
+import urllib.parse
+import json
+import urllib.request
+from dataclasses import replace
 from datetime import datetime, timezone, timedelta
 
 from src.search_discovery.query_intelligence import matched_terms, score_text_match, split_user_terms
@@ -13,6 +17,7 @@ def cluster_results(
     results: list[SearchResult],
     contents: list[EnrichedContent],
     source_weights: dict[str, int],
+    max_age_days: int = 90,
 ) -> list[CandidateTopic]:
     content_by_result_id = {content.result_id: content for content in contents}
     structured_terms = split_user_terms(profile)
@@ -20,14 +25,28 @@ def cluster_results(
     for result in results:
         if result.fetch_status != "ok":
             continue
-        candidate = topic_result_candidate(profile, result)
+        # Translate English title/snippet to Chinese before quality checks
+        translated_result = result
+        if not _has_chinese(result.title):
+            zh_title = _translate_en_to_zh(result.title)
+            zh_snippet = _translate_en_to_zh(result.snippet)
+            translated_result = replace(result, title=zh_title, snippet=zh_snippet)
+        candidate = topic_result_candidate(profile, translated_result)
         if candidate is None:
+            continue
+        if not _is_recent_enough(candidate, max_age_days=max_age_days):
             continue
         grouped.setdefault(_cluster_key(candidate), []).append(candidate)
 
+    # Second-pass: merge clusters with the same normalized title
+    title_groups: dict[str, list[SearchResult]] = {}
+    for cluster in grouped.values():
+        title_key = _title_normalized(cluster[0])
+        title_groups.setdefault(title_key, []).extend(cluster)
+
     topics: list[CandidateTopic] = []
     created_at = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
-    for index, group in enumerate(grouped.values(), start=1):
+    for index, group in enumerate(title_groups.values(), start=1):
         group_contents = [content_by_result_id[result.result_id] for result in group if result.result_id in content_by_result_id]
         text = " ".join(
             part
@@ -61,8 +80,62 @@ def cluster_results(
 
 def _cluster_key(result: SearchResult) -> str:
     if result.url:
-        return result.url.rstrip("/").lower()
+        url = result.url.rstrip("/").lower()
+        url = _strip_tracking_params(url)
+        return url
     return result.title.strip().lower()
+
+
+def _strip_tracking_params(url: str) -> str:
+    url = url.split("?")[0]
+    url = url.split("#")[0]
+    for param in ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "spm", "scm", "share"]:
+        url = url.replace(f"&{param}=%", f"&{param}=").replace(f"?{param}=%", f"?{param}=")
+    return url
+
+
+def _title_normalized(result: SearchResult) -> str:
+    """Normalized title for cross-domain duplicate detection."""
+    title = result.title.strip().lower()
+    for suffix in ["_网易", "_腾讯新闻", "_新浪", "_凤凰网", "_百家号", "_知乎", "_微博"]:
+        title = title.rsplit(suffix, 1)[0]
+    title = title.strip("，。！?？、:：;；-— ")
+    return title
+
+
+def _is_recent_enough(result: SearchResult, max_age_days: int = 90) -> bool:
+    if not result.published_at:
+        return True
+    pub = _parse_datetime(result.published_at)
+    if pub is None:
+        return True
+    now = datetime.now(timezone(timedelta(hours=8)))
+    age = (now - pub).days
+    return age <= max_age_days
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    # Try ISO format first
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+    ):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone(timedelta(hours=8)))
+        except Exception:
+            pass
+    # Try RFC 2822 (e.g. "Fri, 03 Jul 2026 09:01:12 GMT")
+    try:
+        from email.utils import parsedate_to_datetime
+        return parsedate_to_datetime(value).astimezone(timezone(timedelta(hours=8)))
+    except Exception:
+        pass
+    return None
 
 
 def _matched_keywords(keywords: list[str], text: str) -> list[str]:
@@ -138,3 +211,23 @@ def _unique(values: list[str]) -> list[str]:
 
 
 _EMPTY_CONTENT = EnrichedContent(result_id="", url="", title="", content="")
+
+
+def _has_chinese(value: str) -> bool:
+    return any("一" <= char <= "鿿" for char in value)
+
+
+def _translate_en_to_zh(text: str) -> str:
+    if not text or len(text.strip()) < 10:
+        return text
+    if _has_chinese(text):
+        return text
+    try:
+        url = f"https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q={urllib.parse.quote(text[:2000])}"
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        if data and data[0]:
+            return "".join(item[0] for item in data[0] if item[0])
+    except Exception:
+        pass
+    return text

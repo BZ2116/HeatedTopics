@@ -1,5 +1,7 @@
 from typing import Any
 
+from src.search_discovery.source_labels import search_engine_name
+
 
 def render_topic_analysis_markdown(analysis: dict[str, Any]) -> str:
     generated_at = str(analysis.get("generated_at", ""))
@@ -13,9 +15,25 @@ def render_topic_analysis_markdown(analysis: dict[str, Any]) -> str:
         f"用户关键词：`{_join_or_default(keywords, '未提供')}`",
         "搜索范围：国内新闻 / 搜索 / 官方回应 / 社区讨论",
         "",
-        "## 一、本轮结论",
-        "",
     ]
+    # 搜索 query 列表
+    queries = analysis.get("search_queries", [])
+    if queries:
+        lines.extend(["", "## 搜索 Query 列表", ""])
+        lines.extend(["| 搜索源 | Query 角度 | 关键词 |", "| --- | --- | --- |"])
+        seen: set[str] = set()
+        for q in queries:
+            qtext = q.get("query", "")
+            qkey = qtext[:50]
+            if qkey in seen:
+                continue
+            seen.add(qkey)
+            src = search_engine_name(q.get("source_id", ""))
+            angle = q.get("query_angle", "")
+            lines.append(f"| {src} | {angle} | {qtext} |")
+        lines.append("")
+
+    lines.extend(["## 一、本轮结论", ""])
     if not topics:
         lines.extend(
             [
@@ -147,6 +165,11 @@ def _topic_details(analysis: dict[str, Any], topics: list[dict[str, Any]]) -> li
                     confidence=_confidence_text(str(evidence.get("evidence_confidence", ""))),
                 )
             )
+        # 内容摘要
+        for evidence in _evidence_rows(topic):
+            excerpt = str(evidence.get("content_excerpt", "")).strip()
+            if excerpt:
+                lines.extend(["", f"> {excerpt[:300]}{'...' if len(excerpt) > 300 else ''}"])
         lines.extend(["", "**真实性与核验**", ""])
         notes = _merge_unique(_string_list(verification.get("notes")), _string_list(suggestion.get("verification_notes")))
         for note in notes:
