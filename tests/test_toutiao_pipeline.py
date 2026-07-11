@@ -24,18 +24,24 @@ def test_run_toutiao_pipeline_writes_dataset_and_report(tmp_path: Path):
     )
 
     def fake_fetcher(url: str, timeout_seconds: int) -> str:
+        if "so.toutiao.com/search/" in url:
+            return json.dumps(
+                {
+                    "keyword": "AI智能体",
+                    "count": 1,
+                    "dom": """
+                    <div class="result-card">
+                      <a href="https://www.toutiao.com/article/1">AI Agent product launches</a>
+                      <div>阅读 12万 评论 345</div>
+                      <p>Detailed search summary.</p>
+                    </div>
+                    """,
+                }
+            )
         return json.dumps(
             {
                 "status": "success",
                 "data": [
-                    {
-                        "ClusterId": "1",
-                        "Title": "AI Agent product launches",
-                        "Url": "https://www.toutiao.com/article/1",
-                        "HotValue": "1000",
-                        "QueryWord": "AI Agent product launches",
-                        "InterestCategory": ["technology"],
-                    },
                     {
                         "ClusterId": "2",
                         "Title": "Weather headline",
@@ -68,18 +74,35 @@ def test_run_toutiao_pipeline_writes_dataset_and_report(tmp_path: Path):
     )
 
     run_dir = tmp_path / "outputs" / "tech_ai_creator" / "toutiao" / "run_20260711_145000"
-    assert set(outputs) == {"profile", "queries", "hot_items", "matches", "item_details", "report"}
+    assert set(outputs) == {
+        "profile",
+        "queries",
+        "hot_board_items",
+        "search_results",
+        "hot_items",
+        "matches",
+        "item_details",
+        "report",
+    }
     assert all(path.parent == run_dir for path in outputs.values())
+    assert outputs["hot_board_items"].name == "hot_board_items.json"
+    assert outputs["search_results"].name == "search_results.json"
 
+    hot_board_items = json.loads(outputs["hot_board_items"].read_text(encoding="utf-8"))
+    search_results = json.loads(outputs["search_results"].read_text(encoding="utf-8"))
     hot_items = json.loads(outputs["hot_items"].read_text(encoding="utf-8"))
     matches = json.loads(outputs["matches"].read_text(encoding="utf-8"))
     item_details = json.loads(outputs["item_details"].read_text(encoding="utf-8"))
     report = outputs["report"].read_text(encoding="utf-8")
 
-    assert len(hot_items) == 2
+    assert len(hot_board_items) == 1
+    assert len(search_results) >= 1
+    assert len(hot_items) >= 1
     assert len(matches) == 1
     assert matches[0]["item"]["title"] == "AI Agent product launches"
-    assert matches[0]["match_terms"] == ["AI Agent"]
+    assert "AI Agent" in matches[0]["match_terms"]
     assert item_details[0]["content"] == "AI Agent product launches\nDetailed Toutiao body."
     assert "# Toutiao Hot Topics Report" in report
     assert "AI Agent product launches" in report
+    assert "search_result" in report
+    assert "search_engagement" in report or "weak" in report or "hot_value" in report

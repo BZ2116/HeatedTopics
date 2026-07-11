@@ -4,7 +4,7 @@
   "domains": ["tech", "ai"],
   "audience": ["developers"],
   "content_modes": ["tutorial", "analysis", "case_study"],
-  "preferred_platforms": ["juejin", "bilibili", "baidu"],
+  "preferred_platforms": ["juejin", "bilibili", "baidu", "toutiao"],
   "core_keywords": ["AI Agent", "MCP", "RAG"],
   "entity_keywords": ["OpenAI", "Claude Code", "Cursor"],
   "excluded_keywords": ["celebrity gossip", "unverified rumor"]

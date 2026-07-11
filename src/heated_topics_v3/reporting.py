@@ -51,6 +51,8 @@ def _render_platform_report(
                 f"- URL: {item.url}",
                 f"- Rank: {item.rank}",
                 f"- Heat: {item.heat.value} ({item.heat.metric_name})",
+                f"- Source: {item.raw_payload.get('source_kind', item.platform)}",
+                f"- Heat signal: {item.raw_payload.get('heat_signal_strength', item.heat.metric_name)}",
                 f"- Score: {match.relevance_score}",
                 f"- Match terms: {', '.join(match.match_terms)}",
                 f"- Detail status: {_detail_status(detail)}",
