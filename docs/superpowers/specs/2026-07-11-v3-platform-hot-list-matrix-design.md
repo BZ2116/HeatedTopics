@@ -27,13 +27,22 @@ Initial target platforms:
 
 | Platform | Priority | Expected Value | Initial Feasibility |
 | --- | --- | --- | --- |
+| Juejin | First batch | Tech, AI, developer topics | Medium to high; stable interface direction |
+| Bilibili | First batch | Video culture, youth topics, entertainment, tech videos | Medium to high; rankings and video metrics are useful |
+| Baidu Hot Search | First batch | General public search demand | High; suitable as a baseline source |
 | Weibo | High | Public events, entertainment, society, fast-moving public discussion | Medium; hot list can be collected, richer details may need login state |
 | Toutiao | High | News, public events, social topics | Medium; hot list or public pages need verification |
-| Xiaohongshu | High | Lifestyle, consumer, local life, creator-friendly topics | Low to medium; likely needs login state or third-party support |
-| Juejin | Medium | Tech, AI, developer topics | Medium to high; easier than social platforms |
-| Bilibili | High | Video culture, youth topics, entertainment, tech videos | Medium to high; rankings and video metrics are useful |
 | Zhihu | Medium | Question-led public discussion and knowledge topics | Medium; useful but topic meaning may require detail reading |
-| Baidu Hot Search | High | General public search demand | High; suitable as a baseline source |
+
+Xiaohongshu is intentionally excluded from V3 collection in this project because another project already handles it.
+
+## Platform Batches
+
+V3 collection order:
+
+1. First batch: `juejin`, `bilibili`, `baidu`.
+2. Second batch: `weibo`, `toutiao`, `zhihu`.
+3. Excluded: `xiaohongshu`, because it is handled by an external project.
 
 ## Alternatives Considered
 
@@ -74,6 +83,7 @@ V3 does not include:
 - Paid data provider integration unless it is later selected deliberately.
 - Search-engine-driven topic discovery as the main source.
 - Aggressive scraping of login-protected pages.
+- Xiaohongshu collection in this project.
 
 ## Data Model
 
@@ -81,7 +91,7 @@ Every platform provider should produce a normalized `HotTopic`-like record:
 
 | Field | Meaning |
 | --- | --- |
-| `platform` | Source platform, such as `weibo`, `toutiao`, `xiaohongshu`, `juejin`, `bilibili` |
+| `platform` | Source platform, such as `juejin`, `bilibili`, `baidu`, `weibo`, `toutiao`, `zhihu` |
 | `source_name` | Human-readable source name |
 | `title` | Hot topic title |
 | `rank` | Current rank when available |
@@ -208,16 +218,13 @@ V3 does not need to solve every blocked platform. A blocked or partially availab
 
 Start with the smallest useful provider set:
 
-1. Baidu hot search as baseline.
-2. Weibo hot search as high-value social signal.
-3. Bilibili ranking as content heat signal.
-4. Juejin hot list as tech vertical signal.
-5. Xiaohongshu as a feasibility probe, even if it only returns partial or blocked status.
+1. Juejin hot list as tech vertical signal.
+2. Bilibili ranking as content heat signal.
+3. Baidu hot search as baseline.
 
-After this slice produces a report, decide whether to add Toutiao and Zhihu directly or through a third-party aggregator.
+After this slice produces a report, add Weibo, Toutiao, and Zhihu as the second batch.
 
 ## Open Decisions For Review
 
-1. Whether V3 should include Toutiao and Zhihu in the first test run or add them after the first provider slice.
-2. Whether Xiaohongshu should be attempted through public pages first or marked as login/browser-dependent from the start.
-3. Whether cross-platform topic scoring should be included in V3 test output or deferred until stable collection is confirmed.
+1. Whether cross-platform topic scoring should be included in V3 test output or deferred until stable collection is confirmed.
+2. Whether Toutiao should be collected directly from public pages or through an aggregator if the public page proves unstable.

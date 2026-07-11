@@ -8,6 +8,9 @@ from src.core_pipeline.source_registry import (
     REQUIRED_DETAIL_PLATFORMS,
     DETAIL_ENABLED_PLATFORMS,
     DETAIL_PLATFORM_LIMITS,
+    V3_EXCLUDED_PLATFORMS,
+    V3_PLATFORM_BATCHES,
+    V3_PLATFORM_ORDER,
     platform_detail_enabled,
     route_role,
 )
@@ -52,6 +55,23 @@ class SourceRegistryTests(unittest.TestCase):
         assert DETAIL_PLATFORM_LIMITS["weibo"] <= 20
         assert DETAIL_PLATFORM_LIMITS["xiaohongshu"] <= 20
         assert DETAIL_PLATFORM_LIMITS["baidu"] <= 80
+
+    def test_v3_platform_batches_follow_stability_first_order(self):
+        assert V3_PLATFORM_BATCHES == {
+            "stable_interface_first": ("juejin", "bilibili", "baidu"),
+            "secondary_public_hot_lists": ("weibo", "toutiao", "zhihu"),
+        }
+        assert V3_PLATFORM_ORDER == (
+            "juejin",
+            "bilibili",
+            "baidu",
+            "weibo",
+            "toutiao",
+            "zhihu",
+        )
+        assert V3_EXCLUDED_PLATFORMS == {
+            "xiaohongshu": "handled_by_external_project",
+        }
 
 
 if __name__ == "__main__":

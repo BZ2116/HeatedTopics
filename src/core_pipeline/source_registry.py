@@ -2,6 +2,21 @@ REQUIRED_DETAIL_PLATFORMS = ("weibo", "xiaohongshu", "baidu")
 
 PRIMARY_HOT_ROUTES = ("weibo", "xiaohongshu", "baidu")
 
+V3_PLATFORM_BATCHES = {
+    "stable_interface_first": ("juejin", "bilibili", "baidu"),
+    "secondary_public_hot_lists": ("weibo", "toutiao", "zhihu"),
+}
+
+V3_PLATFORM_ORDER = tuple(
+    platform
+    for batch in V3_PLATFORM_BATCHES.values()
+    for platform in batch
+)
+
+V3_EXCLUDED_PLATFORMS = {
+    "xiaohongshu": "handled_by_external_project",
+}
+
 DAILYHOT_ROUTE_GROUPS = {
     "core_discovery": (
         "weibo",
