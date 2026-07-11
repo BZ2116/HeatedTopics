@@ -1,6 +1,8 @@
 import json
 
 from heated_topics_v3.providers.juejin import JUEJIN_HOT_RANK_URL, fetch_juejin_hot_items, parse_juejin_rank_response
+from heated_topics_v3.matching import match_hot_item_to_queries
+from heated_topics_v3.contracts import TopicQuery
 
 
 def test_parse_juejin_rank_response_maps_ranked_articles_to_hot_items():
@@ -74,3 +76,40 @@ def test_fetch_juejin_hot_items_uses_rank_url_and_injected_fetcher():
     )
 
     assert items == []
+
+
+def test_juejin_hot_item_can_be_matched_with_profile_query():
+    items = parse_juejin_rank_response(
+        json.dumps(
+            {
+                "err_no": 0,
+                "data": [
+                    {
+                        "content": {
+                            "content_id": "1",
+                            "title": "AI Agent workflow with MCP",
+                            "brief": "",
+                            "category_id": "tech",
+                        },
+                        "content_counter": {"hot_rank": 100},
+                    }
+                ],
+            }
+        ),
+        fetched_at="2026-07-11T13:28:53+08:00",
+    )
+    query = TopicQuery(
+        query_id="tech_ai_creator_q_001_core_hot",
+        profile_id="tech_ai_creator",
+        query="AI Agent MCP",
+        intent="profile_core_hot",
+        target_platforms=("juejin",),
+        keywords=("AI Agent", "MCP"),
+        usage="filter_and_enrich_hot_lists",
+        priority=100,
+    )
+
+    result = match_hot_item_to_queries(items[0], (query,))
+
+    assert result.item.matched_query_ids == ("tech_ai_creator_q_001_core_hot",)
+    assert result.match_terms == ("AI Agent", "MCP")

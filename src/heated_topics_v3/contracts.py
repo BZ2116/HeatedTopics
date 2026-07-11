@@ -71,3 +71,12 @@ class ReportBundle:
     hot_items: tuple[HotItem, ...]
     topic_clusters: tuple[TopicCluster, ...]
     report_markdown: str
+
+
+@dataclass(frozen=True)
+class MatchResult:
+    item: HotItem
+    match_terms: tuple[str, ...]
+    excluded_terms: tuple[str, ...]
+    relevance_score: int
+    is_relevant: bool
