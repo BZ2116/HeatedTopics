@@ -25,7 +25,7 @@ Use the same flow for every platform unless a platform limitation makes one step
 5. Match `HotItem` records against `TopicQuery`.
 6. Fetch detailed information for matched items.
 7. Normalize details into `ItemDetail`.
-8. Write source-specific datasets under the user profile output directory.
+8. Write matched hot items, article text files, and report under the user profile output directory.
 9. Render a human-readable report.
 
 The user profile is still converted into queries even when the source itself does not require a query. Queries are used for matching, scoring, report context, and later cross-platform clustering.
@@ -39,11 +39,9 @@ outputs/
   {profile_id}/
     {source_id}/
       run_{YYYYMMDD_HHMMSS}/
-        profile.json
-        queries.json
         hot_items.json
-        matches.json
-        item_details.json
+        article_texts/
+          001_{title}.txt
         report.md
 ```
 
@@ -54,13 +52,15 @@ outputs/
   tech_ai_creator/
     juejin/
       run_20260711_132853/
-        profile.json
-        queries.json
         hot_items.json
-        matches.json
-        item_details.json
+        article_texts/
+          001_AI Agent workflow with MCP.txt
         report.md
 ```
+
+`hot_items.json` contains only the matched or query-derived hot items for the profile. It does not store every raw platform hot-list row.
+
+Article body text is written into `article_texts/*.txt`, one file per matched article. Images are intentionally ignored in this version.
 
 ## Required Data Objects
 
@@ -97,12 +97,11 @@ Observed live behavior:
 - The article page fallback works and can extract usable article body text.
 - The fallback parser must remove `style` and `script` content to avoid CSS or page state leaking into article content.
 
-Latest smoke-test result:
+Current output rule:
 
-- `hot_items.json`: 50 Juejin hot-list records.
-- `matches.json`: 6 profile-matched records.
-- `item_details.json`: 6 detail records.
-- Detail method used in the smoke test: `juejin_article_page`.
+- `hot_items.json`: matched Juejin records only, enriched with match metadata and article text file path.
+- `article_texts/*.txt`: one text file per matched Juejin article.
+- `report.md`: human-readable summary.
 
 ## Platform Adapter Checklist
 
@@ -146,4 +145,3 @@ Each platform implementation should include:
 - Pipeline tests for output layout and required files.
 - One CLI command that runs the whole flow for a user profile.
 - A live smoke test recorded in the platform report or implementation notes.
-

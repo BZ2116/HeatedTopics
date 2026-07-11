@@ -76,30 +76,29 @@ def test_run_juejin_pipeline_writes_dataset_and_report(tmp_path: Path):
     )
 
     run_dir = tmp_path / "outputs" / "tech_ai_creator" / "juejin" / "run_20260711_132853"
-    assert set(outputs) == {"profile", "queries", "hot_items", "matches", "item_details", "report"}
-    assert all(path.parent == run_dir for path in outputs.values())
-    assert outputs["profile"].name == "profile.json"
-    assert outputs["queries"].name == "queries.json"
+    assert set(outputs) == {"article_texts", "hot_items", "report"}
+    assert outputs["article_texts"] == run_dir / "article_texts"
+    assert outputs["hot_items"].parent == run_dir
+    assert outputs["report"].parent == run_dir
     assert outputs["hot_items"].name == "hot_items.json"
-    assert outputs["matches"].name == "matches.json"
-    assert outputs["item_details"].name == "item_details.json"
     assert outputs["report"].name == "report.md"
 
-    profile = json.loads(outputs["profile"].read_text(encoding="utf-8"))
-    queries = json.loads(outputs["queries"].read_text(encoding="utf-8"))
     hot_items = json.loads(outputs["hot_items"].read_text(encoding="utf-8"))
-    matches = json.loads(outputs["matches"].read_text(encoding="utf-8"))
-    item_details = json.loads(outputs["item_details"].read_text(encoding="utf-8"))
     report = outputs["report"].read_text(encoding="utf-8")
+    text_files = sorted(outputs["article_texts"].glob("*.txt"))
 
-    assert profile["profile_id"] == "tech_ai_creator"
-    assert queries[0]["profile_id"] == "tech_ai_creator"
-    assert len(hot_items) == 2
-    assert len(matches) == 1
-    assert matches[0]["item"]["title"] == "AI Agent workflow with MCP"
-    assert matches[0]["match_terms"] == ["AI Agent", "MCP"]
-    assert item_details[0]["item_id"] == "juejin_1"
-    assert item_details[0]["content"] == "Detailed MCP workflow content."
-    assert item_details[0]["extraction_method"] == "juejin_detail_api"
+    assert len(hot_items) == 1
+    assert hot_items[0]["item"]["title"] == "AI Agent workflow with MCP"
+    assert hot_items[0]["match_terms"] == ["AI Agent", "MCP"]
+    assert hot_items[0]["detail"]["fetch_status"] == "success"
+    assert hot_items[0]["detail"]["extraction_method"] == "juejin_detail_api"
+    assert hot_items[0]["detail"]["content_chars"] == len("Detailed MCP workflow content.")
+    assert hot_items[0]["detail"]["txt_path"] == "article_texts/001_AI Agent workflow with MCP.txt"
+    assert len(text_files) == 1
+    assert text_files[0].name == "001_AI Agent workflow with MCP.txt"
+    text = text_files[0].read_text(encoding="utf-8")
+    assert "Title: AI Agent workflow with MCP" in text
+    assert "Platform: juejin" in text
+    assert "Detailed MCP workflow content." in text
     assert "# Juejin Hot Topics Report" in report
     assert "AI Agent workflow with MCP" in report

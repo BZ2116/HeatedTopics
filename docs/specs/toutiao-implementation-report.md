@@ -97,28 +97,24 @@ Current live behavior:
 
 Full detail extraction may require browser automation or an authenticated/session-supported strategy.
 
-The current pipeline fetches details for the top 10 matched items only. This prevents query-driven searches from spending too much time on slow Toutiao redirect/detail pages.
-
 ## Output Layout
 
-Toutiao follows the same profile/source/run layout as Juejin, with two extra source files:
+Toutiao follows the same simplified profile/source/run layout as Juejin:
 
 ```text
 outputs/
   {profile_id}/
     toutiao/
       run_{YYYYMMDD_HHMMSS}/
-        profile.json
-        queries.json
-        hot_board_items.json
-        search_results.json
         hot_items.json
-        matches.json
-        item_details.json
+        article_texts/
+          001_{title}.txt
         report.md
 ```
 
-`hot_items.json` is the final merged candidate list used for matching and reporting.
+`hot_items.json` is the final matched/query-derived candidate list used for reporting. Raw search results and raw hot board rows are used internally but are not written as separate run files.
+
+`article_texts/*.txt` stores one plain-text file per matched article. Images are intentionally ignored.
 
 Latest smoke-test output:
 
@@ -128,11 +124,9 @@ outputs/tech_ai_creator/toutiao/run_20260711_152000/
 
 Latest smoke-test result:
 
-- `hot_board_items.json`: 50 records.
-- `search_results.json`: 8 records.
 - `hot_items.json`: 8 records.
-- `matches.json`: 8 records.
-- `item_details.json`: 8 records.
+- `article_texts/*.txt`: 8 records.
+- `report.md`: 1 report.
 
 All 8 matches in the latest smoke test used `search_keyword_hit` with `search_rank` weak heat. This confirms the keyword-driven flow runs end to end, but also shows that the current public search JSON often exposes result existence more reliably than detailed ranking metrics.
 

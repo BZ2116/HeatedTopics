@@ -74,34 +74,25 @@ def test_run_toutiao_pipeline_writes_dataset_and_report(tmp_path: Path):
     )
 
     run_dir = tmp_path / "outputs" / "tech_ai_creator" / "toutiao" / "run_20260711_145000"
-    assert set(outputs) == {
-        "profile",
-        "queries",
-        "hot_board_items",
-        "search_results",
-        "hot_items",
-        "matches",
-        "item_details",
-        "report",
-    }
-    assert all(path.parent == run_dir for path in outputs.values())
-    assert outputs["hot_board_items"].name == "hot_board_items.json"
-    assert outputs["search_results"].name == "search_results.json"
+    assert set(outputs) == {"article_texts", "hot_items", "report"}
+    assert outputs["article_texts"] == run_dir / "article_texts"
+    assert outputs["hot_items"].parent == run_dir
+    assert outputs["report"].parent == run_dir
 
-    hot_board_items = json.loads(outputs["hot_board_items"].read_text(encoding="utf-8"))
-    search_results = json.loads(outputs["search_results"].read_text(encoding="utf-8"))
     hot_items = json.loads(outputs["hot_items"].read_text(encoding="utf-8"))
-    matches = json.loads(outputs["matches"].read_text(encoding="utf-8"))
-    item_details = json.loads(outputs["item_details"].read_text(encoding="utf-8"))
     report = outputs["report"].read_text(encoding="utf-8")
+    text_files = sorted(outputs["article_texts"].glob("*.txt"))
 
-    assert len(hot_board_items) == 1
-    assert len(search_results) >= 1
-    assert len(hot_items) >= 1
-    assert len(matches) == 1
-    assert matches[0]["item"]["title"] == "AI Agent product launches"
-    assert "AI Agent" in matches[0]["match_terms"]
-    assert item_details[0]["content"] == "AI Agent product launches\nDetailed Toutiao body."
+    assert len(hot_items) == 1
+    assert hot_items[0]["item"]["title"] == "AI Agent product launches"
+    assert "AI Agent" in hot_items[0]["match_terms"]
+    assert hot_items[0]["detail"]["txt_path"] == "article_texts/001_AI Agent product launches.txt"
+    assert len(text_files) == 1
+    assert text_files[0].name == "001_AI Agent product launches.txt"
+    text = text_files[0].read_text(encoding="utf-8")
+    assert "Title: AI Agent product launches" in text
+    assert "Platform: toutiao" in text
+    assert "AI Agent product launches\nDetailed Toutiao body." in text
     assert "# Toutiao Hot Topics Report" in report
     assert "AI Agent product launches" in report
     assert "search_result" in report
