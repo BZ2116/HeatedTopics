@@ -6,7 +6,8 @@ from heated_topics_v3.contracts import MatchResult, UserProfile
 from heated_topics_v3.matching import match_hot_item_to_queries
 from heated_topics_v3.profile_queries import build_topic_queries
 from heated_topics_v3.providers.juejin import fetch_juejin_hot_items, fetch_juejin_item_detail
-from heated_topics_v3.reporting import render_juejin_report
+from heated_topics_v3.providers.toutiao import fetch_toutiao_hot_items, fetch_toutiao_item_detail
+from heated_topics_v3.reporting import render_juejin_report, render_toutiao_report
 from heated_topics_v3.serialization import to_plain_data
 
 
@@ -17,20 +18,70 @@ def run_juejin_pipeline(
     fetcher: Callable[[str, int], str] | None = None,
     detail_fetcher: Callable[[str, int, dict[str, str] | None], str] | None = None,
 ) -> dict[str, Path]:
+    return _run_platform_pipeline(
+        profile_path=profile_path,
+        output_root=output_root,
+        fetched_at=fetched_at,
+        source_id="juejin",
+        hot_items_fetcher=lambda fetched_at: fetch_juejin_hot_items(
+            fetched_at=fetched_at,
+            fetcher=fetcher,
+        ),
+        item_detail_fetcher=lambda item: fetch_juejin_item_detail(
+            item,
+            fetcher=detail_fetcher,
+        ),
+        report_renderer=render_juejin_report,
+    )
+
+
+def run_toutiao_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    fetcher: Callable[[str, int], str] | None = None,
+    detail_fetcher: Callable[[str, int], str] | None = None,
+) -> dict[str, Path]:
+    return _run_platform_pipeline(
+        profile_path=profile_path,
+        output_root=output_root,
+        fetched_at=fetched_at,
+        source_id="toutiao",
+        hot_items_fetcher=lambda fetched_at: fetch_toutiao_hot_items(
+            fetched_at=fetched_at,
+            fetcher=fetcher,
+        ),
+        item_detail_fetcher=lambda item: fetch_toutiao_item_detail(
+            item,
+            fetcher=detail_fetcher,
+        ),
+        report_renderer=render_toutiao_report,
+    )
+
+
+def _run_platform_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    source_id: str,
+    hot_items_fetcher,
+    item_detail_fetcher,
+    report_renderer,
+) -> dict[str, Path]:
     profile = load_user_profile(profile_path)
     queries = tuple(build_topic_queries(profile))
-    hot_items = fetch_juejin_hot_items(fetched_at=fetched_at, fetcher=fetcher)
+    hot_items = hot_items_fetcher(fetched_at)
     matches = [
         result
         for item in hot_items
         if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
     ]
     item_details = [
-        fetch_juejin_item_detail(match.item, fetcher=detail_fetcher)
+        item_detail_fetcher(match.item)
         for match in matches
     ]
 
-    output_dir = _run_output_dir(output_root, profile.profile_id, "juejin", fetched_at)
+    output_dir = _run_output_dir(output_root, profile.profile_id, source_id, fetched_at)
     output_dir.mkdir(parents=True, exist_ok=True)
     profile_path_out = output_dir / "profile.json"
     queries_path = output_dir / "queries.json"
@@ -45,7 +96,7 @@ def run_juejin_pipeline(
     _write_json(matches_path, matches)
     _write_json(item_details_path, item_details)
     report_path.write_text(
-        render_juejin_report(profile, matches, fetched_at, item_details),
+        report_renderer(profile, matches, fetched_at, item_details),
         encoding="utf-8",
     )
 

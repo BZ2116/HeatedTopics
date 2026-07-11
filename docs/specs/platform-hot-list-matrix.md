@@ -9,7 +9,7 @@ First batch:
 Second batch:
 
 1. `weibo`
-2. `toutiao`
+2. `toutiao` - hot-list JSON implemented; full detail needs browser/session support.
 3. `zhihu`
 
 Excluded:

@@ -7,9 +7,28 @@ def render_juejin_report(
     fetched_at: str,
     item_details: list[ItemDetail] | None = None,
 ) -> str:
+    return _render_platform_report("Juejin Hot Topics Report", profile, matches, fetched_at, item_details)
+
+
+def render_toutiao_report(
+    profile: UserProfile,
+    matches: list[MatchResult],
+    fetched_at: str,
+    item_details: list[ItemDetail] | None = None,
+) -> str:
+    return _render_platform_report("Toutiao Hot Topics Report", profile, matches, fetched_at, item_details)
+
+
+def _render_platform_report(
+    title: str,
+    profile: UserProfile,
+    matches: list[MatchResult],
+    fetched_at: str,
+    item_details: list[ItemDetail] | None = None,
+) -> str:
     details_by_item_id = {detail.item_id: detail for detail in item_details or []}
     lines = [
-        "# Juejin Hot Topics Report",
+        f"# {title}",
         "",
         f"- Profile: {profile.display_name} (`{profile.profile_id}`)",
         f"- Fetched at: {fetched_at}",
