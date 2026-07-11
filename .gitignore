@@ -22,6 +22,7 @@ tools/start-dailyhot-api.js
 # Generated outputs (created at runtime)
 data/
 reports/_archive/
+outputs/
 data/*.json
 reports/daily_digest_demo.md
 reports/daily_digest_demo.html
