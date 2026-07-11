@@ -14,6 +14,8 @@
 - Second batch platforms are exactly `weibo`, `toutiao`, `zhihu`.
 - `xiaohongshu` is excluded because another project already handles it.
 - Search engines are not the primary V3 discovery source.
+- User profiles must generate `TopicQuery` records even when platform hot-list collection itself does not require a query.
+- V3 uses generated queries to filter, match, score, and enrich hot-list records.
 - Providers must preserve raw payloads for debugging.
 - Providers must return structured failure statuses instead of breaking the full run.
 - Do not implement captcha bypass, account evasion, fingerprint tricks, proxy rotation, or aggressive scraping of login-protected pages.
@@ -28,6 +30,8 @@
   Locks the V3 platform list and order.
 - Create: `src/core_pipeline/v3_hot_matrix/types.py`
   Defines normalized V3 hot topic and provider result data structures.
+- Create: `src/core_pipeline/v3_hot_matrix/query_contract.py`
+  Defines `UserProfile`, `TopicQuery`, and profile-to-query generation.
 - Create: `src/core_pipeline/v3_hot_matrix/providers.py`
   Implements first-batch providers for Juejin, Bilibili, and Baidu.
 - Create: `src/core_pipeline/v3_hot_matrix/run.py`
@@ -105,14 +109,81 @@ Run: `uv run pytest tests/core_pipeline/test_source_registry.py::SourceRegistryT
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core_pipeline/source_registry.py tests/core_pipeline/test_source_registry.py docs/superpowers/specs/2026-07-11-v3-platform-hot-list-matrix-design.md docs/superpowers/plans/2026-07-11-v3-platform-hot-list-matrix.md
 git commit -m "feat: define V3 platform collection order"
 ```
 
-### Task 2: V3 Normalized Types
+### Task 2: V3 Query Contract
+
+**Files:**
+- Create: `src/core_pipeline/v3_hot_matrix/__init__.py`
+- Create: `src/core_pipeline/v3_hot_matrix/query_contract.py`
+- Create: `tests/core_pipeline/v3_hot_matrix/test_query_contract.py`
+
+**Interfaces:**
+- Produces: `UserProfile`
+- Produces: `TopicQuery`
+- Produces: `build_topic_queries(profile: UserProfile) -> list[TopicQuery]`
+
+- [x] **Step 1: Write the failing test**
+
+```python
+from src.core_pipeline.v3_hot_matrix.query_contract import UserProfile, build_topic_queries
+
+
+def test_build_topic_queries_keeps_profile_context_for_hot_list_filtering():
+    profile = UserProfile(
+        profile_id="tech_ai_creator",
+        display_name="Tech AI Creator",
+        domains=("tech", "ai"),
+        audience=("developers",),
+        content_modes=("tutorial", "analysis"),
+        preferred_platforms=("juejin", "bilibili", "baidu"),
+        core_keywords=("AI Agent", "MCP", "RAG"),
+        entity_keywords=("OpenAI", "Claude Code"),
+        excluded_keywords=("celebrity gossip",),
+    )
+
+    queries = build_topic_queries(profile)
+
+    assert [query.query_id for query in queries] == [
+        "tech_ai_creator_q_001_core_hot",
+        "tech_ai_creator_q_002_entity_hot",
+    ]
+    assert queries[0].query == "AI Agent MCP RAG"
+    assert queries[0].target_platforms == ("juejin", "bilibili", "baidu")
+    assert queries[0].usage == "filter_and_enrich_hot_lists"
+    assert queries[1].query == "OpenAI Claude Code"
+    assert queries[1].profile_id == "tech_ai_creator"
+```
+
+- [x] **Step 2: Run test to verify it fails**
+
+Run: `uv run pytest tests/core_pipeline/v3_hot_matrix/test_query_contract.py -q`
+
+Expected: FAIL because `src.core_pipeline.v3_hot_matrix.query_contract` does not exist.
+
+- [x] **Step 3: Write minimal implementation**
+
+Create frozen dataclasses for `UserProfile` and `TopicQuery`, then generate core-keyword and entity-keyword queries with `usage="filter_and_enrich_hot_lists"`.
+
+- [x] **Step 4: Run test to verify it passes**
+
+Run: `uv run pytest tests/core_pipeline/v3_hot_matrix/test_query_contract.py -q`
+
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/core_pipeline/v3_hot_matrix/__init__.py src/core_pipeline/v3_hot_matrix/query_contract.py tests/core_pipeline/v3_hot_matrix/test_query_contract.py docs/superpowers/specs/2026-07-11-v3-platform-hot-list-matrix-design.md docs/superpowers/plans/2026-07-11-v3-platform-hot-list-matrix.md
+git commit -m "feat: add V3 query contract"
+```
+
+### Task 3: V3 Normalized Types
 
 **Files:**
 - Create: `src/core_pipeline/v3_hot_matrix/__init__.py`
@@ -186,7 +257,7 @@ git add src/core_pipeline/v3_hot_matrix tests/core_pipeline/v3_hot_matrix/test_t
 git commit -m "feat: add V3 hot matrix data types"
 ```
 
-### Task 3: First-Batch Provider Extraction
+### Task 4: First-Batch Provider Extraction
 
 **Files:**
 - Create: `src/core_pipeline/v3_hot_matrix/providers.py`
@@ -241,7 +312,7 @@ git add src/core_pipeline/v3_hot_matrix/providers.py tests/core_pipeline/v3_hot_
 git commit -m "feat: add V3 first batch providers"
 ```
 
-### Task 4: V3 Report Rendering
+### Task 5: V3 Report Rendering
 
 **Files:**
 - Create: `src/core_pipeline/v3_hot_matrix/render.py`
@@ -302,7 +373,7 @@ git add src/core_pipeline/v3_hot_matrix/render.py tests/core_pipeline/v3_hot_mat
 git commit -m "feat: render V3 platform hot matrix report"
 ```
 
-### Task 5: V3 CLI Smoke Run
+### Task 6: V3 CLI Smoke Run
 
 **Files:**
 - Create: `src/core_pipeline/v3_hot_matrix/run.py`

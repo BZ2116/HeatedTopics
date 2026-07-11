@@ -17,6 +17,8 @@ The previous search-driven path can find related pages, but search results are n
 
 V3 treats platform hot lists as the primary source of heat. Popular platforms already rank content using user behavior such as searches, views, comments, shares, likes, and publishing velocity. Their hot lists are therefore better first-layer signals than generic search result pages.
 
+User profile data still produces topic queries. These queries do not have to drive every platform collection request. For sources such as Juejin, Bilibili, and Baidu hot search, V3 can collect the hot list first and then use the generated queries to filter, match, score, and enrich the collected records.
+
 ## Recommended Approach
 
 Use a platform-by-platform hot-list collector.
@@ -87,6 +89,43 @@ V3 does not include:
 
 ## Data Model
 
+V3 has three input and output contract layers:
+
+1. `UserProfile`: describes the creator or user who needs topic recommendations.
+2. `TopicQuery`: derived from the user profile and used for filtering, matching, and enrichment.
+3. `HotTopic`: collected platform hot-list record with heat metrics and detail fields.
+
+### UserProfile
+
+| Field | Meaning |
+| --- | --- |
+| `profile_id` | Stable profile ID |
+| `display_name` | Human-readable profile name |
+| `domains` | Target domains, such as `tech`, `ai`, `finance`, `education` |
+| `audience` | Intended audience tags |
+| `content_modes` | Preferred content forms, such as `tutorial`, `analysis`, `case_study` |
+| `preferred_platforms` | Platforms that should be prioritized for this profile |
+| `core_keywords` | Main topic keywords |
+| `entity_keywords` | People, products, companies, frameworks, or project names |
+| `excluded_keywords` | Keywords that should reduce or block relevance |
+
+### TopicQuery
+
+`TopicQuery` is required even when a platform hot list can be collected without a query. Its first job is to carry user intent into filtering and enrichment.
+
+| Field | Meaning |
+| --- | --- |
+| `query_id` | Stable query ID |
+| `profile_id` | Source user profile |
+| `query` | Search or matching text generated from the profile |
+| `intent` | Why this query exists, such as `profile_core_hot` or `profile_entity_hot` |
+| `target_platforms` | Platforms where this query should be applied |
+| `keywords` | Keywords that produced the query |
+| `usage` | `filter_and_enrich_hot_lists` for V3 |
+| `priority` | Query priority for matching and follow-up enrichment |
+
+### HotTopic
+
 Every platform provider should produce a normalized `HotTopic`-like record:
 
 | Field | Meaning |
@@ -100,6 +139,7 @@ Every platform provider should produce a normalized `HotTopic`-like record:
 | `url` | Source URL or topic URL |
 | `summary` | Short description, if available |
 | `category` | Platform section or route, if available |
+| `matched_query_ids` | Profile-derived queries that matched this record |
 | `collected_at` | Collection timestamp |
 | `fetch_status` | `success`, `partial`, `blocked`, `login_required`, `rate_limited`, or `failed` |
 | `raw_payload` | Original platform payload or extracted row |
@@ -123,8 +163,11 @@ The report should explain the reason for the rating, not only the letter.
 
 ```text
 platform provider list
+-> load user profile
+-> generate topic queries
 -> collect records from each provider
 -> normalize hot topic fields
+-> match hot topics against topic queries
 -> save raw records
 -> save normalized records
 -> cluster duplicate topics across platforms
