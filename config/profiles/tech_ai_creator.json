@@ -1,0 +1,11 @@
+{
+  "profile_id": "tech_ai_creator",
+  "display_name": "Tech AI Creator",
+  "domains": ["tech", "ai"],
+  "audience": ["developers"],
+  "content_modes": ["tutorial", "analysis", "case_study"],
+  "preferred_platforms": ["juejin", "bilibili", "baidu"],
+  "core_keywords": ["AI Agent", "MCP", "RAG"],
+  "entity_keywords": ["OpenAI", "Claude Code", "Cursor"],
+  "excluded_keywords": ["celebrity gossip", "unverified rumor"]
+}
