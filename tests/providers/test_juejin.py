@@ -1,8 +1,14 @@
-import json
-
-from heated_topics_v3.providers.juejin import JUEJIN_HOT_RANK_URL, fetch_juejin_hot_items, parse_juejin_rank_response
-from heated_topics_v3.matching import match_hot_item_to_queries
 from heated_topics_v3.contracts import TopicQuery
+from heated_topics_v3.matching import match_hot_item_to_queries
+from heated_topics_v3.providers.juejin import (
+    JUEJIN_ARTICLE_DETAIL_URL,
+    JUEJIN_HOT_RANK_URL,
+    fetch_juejin_hot_items,
+    fetch_juejin_item_detail,
+    parse_juejin_rank_response,
+)
+
+import json
 
 
 def test_parse_juejin_rank_response_maps_ranked_articles_to_hot_items():
@@ -76,6 +82,108 @@ def test_fetch_juejin_hot_items_uses_rank_url_and_injected_fetcher():
     )
 
     assert items == []
+
+
+def test_fetch_juejin_item_detail_prefers_detail_api():
+    items = parse_juejin_rank_response(
+        json.dumps(
+            {
+                "err_no": 0,
+                "data": [
+                    {
+                        "content": {
+                            "content_id": "1",
+                            "title": "Test",
+                            "brief": "Brief.",
+                            "category_id": "tech",
+                        },
+                        "content_counter": {"hot_rank": 100},
+                    }
+                ],
+            }
+        ),
+        fetched_at="2026-07-11T13:28:53+08:00",
+    )
+    calls = []
+
+    def fake_fetcher(url: str, timeout_seconds: int, body: dict[str, str] | None = None) -> str:
+        calls.append((url, timeout_seconds, body))
+        return json.dumps(
+            {
+                "err_no": 0,
+                "data": {
+                    "article_info": {
+                        "title": "Test",
+                        "brief_content": "Brief.",
+                        "mark_content": "## Detailed markdown\n\nFull article body.",
+                        "ctime": "1783760400",
+                    },
+                    "author_user_info": {"user_name": "Author"},
+                    "tags": [{"tag_name": "AI"}],
+                },
+            }
+        )
+
+    detail = fetch_juejin_item_detail(items[0], fetcher=fake_fetcher)
+
+    assert calls == [(JUEJIN_ARTICLE_DETAIL_URL, 20, {"article_id": "1"})]
+    assert detail.item_id == "juejin_1"
+    assert detail.title == "Test"
+    assert detail.author == "Author"
+    assert detail.tags == ("AI",)
+    assert detail.content == "## Detailed markdown\n\nFull article body."
+    assert detail.extraction_method == "juejin_detail_api"
+    assert detail.fetch_status == "success"
+
+
+def test_fetch_juejin_item_detail_falls_back_to_article_page():
+    items = parse_juejin_rank_response(
+        json.dumps(
+            {
+                "err_no": 0,
+                "data": [
+                    {
+                        "content": {
+                            "content_id": "1",
+                            "title": "Test",
+                            "brief": "Brief.",
+                            "category_id": "tech",
+                        },
+                        "content_counter": {"hot_rank": 100},
+                    }
+                ],
+            }
+        ),
+        fetched_at="2026-07-11T13:28:53+08:00",
+    )
+    calls = []
+
+    def fake_fetcher(url: str, timeout_seconds: int, body: dict[str, str] | None = None) -> str:
+        calls.append((url, body))
+        if body is not None:
+            return json.dumps({"err_no": 2, "err_msg": "参数错误", "data": None})
+        return """
+        <html>
+          <body>
+            <article>
+              <style>.markdown-body{color:red}</style>
+              <h1>Test</h1>
+              <p>Fallback article content.</p>
+              <script>window.__NUXT__ = {}</script>
+            </article>
+          </body>
+        </html>
+        """
+
+    detail = fetch_juejin_item_detail(items[0], fetcher=fake_fetcher)
+
+    assert calls == [
+        (JUEJIN_ARTICLE_DETAIL_URL, {"article_id": "1"}),
+        ("https://juejin.cn/post/1", None),
+    ]
+    assert detail.content == "Test\nFallback article content."
+    assert detail.extraction_method == "juejin_article_page"
+    assert detail.fetch_status == "success"
 
 
 def test_juejin_hot_item_can_be_matched_with_profile_query():

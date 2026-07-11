@@ -53,6 +53,21 @@ class HotItem:
 
 
 @dataclass(frozen=True)
+class ItemDetail:
+    item_id: str
+    platform: str
+    url: str
+    title: str
+    author: str
+    content: str
+    published_at: str
+    tags: tuple[str, ...]
+    extraction_method: str
+    fetch_status: str
+    raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class TopicCluster:
     topic_id: str
     canonical_title: str
