@@ -198,10 +198,16 @@ def build_v1_recommendations(
 ) -> tuple[RecommendationItem, ...]:
     """Build matched Toutiao then Juejin recommendations without cross-platform dedup."""
     recommendations: list[RecommendationItem] = []
+    board_items_by_id = {item.item_id: item for item in toutiao_board}
     for item in merge_toutiao_results(toutiao_board, toutiao_search):
         item_detail = details.get(item.item_id)
         evidence = item.raw_payload.get("v1_evidence", {})
         board_item_id = evidence.get("board_item_id")
+        board_item = (
+            board_items_by_id.get(str(board_item_id))
+            if board_item_id is not None
+            else None
+        )
         board_detail = (
             details.get(str(board_item_id)) if board_item_id is not None else None
         )
@@ -212,10 +218,16 @@ def build_v1_recommendations(
             profile, item, board_detail
         ):
             matched_detail = board_detail
+        elif board_item is not None and matches_primary_keyword(
+            profile, board_item, board_detail
+        ):
+            matched_detail = item_detail if item_detail is not None else board_detail
         else:
             continue
 
-        if matched_detail is None and board_detail is not None:
+        if (
+            matched_detail is None or not matched_detail.content.strip()
+        ) and board_detail is not None and board_detail.content.strip():
             matched_detail = board_detail
         heat_level = 3 if evidence.get("source_kind") == "keyword_search" else 1
         recommendations.append(_recommendation(item, matched_detail, heat_level))

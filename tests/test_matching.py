@@ -343,3 +343,76 @@ def test_empty_detail_content_falls_back_to_summary_then_title(
 
     assert recommendations[0].detail == expected_content
     assert recommendations[0].content_status == expected_status
+
+
+@pytest.mark.parametrize("board_match_field", ["title", "summary"])
+def test_overlap_keeps_official_board_text_available_for_keyword_matching(
+    board_match_field: str,
+):
+    board_item = item(
+        "toutiao_board",
+        "toutiao",
+        "普通榜单标题",
+        summary="普通榜单摘要",
+        rank=8,
+        heat_value=800,
+        raw_payload={"ClusterIdStr": "shared"},
+    )
+    board_item = replace(board_item, **{board_match_field: "官方 AI工具 语料"})
+    search_item = item(
+        "toutiao_search",
+        "toutiao",
+        "普通搜索标题",
+        summary="普通搜索摘要",
+        metric_name="search_rank",
+        raw_payload={"group_id": "shared"},
+    )
+    search_detail = detail(search_item, "普通搜索正文")
+
+    recommendations = build_v1_recommendations(
+        profile(),
+        (board_item,),
+        (search_item,),
+        (),
+        {search_item.item_id: search_detail},
+    )
+
+    assert [record.hot_item_id for record in recommendations] == ["toutiao_search"]
+    assert recommendations[0].title == search_item.title
+    assert recommendations[0].detail == search_detail.content
+    assert recommendations[0].heat_level == 1
+    assert recommendations[0].evidence["board_item_id"] == board_item.item_id
+    assert recommendations[0].evidence["overlap_method"] == "group_id"
+
+
+def test_empty_search_detail_does_not_hide_nonempty_official_board_detail():
+    board_item = item(
+        "toutiao_board",
+        "toutiao",
+        "普通榜单标题",
+        raw_payload={"ClusterIdStr": "shared"},
+    )
+    search_item = item(
+        "toutiao_search",
+        "toutiao",
+        "AI工具 搜索标题",
+        summary="搜索摘要",
+        metric_name="search_rank",
+        raw_payload={"group_id": "shared"},
+    )
+    empty_search_detail = detail(search_item, "")
+    official_detail = detail(board_item, "非空官方正文")
+
+    recommendations = build_v1_recommendations(
+        profile(),
+        (board_item,),
+        (search_item,),
+        (),
+        {
+            search_item.item_id: empty_search_detail,
+            board_item.item_id: official_detail,
+        },
+    )
+
+    assert recommendations[0].detail == official_detail.content
+    assert recommendations[0].content_status == official_detail.content_status
