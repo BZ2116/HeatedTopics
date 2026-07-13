@@ -1,11 +1,8 @@
 {
-  "profile_id": "tech_ai_creator",
-  "display_name": "Tech AI Creator",
-  "domains": ["tech", "ai"],
-  "audience": ["developers"],
-  "content_modes": ["tutorial", "analysis", "case_study"],
-  "preferred_platforms": ["juejin", "bilibili", "baidu"],
-  "core_keywords": ["AI Agent", "MCP", "RAG"],
-  "entity_keywords": ["OpenAI", "Claude Code", "Cursor"],
-  "excluded_keywords": ["celebrity gossip", "unverified rumor"]
+  "user_id": "user_001",
+  "primary_track": "人工智能",
+  "secondary_track": "AI应用与效率工具",
+  "persona": "面向普通职场人的AI工具测评博主",
+  "primary_keyword": "AI工具",
+  "updated_at": "2026-07-13T00:00:00+08:00"
 }

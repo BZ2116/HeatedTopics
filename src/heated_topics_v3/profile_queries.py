@@ -1,32 +1,42 @@
-from heated_topics_v3.contracts import TopicQuery, UserProfile
+"""Compact Qianfan web-search query construction."""
+
+from heated_topics_v3.contracts import UserProfile
 
 
-def build_topic_queries(profile: UserProfile) -> list[TopicQuery]:
-    queries: list[TopicQuery] = []
-    if profile.core_keywords:
-        queries.append(
-            TopicQuery(
-                query_id=f"{profile.profile_id}_q_001_core_hot",
-                profile_id=profile.profile_id,
-                query=" ".join(profile.core_keywords),
-                intent="profile_core_hot",
-                target_platforms=profile.preferred_platforms,
-                keywords=profile.core_keywords,
-                usage="filter_and_enrich_hot_lists",
-                priority=100,
-            )
-        )
-    if profile.entity_keywords:
-        queries.append(
-            TopicQuery(
-                query_id=f"{profile.profile_id}_q_002_entity_hot",
-                profile_id=profile.profile_id,
-                query=" ".join(profile.entity_keywords),
-                intent="profile_entity_hot",
-                target_platforms=profile.preferred_platforms,
-                keywords=profile.entity_keywords,
-                usage="filter_and_enrich_hot_lists",
-                priority=80,
-            )
-        )
-    return queries
+MAX_QIANFAN_QUERY_UNITS = 72
+
+
+def qianfan_query_units(value: str) -> int:
+    """Count ASCII characters as one API unit and non-ASCII as two."""
+    return sum(1 if character.isascii() else 2 for character in value)
+
+
+def _compact_persona_token(persona: str) -> str:
+    token = persona.strip()
+    if token.startswith("面向"):
+        token = token.removeprefix("面向").split("的", 1)[0]
+    return token[:8]
+
+
+def _truncate_to_units(value: str, limit: int) -> str:
+    units = 0
+    characters: list[str] = []
+    for character in value:
+        character_units = 1 if character.isascii() else 2
+        if units + character_units > limit:
+            break
+        characters.append(character)
+        units += character_units
+    return "".join(characters).rstrip()
+
+
+def build_qianfan_query(profile: UserProfile) -> str:
+    """Build a deduplicated profile-derived query within Qianfan's limit."""
+    candidates = (
+        profile.primary_keyword.strip(),
+        profile.secondary_track.strip(),
+        _compact_persona_token(profile.persona),
+        "最新热点",
+    )
+    tokens = list(dict.fromkeys(token for token in candidates if token))
+    return _truncate_to_units(" ".join(tokens), MAX_QIANFAN_QUERY_UNITS)
