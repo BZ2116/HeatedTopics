@@ -80,3 +80,13 @@ third was a direct article page. `collection_status.json` intentionally records
 Juejin as failed because this Toutiao-only smoke supplies a fake Juejin provider
 that always raises `RuntimeError`; it is not evidence of a production Juejin
 regression.
+
+The reviewer's exact single-long-line reproduction is also covered: the title
+followed by eight repetitions of “打开今日头条查看更多精彩内容，登录后关注作者并参与评论。”
+now degrades to `partial:RenderedContentTooShort`. Detection uses repeated UI
+marker count and character coverage, so a genuine article that mentions login
+and commenting once is still accepted. The final independent regression root is
+`smoke_data/toutiao-detail-reviewer-exact-fixed-20260713`; its three current
+Toutiao samples are 1158/12, 2976/45, and 188/4 characters/lines and all are
+`success/full_text`. Juejin was not invoked in this Toutiao-only regression, as
+recorded in its `smoke-summary.json`.

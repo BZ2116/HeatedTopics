@@ -269,6 +269,43 @@ def test_title_plus_long_login_comment_and_footer_chrome_is_not_full_text():
     assert detail.fetch_status == "partial:RenderedContentTooShort"
 
 
+def test_reviewer_exact_long_single_line_app_prompt_is_not_full_text():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    prompt = "打开今日头条查看更多精彩内容，登录后关注作者并参与评论。"
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: f"{item.title}\n{prompt * 8}",
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content == item.summary
+    assert detail.content_status == "summary"
+    assert detail.fetch_status == "partial:RenderedContentTooShort"
+
+
+def test_article_may_mention_login_and_comment_once_without_being_rejected():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    body = (
+        "报道介绍了平台治理的新规则，用户登录后可以参与评论，但这只是事件背景的一部分。"
+        "监管部门同时公布了实施时间、适用范围和申诉流程，相关企业随后确认将按期调整产品。"
+        "记者核对了公开文件与多方回应，正文包含具体事实而不是页面操作提示。"
+        "\n"
+        "第二段继续说明政策影响、行业反馈与后续安排，并列出了可核对的数据和消息来源。"
+        "受访机构表示会持续公开执行进度，避免规则变化影响普通用户正常使用服务。"
+    )
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: body,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content == body
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+
+
 def test_two_line_300_character_article_remains_full_text():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
     body = "第一段提供可核对的事件背景、时间、参与者以及事实经过。" * 7 + "\n" + "第二段继续说明事件影响、后续进展和来源信息。" * 7

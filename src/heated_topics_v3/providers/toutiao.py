@@ -537,6 +537,24 @@ def _clean_rendered_article_text(text: str) -> str:
 
 def _is_page_chrome_line(line: str) -> bool:
     compact = re.sub(r"\s+", "", line)
+    ui_markers = (
+        "打开今日头条",
+        "查看更多精彩内容",
+        "登录后",
+        "关注作者",
+        "参与评论",
+        "打开APP",
+        "下载今日头条",
+        "换一换",
+    )
+    marker_counts = tuple(compact.count(marker) for marker in ui_markers)
+    occurrences = sum(marker_counts)
+    covered_characters = sum(
+        count * len(marker) for marker, count in zip(ui_markers, marker_counts, strict=True)
+    )
+    coverage = covered_characters / max(len(compact), 1)
+    if occurrences >= 4 and max(marker_counts, default=0) >= 2 and coverage >= 0.2:
+        return True
     if len(compact) > 60:
         return False
     return bool(
