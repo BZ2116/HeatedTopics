@@ -2,6 +2,7 @@
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -58,6 +59,8 @@ class ToutiaoProvider:
     @staticmethod
     def parse_search(raw: str, collected_at: str) -> tuple[HotItem, ...]:
         payload = json.loads(raw)
+        if payload.get("dom"):
+            return _parse_search_dom(str(payload["dom"]), collected_at)
         rows = payload.get("data", [])
         cutoff = _datetime(collected_at) - timedelta(hours=24)
         items = []
@@ -74,6 +77,99 @@ class ToutiaoProvider:
             item_id = str(row.get("id") or re.sub(r"\D", "", url) or rank)
             items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, str(value), metric_name, metrics or {"search_rank": value}), str(row.get("abstract") or title), str(publication) if published else None, collected_at, row))
         return tuple(items)
+
+
+class _SearchDomParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.cards: list[dict[str, str]] = []
+        self.current: dict[str, str] | None = None
+        self.targets: list[str | None] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        attributes = dict(attrs)
+        group_id = str(attributes.get("data-group-id") or "")
+        href = str(attributes.get("href") or "")
+        href_match = re.search(r"/group/(\d+)(?:/|$)", href)
+        if href_match:
+            group_id = href_match.group(1)
+        if group_id and (self.current is None or self.current.get("group_id") != group_id):
+            self._finish_card()
+            self.current = {
+                "group_id": group_id,
+                "url": f"https://www.toutiao.com/group/{group_id}/",
+            }
+
+        target = None
+        if self.current:
+            classes = str(attributes.get("class") or "").lower()
+            if href_match or "title" in classes:
+                target = "title"
+            elif tag == "p" or "summary" in classes or "abstract" in classes:
+                target = "abstract"
+            elif "source" in classes:
+                target = "source"
+            elif tag == "time" or "time" in classes or "date" in classes:
+                publication = attributes.get("datetime") or attributes.get("data-time")
+                if publication:
+                    self.current["publish_time"] = str(publication)
+                else:
+                    target = "publish_time"
+        self.targets.append(target)
+
+    def handle_startendtag(self, tag: str, attrs) -> None:
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_data(self, data: str) -> None:
+        if not self.current:
+            return
+        target = next((value for value in reversed(self.targets) if value), None)
+        text = data.strip()
+        if target and text:
+            self.current[target] = " ".join(filter(None, (self.current.get(target), text)))
+
+    def handle_endtag(self, tag: str) -> None:
+        if self.targets:
+            self.targets.pop()
+        if tag == "article":
+            self._finish_card()
+
+    def close(self) -> None:
+        super().close()
+        self._finish_card()
+
+    def _finish_card(self) -> None:
+        if self.current and self.current.get("group_id") and self.current.get("title"):
+            self.cards.append(self.current)
+        self.current = None
+
+
+def _parse_search_dom(dom: str, collected_at: str) -> tuple[HotItem, ...]:
+    parser = _SearchDomParser()
+    parser.feed(dom)
+    parser.close()
+    cutoff = _datetime(collected_at) - timedelta(hours=24)
+    items = []
+    for rank, row in enumerate(parser.cards, 1):
+        publication = row.get("publish_time")
+        published = _optional_datetime(publication)
+        if published and published < cutoff:
+            continue
+        group_id = row["group_id"]
+        items.append(HotItem(
+            f"toutiao_{group_id}",
+            "toutiao",
+            row["title"],
+            row["url"],
+            rank,
+            HeatMetrics(rank, str(rank), "search_rank", {"search_rank": rank}),
+            row.get("abstract") or row["title"],
+            str(publication) if published else None,
+            collected_at,
+            row,
+        ))
+    return tuple(items)
 
 
 def _datetime(value) -> datetime:

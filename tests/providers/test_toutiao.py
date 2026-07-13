@@ -20,7 +20,7 @@ def test_collect_hot_list_preserves_raw_text_and_parses_heat():
     assert capture.items[1].heat.value is None
     assert client.get(TOUTIAO_HOT_BOARD_URL).status_code == 200
 
-def test_search_uses_exactly_one_keyword_classifies_engagement_and_filters_old_rows():
+def test_search_uses_exactly_one_keyword_and_parses_current_dom_cards():
     raw = (FIXTURES / "toutiao_search.json").read_text(encoding="utf-8")
     requests = []
     def handler(request):
@@ -29,9 +29,29 @@ def test_search_uses_exactly_one_keyword_classifies_engagement_and_filters_old_r
     capture = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(handler))).search("AI Agent", NOW)
     assert len(requests) == 1 and str(requests[0].url).startswith(TOUTIAO_SEARCH_URL)
     assert requests[0].url.params.get_list("keyword") == ["AI Agent"]
-    assert [item.item_id for item in capture.items] == ["toutiao_201", "toutiao_203"]
-    assert capture.items[0].heat.metric_name == "engagement"
-    assert capture.items[0].heat.metrics == {"reads": 1200, "comments": 34}
+    assert [item.item_id for item in capture.items] == [
+        "toutiao_7661817657498305030",
+        "toutiao_7661826133797487147",
+    ]
+    assert capture.items[0].title == "OpenAI 挖了苹果 400 人，到底在下一盘什么棋？"
+    assert capture.items[0].url == "https://www.toutiao.com/group/7661817657498305030/"
+    assert capture.items[0].summary.startswith("当OpenAI以400多名苹果前员工为基础")
+    assert capture.items[0].publication_time == "1783905943"
+    assert capture.items[0].raw_payload["group_id"] == "7661817657498305030"
+    assert capture.items[0].raw_payload["source"] == "人人都是产品经理"
+    assert capture.items[0].heat.metric_name == "search_rank"
+    assert capture.items[0].heat.value != json.loads(raw)["count"]
+
+
+def test_search_keeps_legacy_data_rows_as_compatibility_fallback():
+    raw = json.dumps({"count": 99, "data": [
+        {"id": "201", "title": "Fresh agent story", "url": "https://www.toutiao.com/article/201/", "abstract": "Fresh summary", "publish_time": "2026-07-13T03:00:00Z", "read_count": 1200, "comment_count": 34},
+        {"id": "202", "title": "Old agent story", "url": "https://www.toutiao.com/article/202/", "abstract": "Old summary", "publish_time": "2026-07-10T03:00:00Z"},
+    ]})
+    items = ToutiaoProvider.parse_search(raw, NOW)
+    assert [item.item_id for item in items] == ["toutiao_201"]
+    assert items[0].heat.metric_name == "engagement"
+    assert items[0].heat.metrics == {"reads": 1200, "comments": 34}
 
 def test_fetch_detail_fallback_order():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
