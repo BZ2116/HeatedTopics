@@ -28,7 +28,23 @@
 - `tests/fixtures/toutiao_search.json`
 - `.superpowers/sdd/v1-task-1-report.md`
 
-## Concerns
+## Initial concerns
 
-- During capture on 2026-07-13, direct requests from this environment returned Toutiao's full SSR HTML rather than the previously observed incremental JSON response. The sanitized fixture uses current card metadata captured from that live response but keeps only the stable semantic card HTML needed by the `{count, dom}` contract; ephemeral classes, signatures, search IDs, images, and tracking query parameters were removed.
-- Parser behavior intentionally depends on stable group links or `data-group-id`, not Toutiao's generated CSS class names. If Toutiao removes both identifiers from DOM cards, another fixture refresh will be needed.
+- Initial capture requests containing only `keyword` returned full SSR HTML. The review follow-up identified and fixed the missing JSON request parameters.
+- The first fixture and parser assumed direct group links or `data-group-id`; the review follow-up replaced both with the current response structure and metadata contracts.
+
+## Review follow-up
+
+- Root cause confirmed: the JSON DOM response requires `keyword`, `pd=information`, `source=search_subtab_switch`, `from=information`, `format=json`, `count=10`, and `offset=0`. A live request with those exact parameters returned HTTP 200, `application/json`, `count=10`, and a 240 KB `dom` value.
+- Replaced the idealized fixture with two sanitized current `div.result-content` cards preserving `cr-params`, `data-log-extra`, jump links, nested `l-card-title`/`l-paragraph`/author structures, `<img>`, and `<br>`. Only tokens, signatures, tracking payloads, remote media URLs, scripts, styles, and unrelated cards were removed.
+- RED 1: focused suite failed because the request contained only `keyword`; after the request fix, RED 2 failed because the faithful cards produced no items and unmatched `<img>`/`<br>` scopes changed source to `Source recent`.
+- GREEN: parser now uses matching `(tag, target, card-root)` frames, ignores HTML void elements for scope purposes, reads stable metadata from `cr-params` and `data-log-extra`, and supports encoded jump URLs.
+- Count provenance uses sentinel `777`; every DOM item asserts `value == rank`, `metric_name == "search_rank"`, metrics equal `{"search_rank": rank}`, and no value equals the sentinel count.
+- Focused command: `uv run pytest tests/providers/test_toutiao.py -q` -> 10 passed.
+- Full command: `uv run pytest -q` -> 43 passed.
+- Live smoke test after GREEN parsed three OpenAI cards within the 24-hour window, including canonical group URLs, timestamps, and author sources.
+
+### Updated concerns
+
+- The JSON endpoint contract is parameter-sensitive. The exact production parameters are now covered by a request assertion.
+- The parser relies primarily on `result-content`, `cr-params`, `data-log-extra`, `l-card-title`, `l-paragraph`, and author click metadata observed in the current response, while retaining direct group-link compatibility. A future wholesale template change will require a fixture refresh.

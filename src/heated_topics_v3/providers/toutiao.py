@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from typing import Callable
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -26,7 +27,15 @@ class ToutiaoProvider:
         return ProviderCapture(raw, ".json", self.parse_hot_list(raw, collected_at))
 
     def search(self, primary_keyword: str, collected_at: str) -> ProviderCapture:
-        raw = self.client.get(TOUTIAO_SEARCH_URL, params={"keyword": primary_keyword}).text
+        raw = self.client.get(TOUTIAO_SEARCH_URL, params={
+            "keyword": primary_keyword,
+            "pd": "information",
+            "source": "search_subtab_switch",
+            "from": "information",
+            "format": "json",
+            "count": 10,
+            "offset": 0,
+        }).text
         return ProviderCapture(raw, ".json", self.parse_search(raw, collected_at))
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
@@ -80,34 +89,52 @@ class ToutiaoProvider:
 
 
 class _SearchDomParser(HTMLParser):
+    _VOID_ELEMENTS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.cards: list[dict[str, str]] = []
         self.current: dict[str, str] | None = None
-        self.targets: list[str | None] = []
+        self.frames: list[tuple[str, str | None, bool]] = []
 
     def handle_starttag(self, tag: str, attrs) -> None:
         attributes = dict(attrs)
+        classes = set(str(attributes.get("class") or "").lower().split())
+        card_root = "result-content" in classes or (tag == "article" and bool(attributes.get("data-group-id")))
+        cr_params = _json_attribute(attributes.get("cr-params"))
+        log_extra = _json_attribute(attributes.get("data-log-extra"))
         group_id = str(attributes.get("data-group-id") or "")
         href = str(attributes.get("href") or "")
-        href_match = re.search(r"/group/(\d+)(?:/|$)", href)
+        decoded_href = unquote(unquote(href))
+        href_match = re.search(r"/group/(\d+)(?:/|$|\?)", decoded_href)
         if href_match:
             group_id = href_match.group(1)
-        if group_id and (self.current is None or self.current.get("group_id") != group_id):
+        group_id = str(cr_params.get("gid") or cr_params.get("group_id") or log_extra.get("group_id") or group_id)
+
+        if card_root:
             self._finish_card()
-            self.current = {
-                "group_id": group_id,
-                "url": f"https://www.toutiao.com/group/{group_id}/",
-            }
+            self.current = {}
+        elif group_id and (self.current is None or self.current.get("group_id") not in (None, group_id)):
+            self._finish_card()
+            self.current = {}
+        if group_id and self.current is not None:
+            self.current["group_id"] = group_id
+            self.current["url"] = f"https://www.toutiao.com/group/{group_id}/"
+        if self.current is not None:
+            if cr_params.get("title"):
+                self.current["title"] = str(cr_params["title"]).strip()
+            publication = log_extra.get("createTime") or log_extra.get("publish_time")
+            if publication:
+                self.current["publish_time"] = str(publication)
 
         target = None
-        if self.current:
-            classes = str(attributes.get("class") or "").lower()
-            if href_match or "title" in classes:
-                target = "title"
-            elif tag == "p" or "summary" in classes or "abstract" in classes:
+        if self.current is not None:
+            click_data = _json_attribute(attributes.get("data-log-click"))
+            if href_match or "l-card-title" in classes or "title" in classes:
+                target = "title_text"
+            elif tag == "p" or "l-paragraph" in classes or "summary" in classes or "abstract" in classes:
                 target = "abstract"
-            elif "source" in classes:
+            elif click_data.get("pos") == "author" or "source" in classes:
                 target = "source"
             elif tag == "time" or "time" in classes or "date" in classes:
                 publication = attributes.get("datetime") or attributes.get("data-time")
@@ -115,24 +142,32 @@ class _SearchDomParser(HTMLParser):
                     self.current["publish_time"] = str(publication)
                 else:
                     target = "publish_time"
-        self.targets.append(target)
+            if tag == "br":
+                active_target = next((value for _, value, _ in reversed(self.frames) if value), None)
+                if active_target:
+                    self._append_text(active_target, " ")
+        if tag not in self._VOID_ELEMENTS:
+            self.frames.append((tag, target, card_root))
 
     def handle_startendtag(self, tag: str, attrs) -> None:
         self.handle_starttag(tag, attrs)
-        self.handle_endtag(tag)
+        if tag not in self._VOID_ELEMENTS:
+            self.handle_endtag(tag)
 
     def handle_data(self, data: str) -> None:
-        if not self.current:
+        if self.current is None:
             return
-        target = next((value for value in reversed(self.targets) if value), None)
-        text = data.strip()
-        if target and text:
-            self.current[target] = " ".join(filter(None, (self.current.get(target), text)))
+        target = next((value for _, value, _ in reversed(self.frames) if value), None)
+        if target:
+            self._append_text(target, data)
 
     def handle_endtag(self, tag: str) -> None:
-        if self.targets:
-            self.targets.pop()
-        if tag == "article":
+        matching_index = next((index for index in range(len(self.frames) - 1, -1, -1) if self.frames[index][0] == tag), None)
+        if matching_index is None:
+            return
+        closes_card = any(frame[2] for frame in self.frames[matching_index:])
+        del self.frames[matching_index:]
+        if closes_card:
             self._finish_card()
 
     def close(self) -> None:
@@ -140,9 +175,34 @@ class _SearchDomParser(HTMLParser):
         self._finish_card()
 
     def _finish_card(self) -> None:
+        if self.current and not self.current.get("title"):
+            self.current["title"] = self.current.get("title_text", "")
+        if self.current:
+            self.current.pop("title_text", None)
         if self.current and self.current.get("group_id") and self.current.get("title"):
             self.cards.append(self.current)
         self.current = None
+
+    def _append_text(self, target: str, data: str) -> None:
+        if self.current is None or not data:
+            return
+        text = re.sub(r"\s+", " ", data)
+        if not text.strip():
+            if self.current.get(target) and not self.current[target].endswith(" "):
+                self.current[target] += " "
+            return
+        prefix = " " if data[0].isspace() and self.current.get(target) and not self.current[target].endswith(" ") else ""
+        self.current[target] = f"{self.current.get(target, '')}{prefix}{text.strip()}"
+
+
+def _json_attribute(value) -> dict:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(str(value))
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _parse_search_dom(dom: str, collected_at: str) -> tuple[HotItem, ...]:

@@ -21,26 +21,54 @@ def test_collect_hot_list_preserves_raw_text_and_parses_heat():
     assert client.get(TOUTIAO_HOT_BOARD_URL).status_code == 200
 
 def test_search_uses_exactly_one_keyword_and_parses_current_dom_cards():
-    raw = (FIXTURES / "toutiao_search.json").read_text(encoding="utf-8")
+    payload = json.loads((FIXTURES / "toutiao_search.json").read_text(encoding="utf-8"))
+    payload["count"] = 777
+    raw = json.dumps(payload)
     requests = []
     def handler(request):
         requests.append(request)
         return httpx.Response(200, text=raw)
     capture = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(handler))).search("AI Agent", NOW)
     assert len(requests) == 1 and str(requests[0].url).startswith(TOUTIAO_SEARCH_URL)
-    assert requests[0].url.params.get_list("keyword") == ["AI Agent"]
+    assert dict(requests[0].url.params) == {
+        "keyword": "AI Agent",
+        "pd": "information",
+        "source": "search_subtab_switch",
+        "from": "information",
+        "format": "json",
+        "count": "10",
+        "offset": "0",
+    }
     assert [item.item_id for item in capture.items] == [
         "toutiao_7661817657498305030",
         "toutiao_7661826133797487147",
     ]
     assert capture.items[0].title == "OpenAI 挖了苹果 400 人，到底在下一盘什么棋？"
     assert capture.items[0].url == "https://www.toutiao.com/group/7661817657498305030/"
-    assert capture.items[0].summary.startswith("当OpenAI以400多名苹果前员工为基础")
+    assert capture.items[0].summary.startswith("苹果与OpenAI的商业机密诉讼案")
     assert capture.items[0].publication_time == "1783905943"
     assert capture.items[0].raw_payload["group_id"] == "7661817657498305030"
     assert capture.items[0].raw_payload["source"] == "人人都是产品经理"
-    assert capture.items[0].heat.metric_name == "search_rank"
-    assert capture.items[0].heat.value != json.loads(raw)["count"]
+    for rank, item in enumerate(capture.items, 1):
+        assert item.heat.metric_name == "search_rank"
+        assert item.heat.value == rank
+        assert item.heat.metrics == {"search_rank": rank}
+        assert item.heat.value != payload["count"]
+
+
+def test_search_dom_void_elements_do_not_leak_title_summary_or_source_scopes():
+    raw = json.dumps({"count": 999, "dom": """
+        <article data-group-id="9001">
+          <a href="https://toutiao.com/group/9001/"><h2>Title<img src="cover.jpg"></h2></a>
+          <p>Summary<br>continued</p>
+          <footer><span class="source">Source<img src="avatar.jpg"></span><time datetime="1783905943">recent</time></footer>
+        </article>
+    """})
+    item = ToutiaoProvider.parse_search(raw, NOW)[0]
+    assert item.title == "Title"
+    assert item.summary == "Summary continued"
+    assert item.raw_payload["source"] == "Source"
+    assert item.publication_time == "1783905943"
 
 
 def test_search_keeps_legacy_data_rows_as_compatibility_fallback():
