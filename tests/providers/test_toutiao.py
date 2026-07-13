@@ -238,6 +238,156 @@ def test_fetch_detail_prefers_meaningful_multiline_rendered_body_over_summary():
     assert detail.fetch_status == "success"
 
 
+def test_fetch_detail_retries_one_short_render_and_accepts_second_valid_body():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    valid = "重试后加载出的第一段正文包含事实、时间、地点和事件经过。" * 6 + "\n" + "第二段补充官方回应、后续处置和信息来源。" * 6
+    rendered = iter(("事件详情\n短标题", valid))
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return next(rendered)
+
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=fetch,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == [item.url, item.url]
+    assert detail.content == valid
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+
+
+def test_fetch_detail_retries_short_render_exactly_once_then_stays_partial():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return "事件详情\n仍然只有短标题"
+
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=fetch,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == [item.url, item.url]
+    assert detail.content == item.summary
+    assert detail.content_status == "summary"
+    assert detail.fetch_status == "partial:RenderedContentTooShort"
+
+
+def test_fetch_detail_does_not_retry_renderer_exception():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    calls = []
+
+    def unavailable(url):
+        calls.append(url)
+        raise RuntimeError("browser unavailable")
+
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=unavailable,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == [item.url]
+    assert detail.fetch_status == "partial:RuntimeError"
+
+
+def test_fetch_detail_with_meaningful_static_article_never_renders():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    first = "静态页面第一段正文包含充分的事实、背景、时间和来源。" * 6
+    second = "静态页面第二段继续介绍事件影响、官方回应与后续安排。" * 6
+    html = f"<article><p>{first}</p><p>{second}</p></article>"
+    calls = []
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=html))),
+        rendered_fetcher=lambda url: calls.append(url) or "",
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == []
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+
+
+def test_external_hot_board_url_renders_canonical_trending_cluster_but_preserves_source_url():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    external = "https://webcast-open.douyin.com/open/media_live/667431506077"
+    item = replace(item, url=external)
+    body = "事件聚合页第一段提供暴雨发生时间、范围、现场情况和官方预警。" * 6 + "\n" + "第二段补充应急措施、交通影响和后续天气趋势。" * 6
+    calls = []
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: calls.append(url) or body,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == ["https://www.toutiao.com/trending/101/"]
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+    assert detail.source_url == external
+
+
+def test_external_url_without_verified_hot_board_cluster_stays_partial_without_rendering():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    item = replace(
+        item,
+        item_id="toutiao_external",
+        url="https://example.com/live/unknown",
+        raw_payload={},
+    )
+    calls = []
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: calls.append(url) or "unexpected",
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == []
+    assert detail.content_status == "summary"
+    assert detail.fetch_status == "partial:UnsupportedDetailUrl"
+    assert detail.source_url == item.url
+
+
+def test_external_search_result_is_not_rewritten_as_hot_board_trending_url():
+    raw = json.dumps(
+        {
+            "data": [
+                {
+                    "id": "201",
+                    "title": "Search item",
+                    "url": "https://example.com/search-result/201",
+                    "abstract": "Search summary",
+                    "publish_time": "2026-07-13T03:00:00Z",
+                }
+            ]
+        }
+    )
+    item = ToutiaoProvider.parse_search(raw, NOW)[0]
+    calls = []
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: calls.append(url) or "unexpected",
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert calls == []
+    assert detail.fetch_status == "partial:UnsupportedDetailUrl"
+    assert detail.source_url == item.url
+
+
 def test_short_or_navigation_only_rendered_text_does_not_claim_full_text():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
     provider = ToutiaoProvider(

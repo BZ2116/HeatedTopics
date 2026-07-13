@@ -279,15 +279,28 @@ class ToutiaoProvider:
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
         diagnostic = None
-        try:
-            content = article_text(self.client.get(item.url).text)
-        except Exception:
+        render_url = _detail_render_url(item)
+        if render_url is None:
             content = ""
+            diagnostic = "UnsupportedDetailUrl"
+        else:
+            try:
+                content = article_text(self.client.get(render_url).text)
+            except Exception:
+                content = ""
         method = "toutiao_article_page"
-        if not _is_meaningful_article(content, item.title) and self.rendered_fetcher:
+        if (
+            render_url is not None
+            and not _is_meaningful_article(content, item.title)
+            and self.rendered_fetcher
+        ):
             method = "toutiao_rendered_page"
             try:
-                content = _clean_rendered_article_text(self.rendered_fetcher(item.url))
+                content = _clean_rendered_article_text(self.rendered_fetcher(render_url))
+                if not _is_meaningful_article(content, item.title):
+                    content = _clean_rendered_article_text(
+                        self.rendered_fetcher(render_url)
+                    )
             except Exception as error:
                 diagnostic = (
                     str(error)
@@ -538,6 +551,25 @@ def _optional_datetime(value) -> datetime | None:
         return _datetime(value)
     except (ValueError, TypeError, OverflowError):
         return None
+
+
+def _detail_render_url(item: HotItem) -> str | None:
+    parsed = urlparse(item.url)
+    hostname = (parsed.hostname or "").lower()
+    if (
+        (hostname == "toutiao.com" or hostname.endswith(".toutiao.com"))
+        and re.match(r"^/(?:article|group|trending)/", parsed.path)
+    ):
+        return item.url
+
+    cluster_id = str(
+        item.raw_payload.get("ClusterIdStr")
+        or item.raw_payload.get("ClusterId")
+        or ""
+    ).strip()
+    if cluster_id.isdigit() and item.item_id == f"toutiao_{cluster_id}":
+        return f"https://www.toutiao.com/trending/{cluster_id}/"
+    return None
 
 def _clean_rendered_article_text(text: str) -> str:
     navigation = {
