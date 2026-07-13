@@ -1,0 +1,11 @@
+{
+  "profile_id": "culture_city_walker",
+  "display_name": "文化生活 - 城市漫游观察者",
+  "domains": ["文化生活"],
+  "audience": ["周末不知道去哪儿的人", "城市漫游爱好者"],
+  "content_modes": ["短故事", "城市观察", "建筑讲解", "地方文化"],
+  "preferred_platforms": ["juejin", "toutiao", "zhihu", "weibo"],
+  "core_keywords": ["城市漫游", "博物馆", "老街", "建筑", "地名", "地方文化"],
+  "entity_keywords": ["周末去哪儿", "周末去哪", "城市观察", "citywalk", "city walk", "街区", "历史街区", "古城", "文旅"],
+  "excluded_keywords": ["明星", "娱乐八卦", "绯闻", "游戏皮肤"]
+}

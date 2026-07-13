@@ -95,3 +95,34 @@ class MatchResult:
     excluded_terms: tuple[str, ...]
     relevance_score: int
     is_relevant: bool
+
+
+@dataclass(frozen=True)
+class PersonaPersonal:
+    role: str
+    subject: str
+    scenarios: tuple[str, ...]
+    value: str
+
+
+@dataclass(frozen=True)
+class PersonaProfile:
+    user_id: str
+    level1: str
+    level2: str
+    personal: PersonaPersonal
+    core_keywords: tuple[str, ...]
+    persona_signature: str
+
+
+@dataclass(frozen=True)
+class ExtractedKeyword:
+    keyword: str
+    match_expectation: str  # "热榜" | "长尾" | "兜底"
+
+
+@dataclass(frozen=True)
+class HotBoardSnapshot:
+    date: str  # "YYYY-MM-DD" (UTC+8)
+    fetched_at: str
+    items: tuple[HotItem, ...]

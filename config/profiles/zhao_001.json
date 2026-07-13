@@ -1,0 +1,22 @@
+{
+  "user_id": "zhao_001",
+  "level1": "科技AI",
+  "level2": "AI工具应用",
+  "personal": {
+    "role": "经管学生视角的AI工具体验官",
+    "subject": "AI工具",
+    "scenarios": [
+      "写作",
+      "学习",
+      "办公",
+      "内容生产"
+    ],
+    "value": "真实使用建议"
+  },
+  "core_keywords": [
+    "AI工具",
+    "AI写作",
+    "AI办公",
+    "AI学习"
+  ]
+}

@@ -1,20 +1,41 @@
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 from heated_topics_v3.contracts import ItemDetail, MatchResult, UserProfile
+from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, utc8_today
+from heated_topics_v3.llm_client import call_llm
+from heated_topics_v3.llm_keywords import extract_persona_keywords
 from heated_topics_v3.matching import match_hot_item_to_queries
+from heated_topics_v3.profile_loader import is_legacy_profile, load_persona_profile
 from heated_topics_v3.profile_queries import build_topic_queries
 from heated_topics_v3.providers.juejin import fetch_juejin_hot_items, fetch_juejin_item_detail
 from heated_topics_v3.providers.toutiao import (
+    attach_article_heat_fields,
     build_toutiao_search_phrases,
+    extract_toutiao_article_id,
+    fetch_toutiao_article_info,
     fetch_toutiao_hot_items,
-    fetch_toutiao_item_detail,
+    fetch_toutiao_item_details,
     fetch_toutiao_search_items,
+    fetch_toutiao_search_pages,
     merge_toutiao_items,
 )
-from heated_topics_v3.reporting import render_juejin_report, render_toutiao_report
+from heated_topics_v3.reporting import (
+    render_article_summary_md,
+    render_juejin_report,
+    render_toutiao_report,
+    render_toutiao_report_v2,
+)
 from heated_topics_v3.serialization import to_plain_data
+from heated_topics_v3.toutiao_output import write_toutiao_run
+from heated_topics_v3.toutiao_paths import (
+    PathFilters,
+    apply_llm_rerank,
+    build_candidates,
+)
+from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
 
 def run_juejin_pipeline(
     profile_path: Path,
@@ -62,10 +83,10 @@ def run_toutiao_pipeline(
         for item in hot_items
         if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
     ]
-    item_details = [
-        fetch_toutiao_item_detail(match.item, fetcher=detail_fetcher)
-        for match in matches
-    ]
+    item_details = fetch_toutiao_item_details(
+        [match.item for match in matches],
+        fetcher=detail_fetcher,
+    )
 
     output_dir = _run_output_dir(output_root, profile.profile_id, "toutiao", fetched_at)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,7 +218,7 @@ def _safe_filename(value: str) -> str:
 
 
 def load_user_profile(profile_path: Path) -> UserProfile:
-    payload = json.loads(profile_path.read_text(encoding="utf-8"))
+    payload = json.loads(profile_path.read_text(encoding="utf-8-sig"))
     return UserProfile(
         profile_id=str(payload["profile_id"]),
         display_name=str(payload["display_name"]),
@@ -222,3 +243,240 @@ def _run_output_dir(output_root: Path, profile_id: str, source_id: str, fetched_
     timestamp = fetched_at.replace("-", "").replace(":", "").split("+", maxsplit=1)[0]
     timestamp = timestamp.replace("T", "_")
     return output_root / profile_id / source_id / f"run_{timestamp}"
+
+
+# ---------------------------------------------------------------------------
+# Toutiao v2 pipeline (persona-driven, daily hot board cache, per-user output)
+# ---------------------------------------------------------------------------
+
+
+def run_toutiao_pipeline_v2(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    hot_board_cache_root: Path = Path("cache"),
+    persona_keyword_cache_root: Path = Path("cache/core_keywords"),
+    llm_cache_root: Path = Path("cache/llm"),
+    use_llm_keywords: bool = True,
+    use_llm_summary: bool = False,
+    use_llm_rerank: bool = False,
+    force_hot_board_refresh: bool = False,
+    allow_yesterday_fallback: bool = True,
+    offline: bool = False,
+    top_n: int = 10,
+    path_filters: PathFilters = PathFilters(),
+    fetcher: Callable[[str, int], str] | None = None,
+    article_info_fetcher: Callable[[str, int], str] | None = None,
+    detail_fetcher: Callable[[str, int], str] | None = None,
+    rendered_text_fetcher: Callable[[str, int], str] | None = None,
+    llm_caller: Callable[..., str] | None = None,
+) -> "ToutiaoV2Result":
+    """Persona-driven Toutiao pipeline.
+
+    Steps:
+      1. Load + validate v2 profile.
+      2. Extract persona keywords (cache → LLM → core_keywords fallback).
+      3. Read/write daily hot board cache.
+      4. Per-keyword search, enrich with mobile article info.
+      5. Build candidates via Paths A/B/C; optional LLM rerank (Path D).
+      6. Sort + slice top_n.
+      7. Fetch item details for kept candidates.
+      8. Render Markdown report (optional LLM summary section).
+      9. Write per-user per-date run directory.
+    """
+    if is_legacy_profile(profile_path):
+        raise ValueError(
+            f"{profile_path} uses legacy v1 schema; please migrate to v2 "
+            "(see heated_topics_v3.profile_loader.migrate_v1_to_v2)"
+        )
+
+    profile = load_persona_profile(profile_path)
+    effective_llm = llm_caller or (lambda *a, **kw: call_llm(*a, cache_dir=llm_cache_root, **kw))
+    extraction = extract_persona_keywords(
+        profile,
+        cache_dir=persona_keyword_cache_root,
+        use_cache=True,
+        llm=effective_llm,
+        allow_llm=use_llm_keywords,
+    )
+
+    date = utc8_today()
+    if offline:
+        hot_board_snapshot, source_label = get_or_fetch_hot_board(
+            hot_board_cache_root, date,
+            fetcher=None,
+            force_refresh=False,
+            allow_yesterday_fallback=True,
+        )
+    else:
+        hot_board_snapshot, source_label = get_or_fetch_hot_board(
+            hot_board_cache_root, date,
+            fetcher=fetcher,
+            force_refresh=force_hot_board_refresh,
+            allow_yesterday_fallback=allow_yesterday_fallback,
+        )
+
+    keyword_phrases = tuple(k.keyword for k in extraction.keywords)
+
+    raw_search_by_keyword: dict[str, list] = {}
+    for keyword in keyword_phrases:
+        try:
+            results = fetch_toutiao_search_pages(
+                keyword,
+                fetched_at=fetched_at,
+                max_pages=path_filters.search_pages or 1,
+                per_page=path_filters.per_page,
+                fetcher=fetcher,
+            )
+        except Exception:
+            results = []
+        raw_search_by_keyword[keyword] = results
+
+    article_info_by_url: dict[str, dict] = {}
+    enriched_search_by_keyword: dict[str, list] = {}
+    seen_article_ids: set[str] = set()
+    for keyword, items in raw_search_by_keyword.items():
+        enriched: list = []
+        for item in items:
+            aid = extract_toutiao_article_id(item.url)
+            info = None
+            if aid and aid not in seen_article_ids:
+                info = fetch_toutiao_article_info(aid, fetcher=article_info_fetcher)
+                if info is not None:
+                    seen_article_ids.add(aid)
+            enriched_item = attach_article_heat_fields(item, info)
+            enriched.append(enriched_item)
+            canonical = _canonical_url(enriched_item.url)
+            article_info_by_url[canonical] = {
+                "impression_count": _safe_int(info, "impression_count") if info else None,
+                "digg_count": _safe_int(info, "digg_count") if info else None,
+                "comment_count": _safe_int(info, "comment_count") if info else None,
+                "repost_count": _safe_int(info, "repost_count") if info else None,
+                "repin_count": _safe_int(info, "repin_count") if info else None,
+                "is_toutiao_hot": bool(info and info.get("is_toutiao_hot")),
+                "article_heat": int(raw_payload_get(enriched_item.raw_payload, "article_heat", 0) or 0),
+            }
+        enriched_search_by_keyword[keyword] = enriched
+
+    candidates = build_candidates(
+        hot_board=list(hot_board_snapshot.items),
+        keywords=extraction.keywords,
+        persona_keywords=profile.core_keywords + keyword_phrases,
+        search_results_by_keyword=enriched_search_by_keyword,
+        article_info_by_url=article_info_by_url,
+        filters=path_filters,
+    )
+
+    if use_llm_rerank and candidates:
+        body_excerpts: dict[str, str] = {}
+        candidates = apply_llm_rerank(
+            candidates,
+            llm=effective_llm,
+            top_n_for_rerank=30,
+            persona_keywords=profile.core_keywords + keyword_phrases,
+            body_excerpts=body_excerpts,
+        )
+
+    candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, profile.core_keywords + keyword_phrases)))
+    top_candidates = candidates[: max(0, top_n)]
+
+    detail_fetcher_eff = detail_fetcher
+    item_details = fetch_toutiao_item_details(
+        [c.item for c in top_candidates],
+        fetcher=detail_fetcher_eff,
+        rendered_texts_fetcher=(
+            None
+            if detail_fetcher_eff is not None
+            else (lambda urls, t: _rendered_texts(urls, t, rendered_text_fetcher))
+        ),
+    )
+
+    summary_md = render_article_summary_md(
+        top_candidates,
+        item_details,
+        llm=effective_llm if use_llm_summary else None,
+    )
+
+    report_md = render_toutiao_report_v2(
+        profile,
+        extraction,
+        top_candidates,
+        fetched_at=fetched_at,
+        item_details=item_details,
+        llm_summary=(effective_llm if use_llm_summary else None),
+    )
+
+    run_result = write_toutiao_run(
+        user_id=profile.user_id,
+        date=date,
+        candidates=candidates,
+        top_n=top_n,
+        hot_board_snapshot=hot_board_snapshot,
+        raw_search_by_keyword=enriched_search_by_keyword,
+        raw_article_info_by_url=article_info_by_url,
+        item_details=item_details,
+        report_markdown=report_md,
+        output_root=output_root,
+        hot_board_cache_root=hot_board_cache_root,
+    )
+
+    if summary_md is not None:
+        summary_path = run_result.run_dir / "articles" / "summary.md"
+        summary_path.parent.mkdir(parents=True, exist_ok=True)
+        summary_path.write_text(summary_md, encoding="utf-8")
+
+    return ToutiaoV2Result(
+        user_id=profile.user_id,
+        date=date,
+        run_dir=run_result.run_dir,
+        top_n=top_n,
+        candidates_total=len(candidates),
+        kept_total=len(top_candidates),
+        paths=run_result.paths,
+        hot_board_source=source_label,
+        keyword_source=extraction.source,
+        keyword_count=len(extraction.keywords),
+        report_path=run_result.run_dir / "report.md",
+        focused_path=run_result.run_dir / "focused.json",
+    )
+
+
+@dataclass(frozen=True)
+class ToutiaoV2Result:
+    user_id: str
+    date: str
+    run_dir: Path
+    top_n: int
+    candidates_total: int
+    kept_total: int
+    paths: dict[str, int]
+    hot_board_source: str
+    keyword_source: str
+    keyword_count: int
+    report_path: Path
+    focused_path: Path
+
+
+def _canonical_url(url: str) -> str:
+    return url.split("?", maxsplit=1)[0]
+
+
+def _safe_int(info: dict | None, key: str) -> int | None:
+    if not info:
+        return None
+    value = info.get(key)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def raw_payload_get(payload: dict, key: str, default=None):
+    return payload.get(key, default)
+
+
+def _rendered_texts(urls, timeout_seconds, fetcher):
+    if fetcher is None:
+        return {}
+    return {url: fetcher(url, timeout_seconds) for url in urls}

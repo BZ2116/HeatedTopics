@@ -7,10 +7,13 @@ from heated_topics_v3.providers.toutiao import (
     build_toutiao_search_phrases,
     fetch_toutiao_hot_items,
     fetch_toutiao_item_detail,
+    fetch_toutiao_item_details,
     fetch_toutiao_search_items,
     merge_toutiao_items,
+    parse_toutiao_rendered_search_links,
     parse_toutiao_hot_board_response,
     parse_toutiao_search_response,
+    resolve_toutiao_content_url,
 )
 
 
@@ -53,6 +56,7 @@ def test_parse_toutiao_hot_board_response_maps_hot_items():
     assert item.matched_query_ids == ("tech_ai_creator_q_001_core_hot",)
     assert item.fetch_status == "success"
     assert item.raw_payload["Label"] == "hot"
+    assert item.raw_payload["source_kind"] == "hot_board"
 
 
 def test_fetch_toutiao_hot_items_uses_hot_board_url_and_injected_fetcher():
@@ -168,6 +172,78 @@ def test_fetch_toutiao_search_items_calls_search_endpoint_for_each_phrase():
     assert calls[0].startswith(f"{TOUTIAO_SEARCH_URL}?")
     assert "keyword=AI" in calls[0]
     assert "keyword=MCP" in calls[1]
+
+
+def test_fetch_toutiao_search_items_uses_rendered_search_when_json_only_has_keyword_hit():
+    def fake_fetcher(url: str, timeout_seconds: int) -> str:
+        return json.dumps({"keyword": "RAG", "count": 1, "dom": "<div>related search card</div>"})
+
+    def fake_rendered_search_fetcher(phrase: str, timeout_seconds: int):
+        assert phrase == "RAG"
+        return [
+            {
+                "href": "https://www.toutiao.com/article/7661087635032638003/",
+                "text": "RAG patent news",
+                "card": "RAG patent news\nDetailed rendered search snippet\nTech Source\n10 hours ago",
+            }
+        ]
+
+    items = fetch_toutiao_search_items(
+        phrases=("RAG",),
+        fetched_at="2026-07-11T15:20:00+08:00",
+        fetcher=fake_fetcher,
+        rendered_search_fetcher=fake_rendered_search_fetcher,
+    )
+
+    assert len(items) == 1
+    assert items[0].item_id == "toutiao_search_7661087635032638003"
+    assert items[0].url == "https://www.toutiao.com/article/7661087635032638003/"
+    assert items[0].summary == "Detailed rendered search snippet"
+    assert items[0].raw_payload["source_kind"] == "rendered_search_result"
+
+
+def test_resolve_toutiao_content_url_extracts_h5_url_from_search_jump():
+    jump_url = (
+        "https://so.toutiao.com/search/jump?aid=1455&url="
+        "https%3A%2F%2Farticle.zlink.toutiao.com%2Fabcd%3Fh5_url%3D"
+        "https%253A%252F%252Ftoutiao.com%252Fgroup%252F7661087635032638003%252F"
+        "%253Fsource%253Dinformation"
+    )
+
+    resolved = resolve_toutiao_content_url(jump_url)
+
+    assert resolved == "https://toutiao.com/group/7661087635032638003/?source=information"
+
+
+def test_parse_toutiao_rendered_search_links_deduplicates_jump_links_by_article_url():
+    jump_url = (
+        "/search/jump?aid=1455&url="
+        "https%3A%2F%2Farticle.zlink.toutiao.com%2Fabcd%3Fh5_url%3D"
+        "https%253A%252F%252Ftoutiao.com%252Fgroup%252F7661087635032638003%252F"
+    )
+
+    items = parse_toutiao_rendered_search_links(
+        [
+            {
+                "href": jump_url,
+                "text": "RAG patent news",
+                "card": "RAG patent news\nDetailed rendered search snippet\nTech Source\n10 hours ago",
+            },
+            {
+                "href": jump_url,
+                "text": "Detailed rendered search snippet",
+                "card": "RAG patent news\nDetailed rendered search snippet\nTech Source\n10 hours ago",
+            },
+        ],
+        phrase="RAG",
+        fetched_at="2026-07-11T15:20:00+08:00",
+    )
+
+    assert len(items) == 1
+    assert items[0].item_id == "toutiao_search_7661087635032638003"
+    assert items[0].title == "RAG patent news"
+    assert items[0].url == "https://toutiao.com/group/7661087635032638003/"
+    assert items[0].summary == "Detailed rendered search snippet"
 
 
 def test_parse_toutiao_search_response_keeps_keyword_hit_when_dom_has_no_result_links():
@@ -330,6 +406,87 @@ def test_fetch_toutiao_item_detail_falls_back_to_hot_item_summary():
     assert detail.content == "AI Agent"
     assert detail.extraction_method == "toutiao_hot_board_payload"
     assert detail.fetch_status == "partial"
+
+
+def test_fetch_toutiao_item_detail_uses_rendered_text_when_static_page_has_no_article():
+    jump_url = (
+        "/search/jump?aid=1455&url="
+        "https%3A%2F%2Farticle.zlink.toutiao.com%2Fabcd%3Fh5_url%3D"
+        "https%253A%252F%252Ftoutiao.com%252Fgroup%252F7661087635032638003%252F"
+    )
+    items = parse_toutiao_search_response(
+        json.dumps({"keyword": "RAG", "count": 1, "dom": f'<a href="{jump_url}">RAG patent news</a>'}),
+        phrase="RAG",
+        fetched_at="2026-07-11T15:20:00+08:00",
+    )
+    static_calls = []
+    rendered_calls = []
+
+    def fake_fetcher(url: str, timeout_seconds: int) -> str:
+        static_calls.append(url)
+        return "<html><body><script>window.byted_acrawler={}</script></body></html>"
+
+    def fake_rendered_text_fetcher(url: str, timeout_seconds: int) -> str:
+        rendered_calls.append(url)
+        return "RAG patent news\nFull rendered Toutiao article body."
+
+    detail = fetch_toutiao_item_detail(
+        items[0],
+        fetcher=fake_fetcher,
+        rendered_text_fetcher=fake_rendered_text_fetcher,
+    )
+
+    assert static_calls == ["https://toutiao.com/group/7661087635032638003/"]
+    assert rendered_calls == ["https://toutiao.com/group/7661087635032638003/"]
+    assert detail.content == "RAG patent news\nFull rendered Toutiao article body."
+    assert detail.extraction_method == "toutiao_rendered_page"
+    assert detail.fetch_status == "success"
+
+
+def test_fetch_toutiao_item_details_batches_rendered_text_fallbacks():
+    first = parse_toutiao_search_response(
+        json.dumps(
+            {
+                "keyword": "RAG",
+                "count": 1,
+                "dom": '<a href="https://www.toutiao.com/article/1">First RAG article</a>',
+            }
+        ),
+        phrase="RAG",
+        fetched_at="2026-07-11T15:20:00+08:00",
+    )[0]
+    second = parse_toutiao_search_response(
+        json.dumps(
+            {
+                "keyword": "MCP",
+                "count": 1,
+                "dom": '<a href="https://www.toutiao.com/article/2">Second MCP article</a>',
+            }
+        ),
+        phrase="MCP",
+        fetched_at="2026-07-11T15:20:00+08:00",
+    )[0]
+    batch_calls = []
+
+    def fake_fetcher(url: str, timeout_seconds: int) -> str:
+        return "<html><body>No article tag.</body></html>"
+
+    def fake_rendered_texts_fetcher(urls: tuple[str, ...], timeout_seconds: int) -> dict[str, str]:
+        batch_calls.append(urls)
+        return {
+            "https://www.toutiao.com/article/1": "First full article body",
+            "https://www.toutiao.com/article/2": "Second full article body",
+        }
+
+    details = fetch_toutiao_item_details(
+        [first, second],
+        fetcher=fake_fetcher,
+        rendered_texts_fetcher=fake_rendered_texts_fetcher,
+    )
+
+    assert batch_calls == [("https://www.toutiao.com/article/1", "https://www.toutiao.com/article/2")]
+    assert [detail.content for detail in details] == ["First full article body", "Second full article body"]
+    assert [detail.extraction_method for detail in details] == ["toutiao_rendered_page", "toutiao_rendered_page"]
 
 
 def test_fetch_toutiao_item_detail_normalizes_relative_search_url():

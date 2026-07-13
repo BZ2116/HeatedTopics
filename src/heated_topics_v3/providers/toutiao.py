@@ -1,15 +1,18 @@
+import asyncio
+import html
 import json
 import re
 import urllib.request
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail, TopicQuery
 
 
 TOUTIAO_HOT_BOARD_URL = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
 TOUTIAO_SEARCH_URL = "https://so.toutiao.com/search/"
+TOUTIAO_ARTICLE_INFO_URL = "https://m.toutiao.com/i{article_id}/info/"
 TOUTIAO_QUERY_ALIASES = {
     "AI Agent": ("AI智能体", "智能体", "人工智能", "大模型"),
     "Claude Code": ("Claude Code AI编程", "AI编程", "编程助手", "代码生成"),
@@ -49,13 +52,25 @@ def fetch_toutiao_search_items(
     phrases: tuple[str, ...],
     fetched_at: str,
     fetcher=None,
+    rendered_search_fetcher=None,
     timeout_seconds: int = 20,
 ) -> list[HotItem]:
     fetch = fetcher or _fetch_text
+    rendered_fetch = rendered_search_fetcher or _fetch_toutiao_rendered_search_links
     items: list[HotItem] = []
     for phrase in phrases:
         url = f"{TOUTIAO_SEARCH_URL}?{urlencode(_search_params(phrase))}"
-        items.extend(parse_toutiao_search_response(fetch(url, timeout_seconds), phrase, fetched_at))
+        parsed_items = parse_toutiao_search_response(fetch(url, timeout_seconds), phrase, fetched_at)
+        if _needs_rendered_search(parsed_items):
+            rendered_items = parse_toutiao_rendered_search_links(
+                rendered_fetch(phrase, timeout_seconds),
+                phrase,
+                fetched_at,
+            )
+            if rendered_items:
+                items.extend(rendered_items)
+                continue
+        items.extend(parsed_items)
     return items
 
 
@@ -97,6 +112,68 @@ def parse_toutiao_search_response(response_text: str, phrase: str, fetched_at: s
                     "search_phrase": phrase,
                     "alias_for": _alias_for(phrase),
                     "source_kind": "search_result",
+                    "heat_signal_strength": strength,
+                    "text": result.text,
+                },
+            )
+        )
+    return items
+
+
+def parse_toutiao_rendered_search_links(
+    links: list[dict[str, Any]],
+    phrase: str,
+    fetched_at: str,
+) -> list[HotItem]:
+    results: list[_SearchResult] = []
+    seen_urls: set[str] = set()
+    for link in links:
+        href = str(link.get("href") or "").strip()
+        if not href:
+            continue
+        url = resolve_toutiao_content_url(href)
+        if not _is_content_url(url):
+            continue
+        canonical_url = _canonical_url(url)
+        if canonical_url in seen_urls:
+            continue
+        text = _clean_multiline_text(str(link.get("text") or ""))
+        card_text = _clean_multiline_text(str(link.get("card") or ""))
+        title = _first_nonempty_line(text) or _first_nonempty_line(card_text)
+        if not title:
+            continue
+        summary = _summary_from_rendered_card(card_text, title)
+        results.append(_SearchResult(title=title, url=url, text=f"{title}\n{summary}".strip()))
+        seen_urls.add(canonical_url)
+
+    items: list[HotItem] = []
+    total_count = len(results)
+    for rank, result in enumerate(results, start=1):
+        heat_value, metric_name, metrics, strength = _search_heat(result.text, total_count, rank)
+        article_id = _article_id_from_url(result.url) or f"{_slug(phrase)}_{rank}"
+        items.append(
+            HotItem(
+                item_id=f"toutiao_search_{article_id}",
+                platform="toutiao",
+                item_type="search_result",
+                title=result.title,
+                url=result.url,
+                rank=rank,
+                heat=HeatMetrics(
+                    value=heat_value,
+                    label="" if heat_value is None else str(heat_value),
+                    metric_name=metric_name,
+                    metrics=metrics,
+                ),
+                summary=result.summary,
+                category="search",
+                matched_query_ids=(),
+                fetched_at=fetched_at,
+                fetch_status="success",
+                raw_payload={
+                    "search_phrase": phrase,
+                    "alias_for": _alias_for(phrase),
+                    "source_kind": "rendered_search_result",
                     "heat_signal_strength": strength,
                     "text": result.text,
                 },
@@ -180,7 +257,7 @@ def parse_toutiao_hot_board_response(
                 matched_query_ids=matched_query_ids,
                 fetched_at=fetched_at,
                 fetch_status="success",
-                raw_payload=row_dict,
+                raw_payload={**row_dict, "source_kind": "hot_board"},
             )
         )
     return items
@@ -225,12 +302,80 @@ def merge_toutiao_items(search_items: list[HotItem], hot_board_items: list[HotIt
     return merged
 
 
-def fetch_toutiao_item_detail(item: HotItem, fetcher=None, timeout_seconds: int = 20) -> ItemDetail:
+def fetch_toutiao_item_details(
+    items: list[HotItem],
+    fetcher=None,
+    timeout_seconds: int = 20,
+    rendered_texts_fetcher=None,
+) -> list[ItemDetail]:
     fetch = fetcher or _fetch_text
-    response_text = fetch(_absolute_url(item.url), timeout_seconds)
-    detail = parse_toutiao_article_page(response_text, item)
-    if detail.fetch_status == "success":
-        return detail
+    rendered_fetch = rendered_texts_fetcher or (None if fetcher is not None else _fetch_toutiao_rendered_article_texts)
+    details: list[ItemDetail | None] = []
+    render_queue: list[tuple[int, HotItem, str]] = []
+
+    for item in items:
+        detail_url = resolve_toutiao_content_url(item.url)
+        response_text = fetch(detail_url, timeout_seconds)
+        detail = parse_toutiao_article_page(response_text, item)
+        if detail.fetch_status == "success":
+            details.append(detail)
+            continue
+
+        details.append(None)
+        if rendered_fetch and _is_content_url(detail_url):
+            render_queue.append((len(details) - 1, item, detail_url))
+
+    rendered_contents: dict[str, str] = {}
+    if render_queue and rendered_fetch:
+        rendered_contents = rendered_fetch(tuple(detail_url for _, _, detail_url in render_queue), timeout_seconds)
+
+    for index, item, detail_url in render_queue:
+        rendered_content = rendered_contents.get(detail_url, "")
+        if rendered_content:
+            details[index] = _rendered_detail(item, detail_url, rendered_content)
+
+    return [
+        detail if detail is not None else _partial_detail(item)
+        for detail, item in zip(details, items, strict=True)
+    ]
+
+
+def fetch_toutiao_item_detail(
+    item: HotItem,
+    fetcher=None,
+    timeout_seconds: int = 20,
+    rendered_text_fetcher=None,
+) -> ItemDetail:
+    rendered_texts_fetcher = None
+    if rendered_text_fetcher is not None:
+        rendered_texts_fetcher = lambda urls, timeout: {
+            url: rendered_text_fetcher(url, timeout) for url in urls
+        }
+    return fetch_toutiao_item_details(
+        [item],
+        fetcher=fetcher,
+        timeout_seconds=timeout_seconds,
+        rendered_texts_fetcher=rendered_texts_fetcher,
+    )[0]
+
+
+def _rendered_detail(item: HotItem, detail_url: str, content: str) -> ItemDetail:
+    return ItemDetail(
+        item_id=item.item_id,
+        platform=item.platform,
+        url=detail_url,
+        title=item.title,
+        author="",
+        content=content,
+        published_at="",
+        tags=(),
+        extraction_method="toutiao_rendered_page",
+        fetch_status="success",
+        raw_payload={"source_url": item.url, "content_url": detail_url},
+    )
+
+
+def _partial_detail(item: HotItem) -> ItemDetail:
     return ItemDetail(
         item_id=item.item_id,
         platform=item.platform,
@@ -284,6 +429,19 @@ def _absolute_url(url: str) -> str:
     return url
 
 
+def resolve_toutiao_content_url(url: str) -> str:
+    absolute_url = html.unescape(_absolute_url(url.strip()))
+    parsed = urlparse(absolute_url)
+    if not parsed.path.startswith("/search/jump"):
+        return absolute_url
+
+    outer_url = parse_qs(parsed.query).get("url", [""])[0]
+    if not outer_url:
+        return absolute_url
+    nested_url = parse_qs(urlparse(outer_url).query).get("h5_url", [""])[0]
+    return html.unescape(nested_url or outer_url)
+
+
 def _search_params(phrase: str) -> dict[str, str]:
     return {
         "keyword": phrase,
@@ -294,6 +452,12 @@ def _search_params(phrase: str) -> dict[str, str]:
         "count": "10",
         "offset": "0",
     }
+
+
+def _needs_rendered_search(items: list[HotItem]) -> bool:
+    if not items:
+        return False
+    return all(item.raw_payload.get("source_kind") == "search_keyword_hit" for item in items)
 
 
 def _alias_for(phrase: str) -> str:
@@ -333,7 +497,7 @@ def _metric_from_text(text: str, label: str) -> int | None:
 
 
 def _article_id_from_url(url: str) -> str:
-    match = re.search(r"/(?:article|trending)/(\d+)", url)
+    match = re.search(r"/(?:article|trending|group)/(\d+)", url)
     if match:
         return match.group(1)
     match = re.search(r"(?:groupid|item_id|search_result_id)=(\d+)", url)
@@ -343,6 +507,7 @@ def _article_id_from_url(url: str) -> str:
 def _is_content_url(url: str) -> bool:
     return (
         url.startswith("/search/jump")
+        or "so.toutiao.com/search/jump" in url
         or "toutiao.com/article/" in url
         or "toutiao.com/trending/" in url
         or "toutiao.com/group/" in url
@@ -385,6 +550,144 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _clean_multiline_text(value: str) -> str:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines()]
+    return "\n".join(line for line in lines if line)
+
+
+def _first_nonempty_line(value: str) -> str:
+    for line in value.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return ""
+
+
+def _summary_from_rendered_card(card_text: str, title: str) -> str:
+    for line in card_text.splitlines():
+        candidate = line.strip()
+        if candidate and candidate != title:
+            return candidate
+    return title
+
+
+def _fetch_toutiao_rendered_search_links(phrase: str, timeout_seconds: int) -> list[dict[str, str]]:
+    return asyncio.run(_fetch_toutiao_rendered_search_links_async(phrase, timeout_seconds))
+
+
+async def _fetch_toutiao_rendered_search_links_async(
+    phrase: str,
+    timeout_seconds: int,
+) -> list[dict[str, str]]:
+    from playwright.async_api import async_playwright
+
+    url = f"{TOUTIAO_SEARCH_URL}?{urlencode({key: value for key, value in _search_params(phrase).items() if key != 'format'})}"
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="zh-CN",
+        )
+        page = await context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=5000)
+            except Exception:
+                pass
+            return await page.evaluate(
+                """() => Array.from(document.querySelectorAll('a')).map((a) => ({
+                    text: (a.innerText || a.textContent || '').trim(),
+                    href: a.href,
+                    card: (
+                        a.closest('[class*=result], [class*=card], [class*=item], li, section, article, div')
+                        ?.innerText || ''
+                    ).trim(),
+                })).filter((item) => item.href && item.href.includes('/search/jump'))"""
+            )
+        finally:
+            await browser.close()
+
+
+def _fetch_toutiao_rendered_article_text(url: str, timeout_seconds: int) -> str:
+    return _fetch_toutiao_rendered_article_texts((url,), timeout_seconds).get(url, "")
+
+
+def _fetch_toutiao_rendered_article_texts(urls: tuple[str, ...], timeout_seconds: int) -> dict[str, str]:
+    return asyncio.run(_fetch_toutiao_rendered_article_texts_async(urls, timeout_seconds))
+
+
+async def _fetch_toutiao_rendered_article_texts_async(
+    urls: tuple[str, ...],
+    timeout_seconds: int,
+) -> dict[str, str]:
+    from playwright.async_api import async_playwright
+
+    contents: dict[str, str] = {}
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="zh-CN",
+        )
+        try:
+            for url in urls:
+                page = await context.new_page()
+                try:
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
+                    except Exception:
+                        pass
+                    try:
+                        await page.wait_for_selector(
+                            "article, .syl-page-article, .article-content",
+                            timeout=8000,
+                        )
+                    except Exception:
+                        pass
+                    text = await page.evaluate(
+                        """() => {
+                            const selectors = ['article', '.syl-page-article', '.article-content'];
+                            for (const selector of selectors) {
+                                const element = document.querySelector(selector);
+                                const text = (element?.innerText || '').trim();
+                                if (text.length > 80) return text;
+                            }
+                            return (document.body?.innerText || '').trim();
+                        }"""
+                    )
+                    contents[url] = _clean_rendered_article_text(text)
+                finally:
+                    await page.close()
+            return contents
+        finally:
+            await browser.close()
+
+
+def _clean_rendered_article_text(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    drop_prefixes = {
+        "关注",
+        "推荐",
+        "搜索",
+        "消息",
+        "发布",
+        "登录",
+        "赞",
+        "评论",
+        "收藏",
+        "分享",
+    }
+    filtered = [line for line in lines if line not in drop_prefixes]
+    return "\n".join(filtered).strip()
 
 
 class _ArticleTextParser(HTMLParser):
@@ -489,3 +792,197 @@ class _SearchResultParser(HTMLParser):
         self._active_title_parts = []
         self._parts = []
         self._collect_text = False
+
+
+# ---------------------------------------------------------------------------
+# Article info enrichment (mobile info API)
+# ---------------------------------------------------------------------------
+
+
+ARTICLE_HEAT_WEIGHTS: dict[str, int] = {
+    "impression_count": 1,
+    "digg_count": 2,
+    "comment_count": 5,
+    "repost_count": 10,
+    "repin_count": 3,
+}
+
+
+def extract_toutiao_article_id(url: str) -> str | None:
+    """Extract numeric article id from a Toutiao article URL. Returns None on miss."""
+    if not url:
+        return None
+    match = re.search(r"/(?:article|trending|group)/(\d+)", url)
+    if match:
+        return match.group(1)
+    match = re.search(r"(?:groupid|item_id|search_result_id)=(\d+)", url)
+    return match.group(1) if match else None
+
+
+def compute_article_heat(metrics: dict[str, int | None]) -> int:
+    """Weighted composite of mobile info API metrics."""
+    total = 0
+    for key, weight in ARTICLE_HEAT_WEIGHTS.items():
+        value = metrics.get(key)
+        if value is None:
+            continue
+        try:
+            total += int(value) * weight
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def fetch_toutiao_article_info(
+    article_id: str,
+    fetcher: Callable[[str, int], str] | None = None,
+    timeout_seconds: int = 15,
+) -> dict[str, Any] | None:
+    """Fetch the mobile article info endpoint. Returns the inner `data` dict or None."""
+    fetch = fetcher or _fetch_text
+    url = TOUTIAO_ARTICLE_INFO_URL.format(article_id=article_id)
+    try:
+        response = fetch(url, timeout_seconds)
+    except Exception:
+        return None
+    try:
+        payload = json.loads(response)
+    except json.JSONDecodeError:
+        return None
+    data = payload.get("data")
+    return data if isinstance(data, dict) else None
+
+
+def attach_article_heat_fields(
+    item: HotItem, info: dict[str, Any] | None,
+) -> HotItem:
+    """Return a new HotItem with article_heat / is_toutiao_hot / etc. merged into raw_payload.
+
+    Hot board items keep their hot_value (do NOT overwrite); search items get
+    hot_value=article_heat so downstream scoring can treat them uniformly.
+    """
+    raw_payload = dict(item.raw_payload)
+    if info is None:
+        raw_payload["article_info_status"] = "fetch_failed"
+        return _replace_item(item, raw_payload=raw_payload)
+
+    raw_counts = {
+        "impression_count": _safe_int(info.get("impression_count")),
+        "digg_count": _safe_int(info.get("digg_count")),
+        "comment_count": _safe_int(info.get("comment_count")),
+        "repost_count": _safe_int(info.get("repost_count")),
+        "repin_count": _safe_int(info.get("repin_count")),
+    }
+    article_heat = compute_article_heat(raw_counts)
+    is_toutiao_hot = bool(info.get("is_toutiao_hot"))
+    is_original = bool(info.get("is_original"))
+    content_html = str(info.get("content") or "")
+
+    was_hot_board = item.raw_payload.get("source_kind") in {
+        "hot_board", "search_hot_board_overlap",
+    }
+
+    raw_payload["article_heat"] = article_heat
+    raw_payload["raw_counts"] = raw_counts
+    raw_payload["is_toutiao_hot"] = is_toutiao_hot
+    raw_payload["is_original"] = is_original
+    raw_payload["content_html"] = content_html
+    raw_payload["article_info_status"] = "ok"
+
+    new_heat = item.heat
+    new_source_kind = item.raw_payload.get("source_kind", "article_info")
+    if was_hot_board:
+        raw_payload["metric_name"] = "hot_value+article_heat"
+    else:
+        new_source_kind = "article_info"
+        raw_payload["source_kind"] = new_source_kind
+        raw_payload["metric_name"] = "article_heat"
+        new_heat = HeatMetrics(
+            value=article_heat,
+            label=str(article_heat),
+            metric_name="article_heat",
+            metrics={key: value for key, value in raw_counts.items() if value is not None},
+        )
+
+    return _replace_item(
+        item,
+        raw_payload=raw_payload,
+        heat=new_heat,
+        raw_payload_source_kind=new_source_kind,
+    )
+
+
+def _replace_item(
+    item: HotItem,
+    *,
+    raw_payload: dict[str, Any] | None = None,
+    heat: HeatMetrics | None = None,
+    raw_payload_source_kind: str | None = None,
+) -> HotItem:
+    """Replace selected fields on a frozen HotItem."""
+    from dataclasses import replace as dc_replace
+
+    updates: dict[str, Any] = {}
+    if raw_payload is not None:
+        updates["raw_payload"] = raw_payload
+    if heat is not None:
+        updates["heat"] = heat
+    if raw_payload_source_kind is not None:
+        rp = updates.get("raw_payload", item.raw_payload)
+        rp = dict(rp)
+        rp["source_kind"] = raw_payload_source_kind
+        updates["raw_payload"] = rp
+    return dc_replace(item, **updates)
+
+
+def _safe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def fetch_toutiao_search_pages(
+    phrase: str,
+    *,
+    fetched_at: str,
+    max_pages: int = 1,
+    per_page: int = 10,
+    fetcher: Callable[[str, int], str] | None = None,
+    timeout_seconds: int = 20,
+) -> list[HotItem]:
+    """Paginated search. Dedupes by canonical URL and article_id across pages.
+
+    Returns the combined list of HotItems from all pages.
+    """
+    fetch = fetcher or _fetch_text
+    seen_urls: set[str] = set()
+    seen_article_ids: set[str] = set()
+    merged: list[HotItem] = []
+    for page in range(max(1, max_pages)):
+        offset = page * per_page
+        params = _search_params(phrase) | {"count": str(per_page), "offset": str(offset)}
+        url = f"{TOUTIAO_SEARCH_URL}?{urlencode(params)}"
+        try:
+            response = fetch(url, timeout_seconds)
+        except Exception:
+            break
+        page_items = parse_toutiao_search_response(response, phrase, fetched_at)
+        if not page_items:
+            break
+        for item in page_items:
+            if not _is_content_url(item.url):
+                continue
+            canonical = _canonical_url(item.url)
+            if canonical in seen_urls:
+                continue
+            seen_urls.add(canonical)
+            aid = extract_toutiao_article_id(item.url)
+            if aid:
+                if aid in seen_article_ids:
+                    continue
+                seen_article_ids.add(aid)
+            merged.append(item)
+    return merged
