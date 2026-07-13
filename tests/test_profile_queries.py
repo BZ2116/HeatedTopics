@@ -19,12 +19,14 @@ def test_qianfan_query_is_short_and_profile_derived():
     query = build_qianfan_query(sample_profile())
     assert "AI工具" in query
     assert "AI应用与效率工具" in query
+    assert "普通职场人" in query
     assert "最新热点" in query
     assert qianfan_query_units(query) <= 72
 
 
-def test_query_units_count_ascii_once_and_chinese_twice():
+def test_query_units_count_ascii_once_and_non_ascii_conservatively_twice():
     assert qianfan_query_units("AI工具") == 6
+    assert qianfan_query_units("é🙂") == 4
 
 
 def test_qianfan_query_deduplicates_tokens_in_insertion_order():
@@ -32,9 +34,18 @@ def test_qianfan_query_deduplicates_tokens_in_insertion_order():
     assert query.split() == ["AI工具", "最新热点"]
 
 
-def test_qianfan_query_truncates_at_character_boundaries():
+def test_qianfan_query_preserves_all_components_when_inputs_are_oversized():
     query = build_qianfan_query(
-        sample_profile(primary_keyword="A" * 80, secondary_track="次赛道", persona="目标受众")
+        sample_profile(
+            primary_keyword="P" * 80,
+            secondary_track="S" * 80,
+            persona="T" * 80,
+        )
     )
+    primary, secondary, persona, suffix = query.split()
+    assert primary and set(primary) == {"P"}
+    assert secondary and set(secondary) == {"S"}
+    assert persona and set(persona) == {"T"}
+    assert suffix == "最新热点"
     assert qianfan_query_units(query) <= 72
     assert not query.endswith(" ")
