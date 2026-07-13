@@ -1,73 +1,99 @@
+"""Immutable data contracts shared by the collection and recommendation workflow."""
+
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, Mapping
+
+
+HeatLevel = Literal[1, 2, 3]
+FactStatus = Literal["verified", "unverified", "disputed", "debunked"]
+ContentStatus = Literal["full_text", "summary", "title_only"]
+GenerationStatus = Literal["existing", "generated", "no_result", "not_ready", "failed"]
+CollectionStatus = Literal["success", "partial", "failed"]
 
 
 @dataclass(frozen=True)
 class UserProfile:
-    profile_id: str
-    display_name: str
-    domains: tuple[str, ...]
-    audience: tuple[str, ...]
-    content_modes: tuple[str, ...]
-    preferred_platforms: tuple[str, ...]
-    core_keywords: tuple[str, ...]
-    entity_keywords: tuple[str, ...] = ()
-    excluded_keywords: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class TopicQuery:
-    query_id: str
-    profile_id: str
-    query: str
-    intent: str
-    target_platforms: tuple[str, ...]
-    keywords: tuple[str, ...]
-    usage: str
-    priority: int
+    user_id: str
+    primary_track: str
+    secondary_track: str
+    persona: str
+    primary_keyword: str
+    updated_at: str
 
 
 @dataclass(frozen=True)
 class HeatMetrics:
-    value: int | None
+    value: int | float | None
     label: str
     metric_name: str
-    metrics: dict[str, int | float] = field(default_factory=dict)
+    metrics: Mapping[str, int | float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class HotItem:
     item_id: str
     platform: str
-    item_type: str
     title: str
     url: str
     rank: int | None
     heat: HeatMetrics
     summary: str
-    category: str
-    matched_query_ids: tuple[str, ...]
-    fetched_at: str
+    publication_time: str | None
+    collected_at: str
+    raw_payload: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ItemDetail:
+    item_id: str
+    content: str
+    content_status: ContentStatus
+    publication_time: str | None
+    collected_at: str
+    source_url: str
     fetch_status: str
-    raw_payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
-class TopicCluster:
-    topic_id: str
-    canonical_title: str
-    source_item_ids: tuple[str, ...]
-    platforms: tuple[str, ...]
-    matched_profile_ids: tuple[str, ...]
-    summary: str
-    is_usable: bool
-    confidence: str
+class PlatformCollectionStatus:
+    platform: str
+    status: CollectionStatus
+    collected_at: str
+    item_count: int
+    error: str | None = None
 
 
 @dataclass(frozen=True)
-class ReportBundle:
+class DailySnapshot:
+    business_date: str
+    collected_at: str
+    items_by_platform: Mapping[str, tuple[HotItem, ...]]
+    platform_statuses: tuple[PlatformCollectionStatus, ...] = ()
+
+
+@dataclass(frozen=True)
+class RecommendationItem:
+    hot_item_id: str
+    platform: str
+    title: str
+    heat_level: HeatLevel
+    fact_status: FactStatus
+    publication_time: str | None
+    collected_at: str
+    detail: str
+    content_status: ContentStatus
+    is_personalized: bool
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+    source_url: str = ""
+
+
+@dataclass(frozen=True)
+class RecommendationBundle:
+    status: GenerationStatus
+    user_id: str
+    business_date: str
     generated_at: str
-    profile_id: str
-    hot_items: tuple[HotItem, ...]
-    topic_clusters: tuple[TopicCluster, ...]
-    report_markdown: str
+    recommendations: tuple[RecommendationItem, ...]
+    potential_topics: tuple[RecommendationItem, ...]
+    general_fallback: tuple[RecommendationItem, ...]
+    query_metadata: Mapping[str, Any] = field(default_factory=dict)
