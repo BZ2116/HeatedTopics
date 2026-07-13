@@ -212,3 +212,27 @@ then applies the user-segment and existing-directory checks.
 - Fresh live contract smoke at `2026-07-13T15:23:40.482659+08:00`: Toutiao
   board 50, Juejin board 45, Toutiao search 10.
 - `git diff --check`: exit 0, apart from Git's Windows line-ending notices.
+
+### Strict empty-search envelope follow-up
+
+A final counterexample review found Python equality made `False == 0` and
+`0.0 == 0`, and the DOM branch returned immediately for `count=0` without
+checking whether the DOM was actually empty. The empty-result contract is now
+strict:
+
+- Current DOM form is genuinely empty only when `type(count) is int`,
+  `count == 0`, and `dom` is an empty or whitespace-only string. A zero count
+  with nonempty DOM is contradictory and raises `ProviderContractError`.
+- Legacy form is genuinely empty only when `data == []`, `type(count) is int`,
+  and `count == 0`. Missing, Boolean, float, and string counts are rejected.
+- A nonempty legacy list containing structurally valid title+URL rows may still
+  normalize to an empty tuple when every valid row is older than the 24-hour
+  window; this is a valid filtered result, not an endpoint failure.
+
+TDD evidence: the new counterexamples first produced `3 failed, 22 passed`
+(nonempty zero-count DOM, Boolean zero, and float zero). String and missing
+counts were already rejected. After the minimal contract change, Toutiao focused
+tests reported `26 passed in 0.23s` (including explicit whitespace-only DOM),
+the full suite reported `137 passed in 1.81s`, `compileall` exited 0, and
+`git diff --check` passed apart from line-ending
+notices.

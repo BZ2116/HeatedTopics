@@ -83,13 +83,16 @@ class ToutiaoProvider:
             count = payload.get("count")
             dom = payload.get("dom")
             if (
-                isinstance(count, bool)
-                or not isinstance(count, int)
+                type(count) is not int
                 or count < 0
                 or not isinstance(dom, str)
             ):
                 raise ProviderContractError("invalid toutiao search response")
             if count == 0:
+                if dom.strip():
+                    raise ProviderContractError(
+                        "zero-count toutiao search returned nonempty DOM"
+                    )
                 return ()
             if not dom.strip():
                 raise ProviderContractError("toutiao search omitted result DOM")
@@ -97,8 +100,11 @@ class ToutiaoProvider:
         if "data" not in payload or not isinstance(payload["data"], list):
             raise ProviderContractError("invalid toutiao search response")
         rows = payload["data"]
-        if not rows and payload.get("count") != 0:
-            raise ProviderContractError("ambiguous empty toutiao search response")
+        if not rows:
+            count = payload.get("count")
+            if type(count) is not int or count != 0:
+                raise ProviderContractError("ambiguous empty toutiao search response")
+            return ()
         cutoff = _datetime(collected_at) - timedelta(hours=24)
         items = []
         valid_rows = 0

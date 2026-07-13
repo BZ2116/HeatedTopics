@@ -55,10 +55,11 @@ def test_search_rejects_malformed_and_api_error_payloads(payload):
         ToutiaoProvider(client).search("AI", NOW)
 
 
-def test_search_accepts_explicit_zero_count_as_genuine_empty_result():
+@pytest.mark.parametrize("dom", ["", " \n\t"])
+def test_search_accepts_explicit_zero_count_with_blank_dom_as_genuine_empty_result(dom):
     client = httpx.Client(
         transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, json={"count": 0, "dom": ""})
+            lambda request: httpx.Response(200, json={"count": 0, "dom": dom})
         )
     )
 
@@ -67,11 +68,50 @@ def test_search_accepts_explicit_zero_count_as_genuine_empty_result():
     assert capture.items == ()
 
 
+def test_search_rejects_zero_count_when_dom_is_not_empty():
+    raw = json.dumps(
+        {
+            "count": 0,
+            "dom": '<article data-group-id="9001"><h2>Unexpected card</h2></article>',
+        }
+    )
+
+    with pytest.raises(ValueError):
+        ToutiaoProvider.parse_search(raw, NOW)
+
+
+@pytest.mark.parametrize("count", [False, 0.0, "0", None])
+def test_search_rejects_legacy_empty_data_without_strict_integer_zero_count(count):
+    payload = {"data": []}
+    if count is not None:
+        payload["count"] = count
+
+    with pytest.raises(ValueError):
+        ToutiaoProvider.parse_search(json.dumps(payload), NOW)
+
+
 def test_search_rejects_nonempty_legacy_data_when_every_row_is_malformed():
     raw = json.dumps({"data": [{"unexpected": "shape"}]})
 
     with pytest.raises(ValueError):
         ToutiaoProvider.parse_search(raw, NOW)
+
+
+def test_search_accepts_structurally_valid_legacy_rows_all_filtered_by_age():
+    raw = json.dumps(
+        {
+            "data": [
+                {
+                    "id": "old-1",
+                    "title": "Old but valid",
+                    "url": "https://www.toutiao.com/article/old-1/",
+                    "publish_time": "2026-07-10T03:00:00Z",
+                }
+            ]
+        }
+    )
+
+    assert ToutiaoProvider.parse_search(raw, NOW) == ()
 
 def test_collect_hot_list_preserves_raw_text_and_parses_heat():
     raw = (FIXTURES / "toutiao_hot_board.json").read_text(encoding="utf-8")
