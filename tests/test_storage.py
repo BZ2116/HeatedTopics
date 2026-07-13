@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -86,6 +87,31 @@ def test_normalized_json_is_utf8_formatted_and_recursively_sanitized(tmp_path):
     assert all(field not in lowered for field in ("cookie", "api_key", "secret", "authorization"))
 
 
+def test_normalized_json_removes_secret_key_aliases_but_preserves_harmless_values(tmp_path):
+    repo = FileRepository(tmp_path)
+    payload = {
+        "x-api-key": "bad-1",
+        "apiKey": "bad-2",
+        "nested": {
+            "apikey": "bad-3",
+            "Authorization": "Bearer bad",
+            "Cookie": "session=bad",
+            "QIANFAN_SECRET_KEY": "bad-4",
+            "description": "Cookie, apikey, Authorization, and QIANFAN_SECRET_KEY are words here",
+        },
+    }
+
+    path = repo.save_normalized(
+        date(2026, 7, 13), "baidu", (hot_item(raw_payload=payload),)
+    )
+
+    assert json.loads(path.read_text("utf-8"))[0]["raw_payload"] == {
+        "nested": {
+            "description": "Cookie, apikey, Authorization, and QIANFAN_SECRET_KEY are words here"
+        }
+    }
+
+
 def test_snapshot_round_trips_as_contracts(tmp_path):
     repo = FileRepository(tmp_path)
     day = date(2026, 7, 13)
@@ -150,3 +176,26 @@ def test_atomic_result_failure_leaves_no_final_or_temporary_directory(tmp_path):
     parent = tmp_path / "user_results/user_001"
     assert not (parent / "2026-07-13").exists()
     assert not list(parent.glob("2026-07-13.tmp-*"))
+
+
+def test_atomic_publish_accepts_oserror_only_when_another_complete_directory_wins(
+    tmp_path, monkeypatch
+):
+    repo = FileRepository(tmp_path)
+    original_replace = Path.replace
+
+    def concurrent_publish(path, target):
+        target.mkdir(parents=True)
+        (target / "result.json").write_text("{}", encoding="utf-8")
+        raise OSError("simulated Windows directory publish race")
+
+    monkeypatch.setattr(Path, "replace", concurrent_publish)
+    final = repo.write_user_result_atomic(
+        "user_001",
+        "2026-07-13",
+        lambda directory: repo.write_json(directory / "result.json", bundle()),
+    )
+    monkeypatch.setattr(Path, "replace", original_replace)
+
+    assert final == tmp_path / "user_results/user_001/2026-07-13"
+    assert not list(final.parent.glob("2026-07-13.tmp-*"))

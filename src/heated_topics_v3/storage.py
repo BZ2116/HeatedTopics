@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import uuid
 from dataclasses import asdict, is_dataclass
@@ -29,8 +30,20 @@ def _date_text(value: BusinessDate) -> str:
 
 
 def _is_secret_field(key: object) -> bool:
-    normalized = str(key).strip().lower().replace("-", "_")
-    return normalized in {"cookie", "api_key", "secret", "authorization", "proxy_authorization"}
+    # Normalize camelCase and punctuation so header/config aliases such as
+    # ``x-api-key`` and ``apiKey`` receive the same treatment.  Only mapping
+    # keys are examined; ordinary string values are deliberately untouched.
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", str(key).strip())
+    normalized = re.sub(r"[^a-z0-9]+", "_", separated.lower()).strip("_")
+    tokens = tuple(part for part in normalized.split("_") if part)
+    compact = "".join(tokens)
+    return (
+        "cookie" in tokens
+        or "cookies" in tokens
+        or "authorization" in tokens
+        or "secret" in tokens
+        or compact.endswith("apikey")
+    )
 
 
 def _plain(value: Any) -> Any:
@@ -178,7 +191,7 @@ class FileRepository:
                 return final
             try:
                 temporary.replace(final)
-            except FileExistsError:
+            except OSError:
                 if not final.is_dir():
                     raise
                 shutil.rmtree(temporary)
