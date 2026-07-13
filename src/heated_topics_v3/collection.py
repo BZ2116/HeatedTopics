@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+import re
 from typing import Mapping, Protocol
 
 from .contracts import DailySnapshot, HotItem, ItemDetail, PlatformCollectionStatus
@@ -33,8 +34,10 @@ def collect_v1_daily(
     statuses: list[PlatformCollectionStatus] = []
 
     for platform in V1_PLATFORMS:
+        provider = providers.get(platform)
         try:
-            provider = providers[platform]
+            if provider is None:
+                raise KeyError(platform)
             capture = provider.collect_hot_list(collected_at)
             if not capture.items:
                 raise ValueError("empty official hot board")
@@ -46,7 +49,7 @@ def collect_v1_daily(
             )
             repository.save_normalized(business_date, platform, capture.items)
             items_by_platform[platform] = capture.items
-            detail_failed = _collect_details(
+            detail_failed, detail_failure_codes = _collect_details(
                 business_date,
                 platform,
                 capture.items,
@@ -69,6 +72,11 @@ def collect_v1_daily(
                     item_count=len(capture.items),
                     error=(
                         f"detail_fetch_failed:{','.join(failed_item_ids)}"
+                        + (
+                            f";cause={','.join(sorted(detail_failure_codes))}"
+                            if detail_failure_codes
+                            else ""
+                        )
                         if detail_failed
                         else None
                     ),
@@ -84,6 +92,13 @@ def collect_v1_daily(
                     error=type(error).__name__,
                 )
             )
+        finally:
+            close = getattr(provider, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
 
     repository.save_collection_status(business_date, statuses)
     return DailySnapshot(
@@ -103,13 +118,14 @@ def _collect_details(
     repository: FileRepository,
     previous_items: tuple[HotItem, ...],
     previous_status: PlatformCollectionStatus | None,
-) -> set[str]:
+) -> tuple[set[str], set[str]]:
     cached = _load_cached_details(
         business_date, platform, items, previous_items, repository
     )
     failed_item_ids = set(cached) & _previous_detail_failures(
         previous_items, previous_status
     )
+    failure_codes = _previous_failure_codes(previous_status) if failed_item_ids else set()
     for sequence, item in enumerate(items, 1):
         if item.item_id in cached:
             repository.save_detail(
@@ -121,7 +137,7 @@ def _collect_details(
         if item.item_id not in cached
     ]
     if not pending:
-        return failed_item_ids
+        return failed_item_ids, failure_codes
 
     with ThreadPoolExecutor(max_workers=3) as executor:
         futures = {
@@ -139,13 +155,17 @@ def _collect_details(
                     or not content.strip()
                 ):
                     failed_item_ids.add(item.item_id)
+                    if ":" in detail.fetch_status:
+                        code = detail.fetch_status.split(":", 1)[1]
+                        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", code):
+                            failure_codes.add(code)
                 if not content.strip():
                     content = item.summary or item.title
             except Exception:
                 content = item.summary or item.title
                 failed_item_ids.add(item.item_id)
             repository.save_detail(business_date, platform, sequence, content)
-    return failed_item_ids
+    return failed_item_ids, failure_codes
 
 
 def _load_cached_details(
@@ -187,5 +207,17 @@ def _previous_detail_failures(
         return set()
     prefix = "detail_fetch_failed:"
     if status.error and status.error.startswith(prefix):
-        return {item_id for item_id in status.error[len(prefix) :].split(",") if item_id}
+        item_ids = status.error[len(prefix) :].split(";", 1)[0]
+        return {item_id for item_id in item_ids.split(",") if item_id}
     return {item.item_id for item in previous_items}
+
+
+def _previous_failure_codes(status: PlatformCollectionStatus | None) -> set[str]:
+    if status is None or not status.error or ";cause=" not in status.error:
+        return set()
+    values = status.error.split(";cause=", 1)[1]
+    return {
+        code
+        for code in values.split(",")
+        if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", code)
+    }

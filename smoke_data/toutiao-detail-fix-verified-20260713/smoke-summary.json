@@ -1,0 +1,39 @@
+{
+  "business_date": "2026-07-13",
+  "platform_status": "success",
+  "samples": [
+    {
+      "sequence": 1,
+      "item_id": "toutiao_7660891930447970346",
+      "title": "高盛：中国股票出现“轮动信号”",
+      "url": "https://www.toutiao.com/trending/7660891930447970346/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227660891930447970346%22%2C%22hot_board_impr_id%22%3A%222026071316544307DCD2F6411E52C5058D%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E9%AB%98%E7%9B%9B%EF%BC%9A%E4%B8%AD%E5%9B%BD%E8%82%A1%E7%A5%A8%E5%87%BA%E7%8E%B0%E2%80%9C%E8%BD%AE%E5%8A%A8%E4%BF%A1%E5%8F%B7%E2%80%9D%22%7D&rank=&style_id=40132&topic_id=7660891930447970346",
+      "characters": 2976,
+      "lines": 45,
+      "content_status": "full_text",
+      "extraction_method": "playwright_follow_event_article",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-fix-verified-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_1.txt"
+    },
+    {
+      "sequence": 2,
+      "item_id": "toutiao_7661862953297333798",
+      "title": "中国首个禁售燃油车省份确认",
+      "url": "https://www.toutiao.com/trending/7661862953297333798/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661862953297333798%22%2C%22hot_board_impr_id%22%3A%222026071316544307DCD2F6411E52C5058D%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E4%B8%AD%E5%9B%BD%E9%A6%96%E4%B8%AA%E7%A6%81%E5%94%AE%E7%87%83%E6%B2%B9%E8%BD%A6%E7%9C%81%E4%BB%BD%E7%A1%AE%E8%AE%A4%22%7D&rank=&style_id=40132&topic_id=7661862953297333798",
+      "characters": 300,
+      "lines": 2,
+      "content_status": "full_text",
+      "extraction_method": "playwright_follow_event_article",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-fix-verified-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_2.txt"
+    },
+    {
+      "sequence": 3,
+      "item_id": "toutiao_7661405401853722667",
+      "title": "中国电力技术创新位居全球首位",
+      "url": "https://www.toutiao.com/article/7661871584124125736",
+      "characters": 188,
+      "lines": 4,
+      "content_status": "full_text",
+      "extraction_method": "playwright_article_page",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-fix-verified-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_3.txt"
+    }
+  ]
+}

@@ -1,10 +1,12 @@
 """Toutiao hot-board and single-keyword search provider."""
+import asyncio
 import json
 import re
+import threading
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Callable
-from urllib.parse import unquote
+from typing import Callable, Protocol
+from urllib.parse import unquote, urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -15,12 +17,225 @@ from .common import ProviderCapture, ProviderContractError, article_text, number
 TOUTIAO_HOT_BOARD_URL = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
 TOUTIAO_SEARCH_URL = "https://so.toutiao.com/search/"
 TOUTIAO_TIMEZONE = ZoneInfo("Asia/Shanghai")
+MIN_ARTICLE_CHARACTERS = 120
+MAX_RENDER_CONCURRENCY = 3
+TOUTIAO_ARTICLE_EVALUATION_SCRIPT = r"""() => {
+    const detailLink = document.querySelector(
+        '.block-container .feed-card-article-l a.title, .block-container a[href*="/article/"]'
+    );
+    const selectors = [
+        'article', '.syl-page-article', '.article-content',
+        '.feed-card-article-l', '.weitoutiao-html'
+    ];
+    for (const selector of selectors) {
+        const candidates = [...document.querySelectorAll(selector)];
+        const texts = candidates.map(node => (node.innerText || '').trim())
+            .filter(text => text.length > 80);
+        if (texts.length) return {text: texts.join('\n\n'), detail_url: detailLink?.getAttribute('href') || ''};
+    }
+    return {text: (document.body?.innerText || '').trim(), detail_url: detailLink?.getAttribute('href') || ''};
+}"""
+
+
+class _Renderer(Protocol):
+    def fetch(self, url: str) -> str: ...
+
+    def close(self) -> None: ...
+
+
+class ToutiaoRendererUnavailable(RuntimeError):
+    """Raised without sensitive context when browser rendering cannot start."""
+
+
+class PlaywrightArticleRenderer:
+    """One lazy Chromium context shared by bounded concurrent detail requests."""
+
+    def __init__(self, timeout_seconds: int = 20, max_concurrency: int = MAX_RENDER_CONCURRENCY):
+        self.timeout_seconds = timeout_seconds
+        self.max_concurrency = max_concurrency
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._start_lock = threading.Lock()
+        self._closed = False
+        self._initialized = False
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._semaphore = None
+
+    def fetch(self, url: str) -> str:
+        self._ensure_started()
+        assert self._loop is not None
+        future = asyncio.run_coroutine_threadsafe(self._fetch(url), self._loop)
+        try:
+            return future.result(timeout=(self.timeout_seconds * 2) + 20)
+        except Exception as error:
+            future.cancel()
+            if isinstance(error, ToutiaoRendererUnavailable):
+                raise
+            raise ToutiaoRendererUnavailable(type(error).__name__) from None
+
+    def close(self) -> None:
+        with self._start_lock:
+            if self._closed:
+                return
+            self._closed = True
+            loop, thread = self._loop, self._thread
+        if loop is not None and thread is not None:
+            future = asyncio.run_coroutine_threadsafe(self._shutdown(), loop)
+            try:
+                future.result(timeout=10)
+            except Exception:
+                pass
+            loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=10)
+
+    def _ensure_started(self) -> None:
+        with self._start_lock:
+            if self._closed:
+                raise ToutiaoRendererUnavailable("RendererClosed")
+            if self._initialized:
+                return
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run_loop,
+                    name="toutiao-playwright-renderer",
+                    daemon=True,
+                )
+                self._thread.start()
+            if not self._ready.wait(timeout=5) or self._loop is None:
+                raise ToutiaoRendererUnavailable("EventLoopStartupError")
+            future = asyncio.run_coroutine_threadsafe(self._initialize(), self._loop)
+            try:
+                future.result(timeout=30)
+            except Exception as error:
+                if isinstance(error, ToutiaoRendererUnavailable):
+                    raise
+                raise ToutiaoRendererUnavailable(type(error).__name__) from None
+            self._initialized = True
+
+    def _run_loop(self) -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self._loop = loop
+        self._ready.set()
+        loop.run_forever()
+        loop.close()
+
+    async def _initialize(self) -> None:
+        if self._context is not None:
+            return
+        try:
+            from playwright.async_api import async_playwright
+
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._context = await self._browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                locale="zh-CN",
+            )
+            self._semaphore = asyncio.Semaphore(self.max_concurrency)
+        except Exception as error:
+            await self._shutdown()
+            raise ToutiaoRendererUnavailable(type(error).__name__) from None
+
+    async def _fetch(self, url: str) -> str:
+        if self._context is None or self._semaphore is None:
+            raise ToutiaoRendererUnavailable("RendererNotInitialized")
+        async with self._semaphore:
+            page = await self._context.new_page()
+            try:
+                try:
+                    await page.goto(
+                        url,
+                        wait_until="domcontentloaded",
+                        timeout=self.timeout_seconds * 1000,
+                    )
+                except Exception:
+                    # Toutiao often finishes useful DOM work after a navigation timeout.
+                    pass
+                try:
+                    await page.wait_for_selector(
+                        "article, .syl-page-article, .article-content, .feed-card-article-l",
+                        timeout=min(8000, self.timeout_seconds * 1000),
+                    )
+                except Exception:
+                    pass
+                extracted = await self._evaluate_page(page)
+                detail_url = str(extracted.get("detail_url") or "")
+                if urlparse(url).path.startswith("/trending/") and detail_url:
+                    article_url = urljoin("https://www.toutiao.com/", detail_url)
+                    try:
+                        await page.goto(
+                            article_url,
+                            wait_until="domcontentloaded",
+                            timeout=self.timeout_seconds * 1000,
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        await page.wait_for_selector(
+                            "article, .syl-page-article, .article-content",
+                            timeout=min(8000, self.timeout_seconds * 1000),
+                        )
+                    except Exception:
+                        pass
+                    article = await self._evaluate_page(page)
+                    article_text = _clean_rendered_article_text(str(article.get("text") or ""))
+                    if _is_meaningful_article(article_text):
+                        return article_text
+                return _clean_rendered_article_text(str(extracted.get("text") or ""))
+            finally:
+                await page.close()
+
+    @staticmethod
+    async def _evaluate_page(page) -> dict[str, str]:
+        try:
+            value = await page.evaluate(TOUTIAO_ARTICLE_EVALUATION_SCRIPT)
+        except Exception:
+            raise ToutiaoRendererUnavailable("PageEvaluateError") from None
+        return value if isinstance(value, dict) else {"text": str(value or ""), "detail_url": ""}
+
+    async def _shutdown(self) -> None:
+        for resource in (self._context, self._browser):
+            if resource is not None:
+                try:
+                    await resource.close()
+                except Exception:
+                    pass
+        if self._playwright is not None:
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
+        self._context = self._browser = self._playwright = None
 
 
 class ToutiaoProvider:
-    def __init__(self, client: httpx.Client, rendered_fetcher: Callable[[str], str] | None = None):
+    def __init__(
+        self,
+        client: httpx.Client,
+        rendered_fetcher: Callable[[str], str] | None = None,
+        renderer: _Renderer | None = None,
+    ):
         self.client = client
+        self._renderer = renderer
+        if rendered_fetcher is None:
+            self._renderer = renderer or PlaywrightArticleRenderer()
+            rendered_fetcher = self._renderer.fetch
         self.rendered_fetcher = rendered_fetcher
+        self._closed = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._renderer is not None:
+            self._renderer.close()
 
     def collect_hot_list(self, collected_at: str) -> ProviderCapture:
         response = self.client.get(TOUTIAO_HOT_BOARD_URL)
@@ -43,20 +258,28 @@ class ToutiaoProvider:
         return ProviderCapture(raw, ".json", self.parse_search(raw, collected_at))
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
+        diagnostic = None
         try:
             content = article_text(self.client.get(item.url).text)
         except Exception:
             content = ""
         method = "toutiao_article_page"
-        if not content and self.rendered_fetcher:
+        if not _is_meaningful_article(content) and self.rendered_fetcher:
             method = "toutiao_rendered_page"
             try:
-                content = self.rendered_fetcher(item.url).strip()
-            except Exception:
+                content = _clean_rendered_article_text(self.rendered_fetcher(item.url))
+            except Exception as error:
+                diagnostic = (
+                    str(error)
+                    if isinstance(error, ToutiaoRendererUnavailable)
+                    else type(error).__name__
+                )
                 content = ""
-        if not content:
+        if not _is_meaningful_article(content):
+            if method == "toutiao_rendered_page" and diagnostic is None:
+                diagnostic = "RenderedContentTooShort"
             content, method = (item.summary or item.title), ("source_summary" if item.summary else "title")
-        return _detail(item, content, collected_at, method)
+        return _detail(item, content, collected_at, method, diagnostic)
 
     @staticmethod
     def parse_hot_list(raw: str, collected_at: str) -> tuple[HotItem, ...]:
@@ -296,7 +519,28 @@ def _optional_datetime(value) -> datetime | None:
     except (ValueError, TypeError, OverflowError):
         return None
 
-def _detail(item, content, collected_at, method):
+def _clean_rendered_article_text(text: str) -> str:
+    navigation = {
+        "首页", "关注", "推荐", "搜索", "消息", "发布", "登录", "赞",
+        "评论", "收藏", "分享", "打开App", "打开APP", "下载今日头条",
+    }
+    lines = []
+    for raw_line in str(text or "").splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line in navigation:
+            continue
+        if re.fullmatch(r"[\d.万亿]+\s*(赞|评论|收藏|分享)?", line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _is_meaningful_article(content: str) -> bool:
+    cleaned = _clean_rendered_article_text(content)
+    return len(cleaned) >= MIN_ARTICLE_CHARACTERS and len(cleaned.splitlines()) >= 2
+
+
+def _detail(item, content, collected_at, method, diagnostic=None):
     status = "full_text" if method in {"toutiao_article_page", "toutiao_rendered_page"} else ("summary" if method == "source_summary" else "title_only")
-    fetch_status = "success" if status == "full_text" else "partial"
+    fetch_status = "success" if status == "full_text" else (f"partial:{diagnostic}" if diagnostic else "partial")
     return ItemDetail(item.item_id, content, status, item.publication_time, collected_at, item.url, fetch_status)

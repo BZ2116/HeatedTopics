@@ -52,6 +52,7 @@ def test_collect_v1_emits_machine_readable_status(monkeypatch, tmp_path, capsys)
     }
     assert payload["elapsed_seconds"] >= 0
     assert set(observed["providers"]) == {"toutiao", "juejin"}
+    assert observed["providers"]["toutiao"].rendered_fetcher is not None
     assert observed["repository"].root == tmp_path
 
 

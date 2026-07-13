@@ -1,4 +1,6 @@
 import json
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -6,10 +8,21 @@ import httpx
 import pytest
 
 from heated_topics_v3.providers.common import ProviderCapture
-from heated_topics_v3.providers.toutiao import TOUTIAO_HOT_BOARD_URL, TOUTIAO_SEARCH_URL, ToutiaoProvider
+from heated_topics_v3.providers.toutiao import (
+    TOUTIAO_HOT_BOARD_URL,
+    TOUTIAO_SEARCH_URL,
+    TOUTIAO_ARTICLE_EVALUATION_SCRIPT,
+    PlaywrightArticleRenderer,
+    ToutiaoProvider,
+)
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 NOW = "2026-07-13T04:00:00Z"
+
+
+def test_rendered_article_javascript_keeps_join_newlines_escaped():
+    assert "texts.join('\\n\\n')" in TOUTIAO_ARTICLE_EVALUATION_SCRIPT
+    assert "texts.join('\n\n')" not in TOUTIAO_ARTICLE_EVALUATION_SCRIPT
 
 
 @pytest.mark.parametrize("operation", ["board", "search"])
@@ -186,11 +199,147 @@ def test_search_keeps_legacy_data_rows_as_compatibility_fallback():
 
 def test_fetch_detail_fallback_order():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
-    provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))), rendered_fetcher=lambda url: "Rendered article")
+    rendered = "Rendered article body with enough context to be meaningful. " * 3 + "\nSecond paragraph with supporting detail. " * 3
+    provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))), rendered_fetcher=lambda url: rendered)
     assert provider.fetch_detail(item, NOW).fetch_status == "success"
-    provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))))
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: "",
+    )
     detail = provider.fetch_detail(item, NOW)
-    assert detail.content == item.summary and detail.fetch_status == "partial"
+    assert detail.content == item.summary and detail.fetch_status.startswith("partial")
+
+
+def test_default_provider_has_anonymous_rendered_detail_path():
+    provider = ToutiaoProvider(httpx.Client())
+
+    assert provider.rendered_fetcher is not None
+
+    provider.close()
+
+
+def test_fetch_detail_prefers_meaningful_multiline_rendered_body_over_summary():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    rendered = "第一段正文，包含足够多的事实信息和上下文。" * 4 + "\n" + "第二段正文，继续解释事件经过与影响。" * 4
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: rendered,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content == rendered
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+
+
+def test_short_or_navigation_only_rendered_text_does_not_claim_full_text():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: "首页\n关注\n登录\n评论\n分享",
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content == item.summary
+    assert detail.content_status == "summary"
+    assert detail.fetch_status.startswith("partial")
+
+
+def test_provider_close_releases_renderer_once():
+    class Renderer:
+        def __init__(self):
+            self.closed = 0
+
+        def fetch(self, url):
+            return ""
+
+        def close(self):
+            self.closed += 1
+
+    renderer = Renderer()
+    provider = ToutiaoProvider(httpx.Client(), renderer=renderer)
+
+    provider.close()
+    provider.close()
+
+    assert renderer.closed == 1
+
+
+def test_shared_renderer_initializes_once_and_caps_concurrent_pages_at_three():
+    class InMemoryRenderer(PlaywrightArticleRenderer):
+        def __init__(self):
+            super().__init__(timeout_seconds=2, max_concurrency=3)
+            self.initialize_calls = 0
+            self.active = 0
+            self.maximum_active = 0
+
+        async def _initialize(self):
+            self.initialize_calls += 1
+            await asyncio.sleep(0.02)
+            self._semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async def _fetch(self, url):
+            async with self._semaphore:
+                self.active += 1
+                self.maximum_active = max(self.maximum_active, self.active)
+                await asyncio.sleep(0.02)
+                self.active -= 1
+                return url
+
+    renderer = InMemoryRenderer()
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        results = list(executor.map(renderer.fetch, (str(index) for index in range(6))))
+    renderer.close()
+
+    assert results == [str(index) for index in range(6)]
+    assert renderer.initialize_calls == 1
+    assert renderer.maximum_active == 3
+
+
+def test_trending_renderer_follows_event_detail_article_before_extracting_body():
+    body = "第一段完整正文，包含事件背景、事实和上下文。" * 5 + "\n" + "第二段完整正文，包含后续影响和信息来源。" * 5
+
+    class Page:
+        def __init__(self):
+            self.urls = []
+            self.evaluate_calls = 0
+
+        async def goto(self, url, **kwargs):
+            self.urls.append(url)
+
+        async def wait_for_selector(self, *args, **kwargs):
+            return None
+
+        async def evaluate(self, script):
+            self.evaluate_calls += 1
+            if self.evaluate_calls == 1:
+                return {"text": "事件详情\n短标题", "detail_url": "/article/123456/"}
+            return {"text": body, "detail_url": ""}
+
+        async def close(self):
+            return None
+
+    class Context:
+        def __init__(self, page):
+            self.page = page
+
+        async def new_page(self):
+            return self.page
+
+    renderer = PlaywrightArticleRenderer()
+    page = Page()
+    renderer._context = Context(page)
+    renderer._semaphore = asyncio.Semaphore(3)
+
+    result = asyncio.run(renderer._fetch("https://www.toutiao.com/trending/999/"))
+
+    assert page.urls == [
+        "https://www.toutiao.com/trending/999/",
+        "https://www.toutiao.com/article/123456/",
+    ]
+    assert result == body
 
 def test_search_treats_malformed_publication_time_as_undated():
     raw = json.dumps({"data": [{"id": "bad-date", "title": "Still useful", "url": "https://www.toutiao.com/article/204/", "publish_time": "not-a-date"}]})
@@ -206,8 +355,11 @@ def test_fetch_detail_uses_title_when_summary_and_pages_are_empty():
 def test_fetch_detail_continues_to_rendered_after_static_fetch_exception():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
     client = httpx.Client(transport=httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("offline"))))
-    detail = ToutiaoProvider(client, rendered_fetcher=lambda url: "Rendered recovery").fetch_detail(item, NOW)
-    assert detail.content == "Rendered recovery" and detail.content_status == "full_text"
+    rendered = "Rendered recovery with substantial article context. " * 4 + "\nSupporting paragraph with more facts. " * 4
+    detail = ToutiaoProvider(client, rendered_fetcher=lambda url: rendered).fetch_detail(item, NOW)
+    assert detail.content.startswith("Rendered recovery")
+    assert "\nSupporting paragraph" in detail.content
+    assert detail.content_status == "full_text"
 
 def test_fetch_detail_continues_to_summary_after_rendered_exception():
     item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]

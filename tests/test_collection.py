@@ -38,6 +38,7 @@ class FakeProvider:
         self.active_details = 0
         self.maximum_active_details = 0
         self._lock = threading.Lock()
+        self.close_calls = 0
 
     def collect_hot_list(self, collected_at: str) -> ProviderCapture:
         if self.board_error is not None:
@@ -67,6 +68,9 @@ class FakeProvider:
             fetch_status="success",
         )
 
+    def close(self):
+        self.close_calls += 1
+
 
 class DegradedDetailProvider(FakeProvider):
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
@@ -86,6 +90,14 @@ class SummaryDetailProvider(DegradedDetailProvider):
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
         detail = super().fetch_detail(item, collected_at)
         return replace(detail, fetch_status="success")
+
+
+class DiagnosticDetailProvider(DegradedDetailProvider):
+    def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
+        return replace(
+            super().fetch_detail(item, collected_at),
+            fetch_status="partial:ToutiaoRendererUnavailable",
+        )
 
 
 def test_collects_both_platforms_and_persists_raw_normalized_and_ordered_details(tmp_path):
@@ -123,6 +135,15 @@ def test_detail_collection_caps_each_platform_pool_at_three_workers(tmp_path):
 
     assert 1 < providers["toutiao"].maximum_active_details <= 3
     assert 1 < providers["juejin"].maximum_active_details <= 3
+
+
+def test_collection_closes_each_provider_after_its_platform_finishes(tmp_path):
+    providers = {"toutiao": FakeProvider("toutiao", 1), "juejin": FakeProvider("juejin", 1)}
+
+    collect_v1_daily(NOW, FileRepository(tmp_path), providers)
+
+    assert providers["toutiao"].close_calls == 1
+    assert providers["juejin"].close_calls == 1
 
 
 def test_repeated_collection_reuses_saved_details(tmp_path):
@@ -191,6 +212,20 @@ def test_non_full_content_status_marks_platform_partial_even_when_fetch_succeeds
 
     assert snapshot.platform_statuses[0].status == "partial"
     assert snapshot.platform_statuses[0].error == "detail_fetch_failed:toutiao_1"
+
+
+def test_sanitized_detail_failure_code_is_preserved_in_platform_status(tmp_path):
+    providers = {
+        "toutiao": DiagnosticDetailProvider("toutiao", 1),
+        "juejin": FakeProvider("juejin", 1),
+    }
+
+    snapshot = collect_v1_daily(NOW, FileRepository(tmp_path), providers)
+
+    assert snapshot.platform_statuses[0].status == "partial"
+    assert snapshot.platform_statuses[0].error == (
+        "detail_fetch_failed:toutiao_1;cause=ToutiaoRendererUnavailable"
+    )
 
 
 def test_platform_failure_is_isolated_and_written_to_collection_status(tmp_path):
