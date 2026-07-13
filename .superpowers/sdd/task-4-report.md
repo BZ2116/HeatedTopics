@@ -35,3 +35,16 @@
 
 - Rendered Toutiao extraction is injected rather than owning a browser lifecycle, keeping the provider testable and leaving orchestration responsible for rendering.
 - Publication timestamps are filtered only when present, as required; undated search results remain eligible.
+
+## Review-fix RED
+
+- Added focused regressions for malformed Toutiao publication timestamps, sparse Juejin metrics, Juejin API network/non-JSON/bad-shape failures, request article ID, page failure, and both title-only fallbacks.
+- Focused run: `4 failed, 6 passed`. Failures matched the review findings: timestamp parsing raised, absent counters became zero, and API failures escaped.
+
+## Review-fix GREEN
+
+- Moved shared numeric and article parsing helpers into `providers/common.py`; providers no longer import private sibling helpers.
+- Juejin now attempts the article page after HTTP, decoding, and payload-shape errors, then falls back to summary/title.
+- Juejin metrics now contain only counters present and numeric in the response.
+- Malformed Toutiao publication timestamps are deliberately retained as undated results.
+- Focused result: `11 passed`; full result: `38 passed`; `git diff --check` clean apart from Windows line-ending notices.

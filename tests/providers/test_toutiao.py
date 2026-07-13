@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import httpx
@@ -39,3 +40,14 @@ def test_fetch_detail_fallback_order():
     provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))))
     detail = provider.fetch_detail(item, NOW)
     assert detail.content == item.summary and detail.fetch_status == "partial"
+
+def test_search_treats_malformed_publication_time_as_undated():
+    raw = json.dumps({"data": [{"id": "bad-date", "title": "Still useful", "url": "https://www.toutiao.com/article/204/", "publish_time": "not-a-date"}]})
+    item = ToutiaoProvider.parse_search(raw, NOW)[0]
+    assert item.title == "Still useful" and item.publication_time is None
+
+def test_fetch_detail_uses_title_when_summary_and_pages_are_empty():
+    item = replace(ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0], summary="")
+    provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=""))), rendered_fetcher=lambda url: "")
+    detail = provider.fetch_detail(item, NOW)
+    assert detail.content == item.title and detail.content_status == "title_only"

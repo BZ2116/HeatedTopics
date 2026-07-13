@@ -2,13 +2,12 @@
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from html.parser import HTMLParser
 from typing import Callable
 
 import httpx
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
-from .common import ProviderCapture
+from .common import ProviderCapture, article_text, number_or_none
 
 TOUTIAO_HOT_BOARD_URL = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
 TOUTIAO_SEARCH_URL = "https://so.toutiao.com/search/"
@@ -28,7 +27,7 @@ class ToutiaoProvider:
         return ProviderCapture(raw, ".json", self.parse_search(raw, collected_at))
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
-        content = _article_text(self.client.get(item.url).text)
+        content = article_text(self.client.get(item.url).text)
         method = "toutiao_article_page"
         if not content and self.rendered_fetcher:
             content, method = self.rendered_fetcher(item.url).strip(), "toutiao_rendered_page"
@@ -43,7 +42,7 @@ class ToutiaoProvider:
         for rank, row in enumerate(rows, 1):
             item_id, title, url = str(row.get("ClusterIdStr") or row.get("ClusterId") or ""), str(row.get("Title") or "").strip(), str(row.get("Url") or "").strip()
             if not (item_id and title and url): continue
-            value = _number(row.get("HotValue"))
+            value = number_or_none(row.get("HotValue"))
             items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, "" if value is None else str(value), "hot_value", {} if value is None else {"hot_value": value}), str(row.get("QueryWord") or title), None, collected_at, row))
         return tuple(items)
 
@@ -55,42 +54,30 @@ class ToutiaoProvider:
         items = []
         for rank, row in enumerate(rows, 1):
             publication = row.get("publish_time") or row.get("publish_time_str")
-            published = _datetime(publication) if publication else None
+            published = _optional_datetime(publication)
             if published and published < cutoff: continue
             title, url = str(row.get("title") or "").strip(), str(row.get("url") or "").strip()
             if not title or not url: continue
-            reads, comments = _number(row.get("read_count")), _number(row.get("comment_count"))
+            reads, comments = number_or_none(row.get("read_count")), number_or_none(row.get("comment_count"))
             metrics = {k: v for k, v in (("reads", reads), ("comments", comments)) if v is not None}
             value = sum(metrics.values()) if metrics else max(len(rows) - rank + 1, 1)
             metric_name = "engagement" if metrics else "search_rank"
             item_id = str(row.get("id") or re.sub(r"\D", "", url) or rank)
-            items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, str(value), metric_name, metrics or {"search_rank": value}), str(row.get("abstract") or title), str(publication) if publication else None, collected_at, row))
+            items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, str(value), metric_name, metrics or {"search_rank": value}), str(row.get("abstract") or title), str(publication) if published else None, collected_at, row))
         return tuple(items)
 
-
-def _number(value):
-    try: return int(float(value))
-    except (TypeError, ValueError): return None
 
 def _datetime(value) -> datetime:
     if isinstance(value, (int, float)) or str(value).isdigit(): return datetime.fromtimestamp(float(value), timezone.utc)
     return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
-class _ArticleParser(HTMLParser):
-    def __init__(self): super().__init__(); self.depth = 0; self.parts = []; self.ignored = 0
-    def handle_starttag(self, tag, attrs):
-        if self.depth and tag in {"script", "style"}: self.ignored += 1
-        elif tag == "article": self.depth = 1
-        elif self.depth: self.depth += 1
-    def handle_endtag(self, tag):
-        if self.ignored:
-            if tag in {"script", "style"}: self.ignored -= 1
-        elif self.depth: self.depth -= 1
-    def handle_data(self, data):
-        if self.depth and not self.ignored and data.strip(): self.parts.append(data.strip())
-
-def _article_text(html: str) -> str:
-    parser = _ArticleParser(); parser.feed(html); return "\n".join(parser.parts)
+def _optional_datetime(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return _datetime(value)
+    except (ValueError, TypeError, OverflowError):
+        return None
 
 def _detail(item, content, collected_at, method):
     status = "full_text" if method in {"toutiao_article_page", "toutiao_rendered_page"} else ("summary" if method == "source_summary" else "title_only")
