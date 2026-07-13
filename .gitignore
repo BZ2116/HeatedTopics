@@ -38,3 +38,6 @@ detail/
 
 # Local secrets
 .env
+
+# Isolated feature worktrees
+.worktrees/
