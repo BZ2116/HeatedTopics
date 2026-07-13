@@ -60,3 +60,23 @@ The Toutiao platform status is `success`; all three details are multi-line
 Machine-readable evidence is in `smoke-summary.json`; the combined readable
 evidence is in `smoke-report.md`; source text files are under
 `daily_hot_lists/2026-07-13/details/`.
+
+## Reviewer hardening follow-up
+
+The renderer no longer falls back to `document.body.innerText`. If no trusted
+article container is found it returns empty text, while a trending page may still
+expose and follow its event-detail article link. Final classification now removes
+the item title from the substantive-character count and rejects short UI lines
+such as login/App prompts, comment controls, reply links, hot-list navigation,
+and footer actions. A normal two-line article over 300 characters remains valid.
+
+The independent follow-up smoke root is:
+
+`smoke_data/toutiao-detail-reviewer-fixed-20260713`
+
+It captured three current items as `full_text`: 1158 characters / 12 lines,
+2976 / 45, and 188 / 4. The first two followed event-detail article links; the
+third was a direct article page. `collection_status.json` intentionally records
+Juejin as failed because this Toutiao-only smoke supplies a fake Juejin provider
+that always raises `RuntimeError`; it is not evidence of a production Juejin
+regression.

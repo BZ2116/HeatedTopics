@@ -25,6 +25,10 @@ def test_rendered_article_javascript_keeps_join_newlines_escaped():
     assert "texts.join('\n\n')" not in TOUTIAO_ARTICLE_EVALUATION_SCRIPT
 
 
+def test_rendered_article_javascript_never_falls_back_to_document_body():
+    assert "document.body" not in TOUTIAO_ARTICLE_EVALUATION_SCRIPT
+
+
 @pytest.mark.parametrize("operation", ["board", "search"])
 def test_board_and_search_raise_for_http_errors(operation):
     client = httpx.Client(
@@ -245,6 +249,39 @@ def test_short_or_navigation_only_rendered_text_does_not_claim_full_text():
     assert detail.content == item.summary
     assert detail.content_status == "summary"
     assert detail.fetch_status.startswith("partial")
+
+
+def test_title_plus_long_login_comment_and_footer_chrome_is_not_full_text():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    chrome = "\n".join(
+        [item.title]
+        + ["请先登录后发表评论～", "打开APP查看更多内容", "网友讨论", "查看全部 99 条回复"] * 12
+    )
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: chrome,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content == item.summary
+    assert detail.content_status == "summary"
+    assert detail.fetch_status == "partial:RenderedContentTooShort"
+
+
+def test_two_line_300_character_article_remains_full_text():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    body = "第一段提供可核对的事件背景、时间、参与者以及事实经过。" * 7 + "\n" + "第二段继续说明事件影响、后续进展和来源信息。" * 7
+    provider = ToutiaoProvider(
+        httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="<html></html>"))),
+        rendered_fetcher=lambda url: body,
+    )
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert len(detail.content) >= 300
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
 
 
 def test_provider_close_releases_renderer_once():

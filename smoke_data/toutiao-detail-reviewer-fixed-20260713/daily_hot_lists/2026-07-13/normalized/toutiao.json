@@ -1,0 +1,180 @@
+[
+  {
+    "item_id": "toutiao_7661539093834989610",
+    "platform": "toutiao",
+    "title": "沈阳百年一遇暴雨",
+    "url": "https://www.toutiao.com/trending/7661539093834989610/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661539093834989610%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E6%B2%88%E9%98%B3%E7%99%BE%E5%B9%B4%E4%B8%80%E9%81%87%E6%9A%B4%E9%9B%A8%22%7D&rank=&style_id=40132&topic_id=7661539093834989610",
+    "rank": 1,
+    "heat": {
+      "value": 21466245,
+      "label": "21466245",
+      "metric_name": "hot_value",
+      "metrics": {
+        "hot_value": 21466245
+      }
+    },
+    "summary": "沈阳百年一遇暴雨",
+    "publication_time": null,
+    "collected_at": "2026-07-13T17:21:04.600848+08:00",
+    "raw_payload": {
+      "ClusterId": 7661539093834989610,
+      "Title": "沈阳百年一遇暴雨",
+      "LabelUrl": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=PbTCO1XV13BO39cyNDseSCUf%2FiA%3D",
+      "Label": "hot",
+      "Url": "https://www.toutiao.com/trending/7661539093834989610/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661539093834989610%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E6%B2%88%E9%98%B3%E7%99%BE%E5%B9%B4%E4%B8%80%E9%81%87%E6%9A%B4%E9%9B%A8%22%7D&rank=&style_id=40132&topic_id=7661539093834989610",
+      "HotValue": "21466245",
+      "Schema": "",
+      "LabelUri": {
+        "uri": "top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b",
+        "url": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=PbTCO1XV13BO39cyNDseSCUf%2FiA%3D",
+        "width": 48,
+        "height": 48,
+        "url_list": [
+          {
+            "url": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=PbTCO1XV13BO39cyNDseSCUf%2FiA%3D"
+          },
+          {
+            "url": "https://p3-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=XPu0zlxsv3lPIaGAy6QTszG9oAI%3D"
+          }
+        ],
+        "image_type": 1
+      },
+      "ClusterIdStr": "7661539093834989610",
+      "ClusterType": 1,
+      "QueryWord": "沈阳百年一遇暴雨",
+      "Image": {
+        "uri": "tos-cn-i-qvj2lq49k0/cfac750856d142c0b0fb68e252b0473a",
+        "url": "https://p3-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/cfac750856d142c0b0fb68e252b0473a~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=j9VbmWgfU5rdqVqnx9Q%2BNgiR%2FyY%3D",
+        "width": 320,
+        "height": 180,
+        "url_list": [
+          {
+            "url": "https://p3-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/cfac750856d142c0b0fb68e252b0473a~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=j9VbmWgfU5rdqVqnx9Q%2BNgiR%2FyY%3D"
+          },
+          {
+            "url": "https://p11-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/cfac750856d142c0b0fb68e252b0473a~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=CDBBUzqc94Y1aSt1Isdh6xgMoLA%3D"
+          }
+        ],
+        "image_type": 1
+      },
+      "LabelDesc": "热门事件"
+    }
+  },
+  {
+    "item_id": "toutiao_7660891930447970346",
+    "platform": "toutiao",
+    "title": "高盛：中国股票出现“轮动信号”",
+    "url": "https://www.toutiao.com/trending/7660891930447970346/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227660891930447970346%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E9%AB%98%E7%9B%9B%EF%BC%9A%E4%B8%AD%E5%9B%BD%E8%82%A1%E7%A5%A8%E5%87%BA%E7%8E%B0%E2%80%9C%E8%BD%AE%E5%8A%A8%E4%BF%A1%E5%8F%B7%E2%80%9D%22%7D&rank=&style_id=40132&topic_id=7660891930447970346",
+    "rank": 2,
+    "heat": {
+      "value": 19423461,
+      "label": "19423461",
+      "metric_name": "hot_value",
+      "metrics": {
+        "hot_value": 19423461
+      }
+    },
+    "summary": "高盛：中国股票出现“轮动信号”",
+    "publication_time": null,
+    "collected_at": "2026-07-13T17:21:04.600848+08:00",
+    "raw_payload": {
+      "ClusterId": 7660891930447970346,
+      "Title": "高盛：中国股票出现“轮动信号”",
+      "LabelUrl": "https://p3-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=XPu0zlxsv3lPIaGAy6QTszG9oAI%3D",
+      "Label": "hot",
+      "Url": "https://www.toutiao.com/trending/7660891930447970346/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227660891930447970346%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E9%AB%98%E7%9B%9B%EF%BC%9A%E4%B8%AD%E5%9B%BD%E8%82%A1%E7%A5%A8%E5%87%BA%E7%8E%B0%E2%80%9C%E8%BD%AE%E5%8A%A8%E4%BF%A1%E5%8F%B7%E2%80%9D%22%7D&rank=&style_id=40132&topic_id=7660891930447970346",
+      "HotValue": "19423461",
+      "Schema": "",
+      "LabelUri": {
+        "uri": "top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b",
+        "url": "https://p3-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=XPu0zlxsv3lPIaGAy6QTszG9oAI%3D",
+        "width": 48,
+        "height": 48,
+        "url_list": [
+          {
+            "url": "https://p3-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=XPu0zlxsv3lPIaGAy6QTszG9oAI%3D"
+          },
+          {
+            "url": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/ee68863c-61b4-4244-b4f5-dca05d1bba6b~tplv-tt-origin:0:0.png?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=PbTCO1XV13BO39cyNDseSCUf%2FiA%3D"
+          }
+        ],
+        "image_type": 1
+      },
+      "ClusterIdStr": "7660891930447970346",
+      "ClusterType": 6,
+      "QueryWord": "高盛：中国股票出现“轮动信号”",
+      "InterestCategory": [
+        "finance"
+      ],
+      "Image": {
+        "uri": "top-static-files-outer/breaknews/2f57fd57-85e7-4735-94c0-89a479e20df4",
+        "url": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/2f57fd57-85e7-4735-94c0-89a479e20df4~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=RrR%2FF%2F%2FQAHTGdB91blP1l1EJtPs%3D",
+        "width": 320,
+        "height": 180,
+        "url_list": [
+          {
+            "url": "https://p11-sign.toutiaoimg.com/top-static-files-outer/breaknews/2f57fd57-85e7-4735-94c0-89a479e20df4~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=RrR%2FF%2F%2FQAHTGdB91blP1l1EJtPs%3D"
+          },
+          {
+            "url": "https://p3-sign.toutiaoimg.com/top-static-files-outer/breaknews/2f57fd57-85e7-4735-94c0-89a479e20df4~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=hD9k%2FNbwD8ir%2FTHZR7d5zR%2B5sDs%3D"
+          }
+        ],
+        "image_type": 1
+      },
+      "LabelDesc": "热门事件"
+    }
+  },
+  {
+    "item_id": "toutiao_7661405401853722667",
+    "platform": "toutiao",
+    "title": "中国电力技术创新位居全球首位",
+    "url": "https://www.toutiao.com/article/7661871584124125736",
+    "rank": 3,
+    "heat": {
+      "value": 17575075,
+      "label": "17575075",
+      "metric_name": "hot_value",
+      "metrics": {
+        "hot_value": 17575075
+      }
+    },
+    "summary": "中国电力技术创新位居全球首位",
+    "publication_time": null,
+    "collected_at": "2026-07-13T17:21:04.600848+08:00",
+    "raw_payload": {
+      "ClusterId": 7661405401853722667,
+      "Title": "中国电力技术创新位居全球首位",
+      "LabelUrl": "",
+      "Label": "",
+      "Url": "https://www.toutiao.com/article/7661871584124125736",
+      "HotValue": "17575075",
+      "Schema": "",
+      "LabelUri": {
+        "uri": "",
+        "url": "",
+        "width": 0,
+        "height": 0,
+        "url_list": null,
+        "image_type": 0
+      },
+      "ClusterIdStr": "7661405401853722667",
+      "ClusterType": 0,
+      "QueryWord": "中国电力技术创新位居全球首位",
+      "Image": {
+        "uri": "tos-cn-i-qvj2lq49k0/64ed52ad975549318d603689cff8987d",
+        "url": "https://p11-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/64ed52ad975549318d603689cff8987d~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=JDlAB1NKDiq80tfEh%2F%2F1IyaJWAM%3D",
+        "width": 320,
+        "height": 180,
+        "url_list": [
+          {
+            "url": "https://p11-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/64ed52ad975549318d603689cff8987d~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=JDlAB1NKDiq80tfEh%2F%2F1IyaJWAM%3D"
+          },
+          {
+            "url": "https://p3-sign.toutiaoimg.com/tos-cn-i-qvj2lq49k0/64ed52ad975549318d603689cff8987d~tplv-tt-shrink:960:540.jpeg?_iz=30575&from=sign_default&lk3s=8d617dac&x-expires=1786492800&x-signature=niGii01p%2FneZbYRV6lV8kY%2F%2Bves%3D"
+          }
+        ],
+        "image_type": 1
+      }
+    }
+  }
+]

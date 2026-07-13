@@ -33,7 +33,7 @@ TOUTIAO_ARTICLE_EVALUATION_SCRIPT = r"""() => {
             .filter(text => text.length > 80);
         if (texts.length) return {text: texts.join('\n\n'), detail_url: detailLink?.getAttribute('href') || ''};
     }
-    return {text: (document.body?.innerText || '').trim(), detail_url: detailLink?.getAttribute('href') || ''};
+    return {text: '', detail_url: detailLink?.getAttribute('href') || ''};
 }"""
 
 
@@ -186,7 +186,7 @@ class PlaywrightArticleRenderer:
                         pass
                     article = await self._evaluate_page(page)
                     article_text = _clean_rendered_article_text(str(article.get("text") or ""))
-                    if _is_meaningful_article(article_text):
+                    if _is_meaningful_article(article_text, ""):
                         return article_text
                 return _clean_rendered_article_text(str(extracted.get("text") or ""))
             finally:
@@ -264,7 +264,7 @@ class ToutiaoProvider:
         except Exception:
             content = ""
         method = "toutiao_article_page"
-        if not _is_meaningful_article(content) and self.rendered_fetcher:
+        if not _is_meaningful_article(content, item.title) and self.rendered_fetcher:
             method = "toutiao_rendered_page"
             try:
                 content = _clean_rendered_article_text(self.rendered_fetcher(item.url))
@@ -275,7 +275,7 @@ class ToutiaoProvider:
                     else type(error).__name__
                 )
                 content = ""
-        if not _is_meaningful_article(content):
+        if not _is_meaningful_article(content, item.title):
             if method == "toutiao_rendered_page" and diagnostic is None:
                 diagnostic = "RenderedContentTooShort"
             content, method = (item.summary or item.title), ("source_summary" if item.summary else "title")
@@ -527,7 +527,7 @@ def _clean_rendered_article_text(text: str) -> str:
     lines = []
     for raw_line in str(text or "").splitlines():
         line = re.sub(r"\s+", " ", raw_line).strip()
-        if not line or line in navigation:
+        if not line or line in navigation or _is_page_chrome_line(line):
             continue
         if re.fullmatch(r"[\d.万亿]+\s*(赞|评论|收藏|分享)?", line):
             continue
@@ -535,9 +535,39 @@ def _clean_rendered_article_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _is_meaningful_article(content: str) -> bool:
+def _is_page_chrome_line(line: str) -> bool:
+    compact = re.sub(r"\s+", "", line)
+    if len(compact) > 60:
+        return False
+    return bool(
+        re.fullmatch(
+            r"(?:请先登录后发表评论[～~]?|打开APP.*|下载今日头条.*|扫码下载.*|"
+            r"网友讨论|头条热榜|换一换|反馈|顶部|回复|来源于.*|"
+            r"查看全部\d+条回复|查看全部|查看更多)",
+            compact,
+        )
+    )
+
+
+def _normalized_text(value: str) -> str:
+    return re.sub(r"[^\w\u4e00-\u9fff]+", "", value, flags=re.UNICODE).casefold()
+
+
+def _is_meaningful_article(content: str, title: str) -> bool:
     cleaned = _clean_rendered_article_text(content)
-    return len(cleaned) >= MIN_ARTICLE_CHARACTERS and len(cleaned.splitlines()) >= 2
+    lines = [line for line in cleaned.splitlines() if line]
+    normalized_title = _normalized_text(title)
+    substantive = [
+        line
+        for line in lines
+        if not normalized_title or _normalized_text(line) != normalized_title
+    ]
+    substantive_characters = sum(len(line) for line in substantive)
+    return (
+        len(cleaned) >= MIN_ARTICLE_CHARACTERS
+        and len(lines) >= 2
+        and substantive_characters >= 100
+    )
 
 
 def _detail(item, content, collected_at, method, diagnostic=None):
