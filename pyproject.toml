@@ -9,6 +9,9 @@ dependencies = [
     "tzdata>=2025.2",
 ]
 
+[project.scripts]
+heated-topics = "heated_topics_v3.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
