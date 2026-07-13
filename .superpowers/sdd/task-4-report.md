@@ -48,3 +48,9 @@
 - Juejin metrics now contain only counters present and numeric in the response.
 - Malformed Toutiao publication timestamps are deliberately retained as undated results.
 - Focused result: `11 passed`; full result: `38 passed`; `git diff --check` clean apart from Windows line-ending notices.
+
+## Second review wave RED/GREEN
+
+- RED: focused Toutiao run produced `3 failed, 5 passed`: static HTTP and rendered-fetch exceptions escaped, while naive ISO dates caused aware/naive comparison `TypeError`.
+- GREEN: static failures now continue to rendered extraction, renderer failures continue to summary/title, and naive Toutiao timestamps are interpreted in `Asia/Shanghai` then normalized to UTC for the 24-hour comparison.
+- Final verification: focused providers `14 passed`; full suite `41 passed`; `git diff --check` clean apart from Windows line-ending notices.

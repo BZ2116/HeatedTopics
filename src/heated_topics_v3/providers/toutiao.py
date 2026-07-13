@@ -3,6 +3,7 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -11,6 +12,7 @@ from .common import ProviderCapture, article_text, number_or_none
 
 TOUTIAO_HOT_BOARD_URL = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
 TOUTIAO_SEARCH_URL = "https://so.toutiao.com/search/"
+TOUTIAO_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 class ToutiaoProvider:
@@ -27,10 +29,17 @@ class ToutiaoProvider:
         return ProviderCapture(raw, ".json", self.parse_search(raw, collected_at))
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
-        content = article_text(self.client.get(item.url).text)
+        try:
+            content = article_text(self.client.get(item.url).text)
+        except Exception:
+            content = ""
         method = "toutiao_article_page"
         if not content and self.rendered_fetcher:
-            content, method = self.rendered_fetcher(item.url).strip(), "toutiao_rendered_page"
+            method = "toutiao_rendered_page"
+            try:
+                content = self.rendered_fetcher(item.url).strip()
+            except Exception:
+                content = ""
         if not content:
             content, method = (item.summary or item.title), ("source_summary" if item.summary else "title")
         return _detail(item, content, collected_at, method)
@@ -69,7 +78,10 @@ class ToutiaoProvider:
 
 def _datetime(value) -> datetime:
     if isinstance(value, (int, float)) or str(value).isdigit(): return datetime.fromtimestamp(float(value), timezone.utc)
-    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TOUTIAO_TIMEZONE)
+    return parsed.astimezone(timezone.utc)
 
 def _optional_datetime(value) -> datetime | None:
     if not value:

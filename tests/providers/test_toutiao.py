@@ -51,3 +51,25 @@ def test_fetch_detail_uses_title_when_summary_and_pages_are_empty():
     provider = ToutiaoProvider(httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text=""))), rendered_fetcher=lambda url: "")
     detail = provider.fetch_detail(item, NOW)
     assert detail.content == item.title and detail.content_status == "title_only"
+
+def test_fetch_detail_continues_to_rendered_after_static_fetch_exception():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: (_ for _ in ()).throw(httpx.ConnectError("offline"))))
+    detail = ToutiaoProvider(client, rendered_fetcher=lambda url: "Rendered recovery").fetch_detail(item, NOW)
+    assert detail.content == "Rendered recovery" and detail.content_status == "full_text"
+
+def test_fetch_detail_continues_to_summary_after_rendered_exception():
+    item = ToutiaoProvider.parse_hot_list((FIXTURES / "toutiao_hot_board.json").read_text(), NOW)[0]
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(200, text="")))
+    def failed_render(url):
+        raise RuntimeError("browser unavailable")
+    detail = ToutiaoProvider(client, rendered_fetcher=failed_render).fetch_detail(item, NOW)
+    assert detail.content == item.summary and detail.content_status == "summary"
+
+def test_search_interprets_naive_timestamps_as_asia_shanghai_for_24_hour_filter():
+    raw = json.dumps({"data": [
+        {"id": "inside", "title": "Inside", "url": "https://www.toutiao.com/article/301/", "publish_time": "2026-07-12T12:01:00"},
+        {"id": "outside", "title": "Outside", "url": "https://www.toutiao.com/article/302/", "publish_time": "2026-07-12T11:59:00"},
+    ]})
+    items = ToutiaoProvider.parse_search(raw, NOW)
+    assert [item.item_id for item in items] == ["toutiao_inside"]
