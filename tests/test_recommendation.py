@@ -228,6 +228,22 @@ def test_search_failure_keeps_saved_official_toutiao_and_juejin_matches(tmp_path
     assert "secret" not in (tmp_path / "user_results/u1/2026-07-13/result.json").read_text("utf-8")
 
 
+def test_search_failure_without_saved_matches_is_failed_and_not_cached(tmp_path):
+    repository = FileRepository(tmp_path)
+    _save_daily(
+        repository,
+        (_item("toutiao_1", "toutiao", "unrelated headline", 1),),
+        (_item("juejin_1", "juejin", "another unrelated headline", 1),),
+    )
+    provider = FakeToutiao(error=ValueError("invalid search response"))
+
+    bundle = generate_v1_user_result(_profile(), NOW, repository, provider)
+
+    assert bundle.status == "failed"
+    assert bundle.query_metadata == {"toutiao_search_status": "failed:ValueError"}
+    assert repository.load_user_bundle("u1", "2026-07-13") is None
+
+
 def test_no_saved_daily_snapshot_returns_not_ready_without_search_or_output(tmp_path):
     repository = FileRepository(tmp_path)
     provider = FakeToutiao()

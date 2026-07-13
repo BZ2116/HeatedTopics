@@ -19,6 +19,7 @@ from .contracts import (
     PlatformCollectionStatus,
     RecommendationBundle,
     RecommendationItem,
+    validate_user_id,
 )
 
 
@@ -64,6 +65,28 @@ class FileRepository:
 
     def daily_dir(self, business_date: BusinessDate) -> Path:
         return self.root / "daily_hot_lists" / _date_text(business_date)
+
+    def user_dir(self, user_id: str) -> Path:
+        """Return a validated user directory contained by ``user_results``."""
+        safe_user_id = validate_user_id(user_id)
+        data_root = self.root.resolve()
+        parent = (data_root / "user_results").resolve()
+        try:
+            parent_contained = parent.parent.samefile(data_root)
+        except OSError:
+            parent_contained = parent.parent == data_root
+        if not parent_contained:
+            raise ValueError("user_results path escapes data root")
+        candidate = parent / safe_user_id
+        if candidate.exists():
+            resolved_parent = candidate.resolve().parent
+            try:
+                contained = resolved_parent.samefile(parent)
+            except OSError:
+                contained = resolved_parent == parent
+            if not contained:
+                raise ValueError("user_id path escapes user_results")
+        return candidate
 
     def write_json(self, path: Path, value: Any) -> Path:
         path = Path(path)
@@ -151,11 +174,11 @@ class FileRepository:
     def load_user_bundle(
         self, user_id: str, business_date: BusinessDate
     ) -> RecommendationBundle | None:
-        path = self.root / "user_results" / user_id / _date_text(business_date) / "result.json"
+        path = self.user_dir(user_id) / _date_text(business_date) / "result.json"
         return _recommendation_bundle(self._read_json(path)) if path.is_file() else None
 
     def load_latest_user_bundle(self, user_id: str) -> RecommendationBundle | None:
-        parent = self.root / "user_results" / user_id
+        parent = self.user_dir(user_id)
         if not parent.is_dir():
             return None
         for directory in sorted(
@@ -175,7 +198,7 @@ class FileRepository:
         writer: Callable[[Path], Any],
     ) -> Path:
         day = _date_text(business_date)
-        parent = self.root / "user_results" / user_id
+        parent = self.user_dir(user_id)
         final = parent / day
         if final.is_dir():
             return final

@@ -2,11 +2,36 @@ import json
 from dataclasses import replace
 from pathlib import Path
 import httpx
+import pytest
 from heated_topics_v3.providers.common import ProviderCapture
 from heated_topics_v3.providers.juejin import JUEJIN_ARTICLE_DETAIL_URL, JUEJIN_HOT_RANK_URL, JuejinProvider
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 NOW = "2026-07-13T04:00:00Z"
+
+
+def test_hot_rank_raises_for_http_error():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={"err_no": 5})
+        )
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        JuejinProvider(client).collect_hot_list(NOW)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"err_no": 5, "err_msg": "denied", "data": []}, {"err_no": 0, "data": []}],
+)
+def test_hot_rank_rejects_malformed_api_error_and_empty_payloads(payload):
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    )
+
+    with pytest.raises(ValueError):
+        JuejinProvider(client).collect_hot_list(NOW)
 
 def test_collect_hot_list_parses_rank_and_preserves_capture():
     raw = (FIXTURES / "juejin_hot_rank.json").read_text(encoding="utf-8")

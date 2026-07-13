@@ -41,3 +41,41 @@ def test_profile_rejects_blank_primary_keyword(tmp_path, keyword):
 def test_save_profile_rejects_blank_primary_keyword(tmp_path):
     with pytest.raises(ValueError, match="primary_keyword"):
         save_profile(sample_profile(primary_keyword="  "), tmp_path / "profile.json")
+
+
+@pytest.mark.parametrize(
+    "user_id",
+    [
+        "",
+        ".",
+        "..",
+        "../escape",
+        r"..\escape",
+        "/absolute",
+        r"C:\escape",
+        "nested/user",
+        r"nested\user",
+        "user:name",
+        " leading",
+        "a" * 65,
+    ],
+)
+def test_user_profile_contract_rejects_unsafe_user_ids(user_id):
+    with pytest.raises(ValueError, match="user_id"):
+        sample_profile(user_id=user_id)
+
+
+def test_profile_loader_rejects_unsafe_user_id(tmp_path):
+    path = tmp_path / "profile.json"
+    path.write_text(
+        json.dumps({**sample_profile().__dict__, "user_id": "../../outside"}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="user_id"):
+        load_profile(path)
+
+
+@pytest.mark.parametrize("user_id", ["u", "user_001", "smoke-user-2026", "A" * 64])
+def test_user_profile_contract_accepts_safe_ascii_user_ids(user_id):
+    assert sample_profile(user_id=user_id).user_id == user_id

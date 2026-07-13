@@ -141,3 +141,74 @@ DOM parser found 10 structurally valid cards, but all were older than V1's
 24-hour search window and were therefore excluded. The final smoke profile used
 a current-board keyword and produced 10 current search records, so this did not
 block the required workflow proof.
+
+## Final review hardening
+
+Final review identified two correctness gaps after the initial V1 delivery.
+They were fixed in a separate, test-first change.
+
+### HTTP and API failure truthfulness
+
+Root-cause reproduction showed that both board providers read `response.text`
+without `raise_for_status()`: a MockTransport HTTP 503 response became an empty
+successful capture. The parsers also used `payload.get("data", [])`, so HTTP 200
+responses containing `{}`, a platform error code, or an empty official board
+were indistinguishable from success. Search exceptions were caught by generation
+and could persist a false `no_result` when no saved board item matched.
+
+The narrow endpoint contracts now enforced are:
+
+- Toutiao official board: HTTP 2xx, JSON object, `status="success"`, a nonempty
+  `data` list, and at least one valid normalized item.
+- Juejin official rank: HTTP 2xx, JSON object, `err_no=0`, a nonempty `data`
+  list, and at least one valid normalized item.
+- Toutiao search: HTTP 2xx and either a structurally valid current DOM response
+  or the existing nonempty legacy `data` form. An explicit integer `count=0`
+  plus empty DOM is a genuine empty result. `{}`, API failure status, ambiguous
+  empty data, positive count without DOM, and an unrecognized DOM are failures.
+
+Collection also rejects an empty official `ProviderCapture` defensively, so a
+provider regression cannot mark an empty board successful. Platform failures
+remain isolated and sanitized in `collection_status.json`. If Toutiao search
+fails, saved official-board matches may still produce a useful result as before;
+if there are no such matches, generation returns `failed` and does not publish
+or cache a false `no_result`.
+
+### User result path containment
+
+Root-cause reproduction also confirmed that `user_id="../escape"` was accepted
+and directly joined to `user_results`. V1 now defines `user_id` as 1-64 ASCII
+letters, digits, underscores, or hyphens, beginning with a letter or digit. This
+matches all existing profile/user IDs while rejecting empty IDs, `.`/`..`,
+relative and absolute paths, Windows drive forms, both path separators, colons,
+whitespace, and overlength values.
+
+Validation runs in `UserProfile.__post_init__`, so direct contract construction,
+profile loading, and profile saving share the same rule. `FileRepository` also
+validates independently and confines existing resolved user directories beneath
+the resolved `user_results` directory. The filesystem generation claim uses the
+same repository path gate, preventing callers that bypass profile loading from
+escaping the data root. The containment check uses filesystem identity for an
+existing directory to remain correct across Windows 8.3/long-path aliases and
+concurrent result creation.
+
+A separate containment RED simulated `user_results` resolving outside the data
+root; the repository originally accepted that boundary. The final gate first
+verifies that resolved `user_results` is directly beneath the resolved data root,
+then applies the user-segment and existing-directory checks.
+
+### Hardening verification
+
+- Initial focused RED: 33 failures and 59 passes across provider, collection,
+  CLI, recommendation, profile, and storage tests.
+- Focused GREEN: 92 passed; the three-contender lock regression was then run
+  five consecutive times and passed each time.
+- Reviewer RED: nonempty legacy Toutiao `data` containing only malformed rows
+  returned a successful empty tuple. GREEN requires at least one structurally
+  valid title+URL row while preserving a legitimate empty result when valid rows
+  all fall outside the 24-hour window.
+- Full suite after all review fixes: `130 passed in 1.67s`.
+- `uv run python -m compileall -q src tests`: exit 0.
+- Fresh live contract smoke at `2026-07-13T15:23:40.482659+08:00`: Toutiao
+  board 50, Juejin board 45, Toutiao search 10.
+- `git diff --check`: exit 0, apart from Git's Windows line-ending notices.

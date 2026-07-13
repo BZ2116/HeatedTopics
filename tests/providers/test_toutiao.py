@@ -3,12 +3,75 @@ from dataclasses import replace
 from pathlib import Path
 
 import httpx
+import pytest
 
 from heated_topics_v3.providers.common import ProviderCapture
 from heated_topics_v3.providers.toutiao import TOUTIAO_HOT_BOARD_URL, TOUTIAO_SEARCH_URL, ToutiaoProvider
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
 NOW = "2026-07-13T04:00:00Z"
+
+
+@pytest.mark.parametrize("operation", ["board", "search"])
+def test_board_and_search_raise_for_http_errors(operation):
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={"error": "unavailable"})
+        )
+    )
+    provider = ToutiaoProvider(client)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        if operation == "board":
+            provider.collect_hot_list(NOW)
+        else:
+            provider.search("AI", NOW)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"status": "failure", "data": []},
+        {"status": "success", "data": []},
+    ],
+)
+def test_hot_board_rejects_malformed_error_and_empty_payloads(payload):
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    )
+
+    with pytest.raises(ValueError):
+        ToutiaoProvider(client).collect_hot_list(NOW)
+
+
+@pytest.mark.parametrize("payload", [{}, {"status": "failure", "count": 0, "dom": ""}])
+def test_search_rejects_malformed_and_api_error_payloads(payload):
+    client = httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    )
+
+    with pytest.raises(ValueError):
+        ToutiaoProvider(client).search("AI", NOW)
+
+
+def test_search_accepts_explicit_zero_count_as_genuine_empty_result():
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"count": 0, "dom": ""})
+        )
+    )
+
+    capture = ToutiaoProvider(client).search("no-such-current-topic", NOW)
+
+    assert capture.items == ()
+
+
+def test_search_rejects_nonempty_legacy_data_when_every_row_is_malformed():
+    raw = json.dumps({"data": [{"unexpected": "shape"}]})
+
+    with pytest.raises(ValueError):
+        ToutiaoProvider.parse_search(raw, NOW)
 
 def test_collect_hot_list_preserves_raw_text_and_parses_heat():
     raw = (FIXTURES / "toutiao_hot_board.json").read_text(encoding="utf-8")

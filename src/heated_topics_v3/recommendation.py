@@ -79,7 +79,7 @@ def _release_claim_lock(handle) -> None:
 def _filesystem_generation_claim(
     repository: FileRepository, user_id: str, day: str
 ):
-    parent = repository.root / "user_results" / user_id
+    parent = repository.user_dir(user_id)
     parent.mkdir(parents=True, exist_ok=True)
     lock_path = parent / f"{day}.lock"
     result_path = parent / day / "result.json"
@@ -241,6 +241,17 @@ def generate_v1_user_result(
                 items_by_platform["juejin"],
                 details,
             )
+            if search_status != "success" and not matched:
+                return RecommendationBundle(
+                    status="failed",
+                    user_id=profile.user_id,
+                    business_date=day,
+                    generated_at=generated_at,
+                    recommendations=(),
+                    potential_topics=(),
+                    general_fallback=(),
+                    query_metadata={"toutiao_search_status": search_status},
+                )
             formal = tuple(item for item in matched if item.heat_level in (1, 2))
             potential = tuple(item for item in matched if item.heat_level == 3)
             status = "generated" if formal or potential else "no_result"

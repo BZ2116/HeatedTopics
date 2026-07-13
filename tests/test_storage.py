@@ -199,3 +199,44 @@ def test_atomic_publish_accepts_oserror_only_when_another_complete_directory_win
 
     assert final == tmp_path / "user_results/user_001/2026-07-13"
     assert not list(final.parent.glob("2026-07-13.tmp-*"))
+
+
+@pytest.mark.parametrize(
+    "user_id", ["", ".", "..", "../../outside", r"..\..\outside", "/absolute", r"C:\outside"]
+)
+def test_user_result_storage_defensively_rejects_unsafe_user_ids(tmp_path, user_id):
+    repo = FileRepository(tmp_path / "data")
+
+    with pytest.raises(ValueError, match="user_id"):
+        repo.load_user_bundle(user_id, "2026-07-13")
+    with pytest.raises(ValueError, match="user_id"):
+        repo.load_latest_user_bundle(user_id)
+    with pytest.raises(ValueError, match="user_id"):
+        repo.write_user_result_atomic(user_id, "2026-07-13", lambda directory: None)
+
+    assert not (tmp_path / "outside").exists()
+
+
+def test_user_result_storage_rejects_resolved_user_results_outside_data_root(
+    tmp_path, monkeypatch
+):
+    data_root = tmp_path / "data"
+    outside = tmp_path / "outside"
+    data_root.mkdir()
+    outside.mkdir()
+    original_resolve = Path.resolve
+
+    def redirected_user_results(path, *args, **kwargs):
+        if path == data_root / "user_results":
+            return outside
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", redirected_user_results)
+    repo = FileRepository(data_root)
+
+    with pytest.raises(ValueError, match="data root"):
+        repo.write_user_result_atomic(
+            "safe-user", "2026-07-13", lambda directory: None
+        )
+
+    assert not (outside / "safe-user").exists()

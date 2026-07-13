@@ -215,3 +215,21 @@ def test_platform_failure_is_isolated_and_written_to_collection_status(tmp_path)
     assert (day / "normalized" / "juejin.json").is_file()
     assert (day / "details" / "juejin_1.txt").is_file()
     assert "private" not in (day / "collection_status.json").read_text("utf-8")
+
+
+def test_empty_board_capture_is_failed_not_success(tmp_path):
+    repository = FileRepository(tmp_path)
+    providers = {
+        "toutiao": FakeProvider("toutiao", count=0),
+        "juejin": FakeProvider("juejin", count=1),
+    }
+
+    snapshot = collect_v1_daily(NOW, repository, providers)
+
+    assert "toutiao" not in snapshot.items_by_platform
+    assert snapshot.platform_statuses[0].status == "failed"
+    assert snapshot.platform_statuses[0].item_count == 0
+    assert snapshot.platform_statuses[1].status == "success"
+    assert not (
+        repository.daily_dir("2026-07-13") / "normalized" / "toutiao.json"
+    ).exists()

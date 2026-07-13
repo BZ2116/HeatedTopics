@@ -5,6 +5,10 @@ from html.parser import HTMLParser
 from heated_topics_v3.contracts import HotItem
 
 
+class ProviderContractError(ValueError):
+    """Raised when a public endpoint response does not match its success contract."""
+
+
 @dataclass(frozen=True)
 class ProviderCapture:
     raw_text: str

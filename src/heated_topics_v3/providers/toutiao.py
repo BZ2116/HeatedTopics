@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
-from .common import ProviderCapture, article_text, number_or_none
+from .common import ProviderCapture, ProviderContractError, article_text, number_or_none
 
 TOUTIAO_HOT_BOARD_URL = "https://www.toutiao.com/hot-event/hot-board/?origin=toutiao_pc"
 TOUTIAO_SEARCH_URL = "https://so.toutiao.com/search/"
@@ -23,11 +23,13 @@ class ToutiaoProvider:
         self.rendered_fetcher = rendered_fetcher
 
     def collect_hot_list(self, collected_at: str) -> ProviderCapture:
-        raw = self.client.get(TOUTIAO_HOT_BOARD_URL).text
+        response = self.client.get(TOUTIAO_HOT_BOARD_URL)
+        response.raise_for_status()
+        raw = response.text
         return ProviderCapture(raw, ".json", self.parse_hot_list(raw, collected_at))
 
     def search(self, primary_keyword: str, collected_at: str) -> ProviderCapture:
-        raw = self.client.get(TOUTIAO_SEARCH_URL, params={
+        response = self.client.get(TOUTIAO_SEARCH_URL, params={
             "keyword": primary_keyword,
             "pd": "information",
             "source": "search_subtab_switch",
@@ -35,7 +37,9 @@ class ToutiaoProvider:
             "format": "json",
             "count": 10,
             "offset": 0,
-        }).text
+        })
+        response.raise_for_status()
+        raw = response.text
         return ProviderCapture(raw, ".json", self.parse_search(raw, collected_at))
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
@@ -56,35 +60,65 @@ class ToutiaoProvider:
 
     @staticmethod
     def parse_hot_list(raw: str, collected_at: str) -> tuple[HotItem, ...]:
-        rows = json.loads(raw).get("data", [])
+        payload = _object_payload(raw)
+        rows = payload.get("data")
+        if payload.get("status") != "success" or not isinstance(rows, list) or not rows:
+            raise ProviderContractError("invalid toutiao hot-board response")
         items = []
         for rank, row in enumerate(rows, 1):
             item_id, title, url = str(row.get("ClusterIdStr") or row.get("ClusterId") or ""), str(row.get("Title") or "").strip(), str(row.get("Url") or "").strip()
             if not (item_id and title and url): continue
             value = number_or_none(row.get("HotValue"))
             items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, "" if value is None else str(value), "hot_value", {} if value is None else {"hot_value": value}), str(row.get("QueryWord") or title), None, collected_at, row))
+        if not items:
+            raise ProviderContractError("toutiao hot board contained no valid items")
         return tuple(items)
 
     @staticmethod
     def parse_search(raw: str, collected_at: str) -> tuple[HotItem, ...]:
-        payload = json.loads(raw)
-        if payload.get("dom"):
-            return _parse_search_dom(str(payload["dom"]), collected_at)
-        rows = payload.get("data", [])
+        payload = _object_payload(raw)
+        if "status" in payload and payload.get("status") != "success":
+            raise ProviderContractError("toutiao search reported failure")
+        if "dom" in payload:
+            count = payload.get("count")
+            dom = payload.get("dom")
+            if (
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+                or not isinstance(dom, str)
+            ):
+                raise ProviderContractError("invalid toutiao search response")
+            if count == 0:
+                return ()
+            if not dom.strip():
+                raise ProviderContractError("toutiao search omitted result DOM")
+            return _parse_search_dom(dom, collected_at)
+        if "data" not in payload or not isinstance(payload["data"], list):
+            raise ProviderContractError("invalid toutiao search response")
+        rows = payload["data"]
+        if not rows and payload.get("count") != 0:
+            raise ProviderContractError("ambiguous empty toutiao search response")
         cutoff = _datetime(collected_at) - timedelta(hours=24)
         items = []
+        valid_rows = 0
         for rank, row in enumerate(rows, 1):
+            if not isinstance(row, dict):
+                continue
             publication = row.get("publish_time") or row.get("publish_time_str")
             published = _optional_datetime(publication)
-            if published and published < cutoff: continue
             title, url = str(row.get("title") or "").strip(), str(row.get("url") or "").strip()
             if not title or not url: continue
+            valid_rows += 1
+            if published and published < cutoff: continue
             reads, comments = number_or_none(row.get("read_count")), number_or_none(row.get("comment_count"))
             metrics = {k: v for k, v in (("reads", reads), ("comments", comments)) if v is not None}
             value = sum(metrics.values()) if metrics else max(len(rows) - rank + 1, 1)
             metric_name = "engagement" if metrics else "search_rank"
             item_id = str(row.get("id") or re.sub(r"\D", "", url) or rank)
             items.append(HotItem(f"toutiao_{item_id}", "toutiao", title, url, rank, HeatMetrics(value, str(value), metric_name, metrics or {"search_rank": value}), str(row.get("abstract") or title), str(publication) if published else None, collected_at, row))
+        if rows and valid_rows == 0:
+            raise ProviderContractError("toutiao legacy search contained no valid rows")
         return tuple(items)
 
 
@@ -205,10 +239,19 @@ def _json_attribute(value) -> dict:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _object_payload(raw: str) -> dict:
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ProviderContractError("provider response must be a JSON object")
+    return payload
+
+
 def _parse_search_dom(dom: str, collected_at: str) -> tuple[HotItem, ...]:
     parser = _SearchDomParser()
     parser.feed(dom)
     parser.close()
+    if not parser.cards:
+        raise ProviderContractError("toutiao search DOM contained no result cards")
     cutoff = _datetime(collected_at) - timedelta(hours=24)
     items = []
     for rank, row in enumerate(parser.cards, 1):

@@ -55,6 +55,28 @@ def test_collect_v1_emits_machine_readable_status(monkeypatch, tmp_path, capsys)
     assert observed["repository"].root == tmp_path
 
 
+def test_collect_v1_returns_nonzero_when_both_platforms_fail(
+    monkeypatch, tmp_path, capsys
+):
+    from heated_topics_v3 import cli
+
+    def failed_collect(now, repository, providers):
+        statuses = tuple(
+            PlatformCollectionStatus(platform, "failed", now.isoformat(), 0, "ValueError")
+            for platform in ("toutiao", "juejin")
+        )
+        return DailySnapshot(now.date().isoformat(), now.isoformat(), {}, statuses)
+
+    monkeypatch.setattr(cli, "collect_v1_daily", failed_collect)
+
+    exit_code = cli.main(["collect-v1", "--data-root", str(tmp_path)])
+
+    assert exit_code == 1
+    payload = _json_output(capsys)
+    assert payload["status"] == "failed"
+    assert all(value["status"] == "failed" for value in payload["platforms"].values())
+
+
 def test_generate_v1_loads_profile_and_emits_status(monkeypatch, tmp_path, capsys):
     from heated_topics_v3 import cli
 

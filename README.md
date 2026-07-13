@@ -18,6 +18,9 @@ Create a UTF-8 JSON profile using the fields shown in
 `config/profiles/tech_ai_creator.json`, then generate the result twice to observe
 same-business-day cache reuse:
 
+`user_id` is a single filesystem-safe identifier: 1-64 ASCII letters, digits,
+underscores, or hyphens, beginning with a letter or digit.
+
 ```powershell
 uv run heated-topics generate-v1 --data-root data --profile config/profiles/tech_ai_creator.json
 uv run heated-topics generate-v1 --data-root data --profile config/profiles/tech_ai_creator.json

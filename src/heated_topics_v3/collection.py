@@ -36,6 +36,8 @@ def collect_v1_daily(
         try:
             provider = providers[platform]
             capture = provider.collect_hot_list(collected_at)
+            if not capture.items:
+                raise ValueError("empty official hot board")
             repository.save_raw(
                 business_date,
                 platform,

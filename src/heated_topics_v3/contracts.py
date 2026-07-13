@@ -1,5 +1,6 @@
 """Immutable data contracts shared by the collection and recommendation workflow."""
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal, Mapping
 
@@ -11,6 +12,16 @@ GenerationStatus = Literal["existing", "generated", "no_result", "not_ready", "f
 CollectionStatus = Literal["success", "partial", "failed"]
 
 
+_SAFE_USER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
+
+
+def validate_user_id(value: str) -> str:
+    """Validate the single safe path segment used for persisted user results."""
+    if not isinstance(value, str) or _SAFE_USER_ID.fullmatch(value) is None:
+        raise ValueError("user_id must be 1-64 ASCII letters, digits, '_' or '-'")
+    return value
+
+
 @dataclass(frozen=True)
 class UserProfile:
     user_id: str
@@ -19,6 +30,9 @@ class UserProfile:
     persona: str
     primary_keyword: str
     updated_at: str
+
+    def __post_init__(self) -> None:
+        validate_user_id(self.user_id)
 
 
 @dataclass(frozen=True)
