@@ -208,3 +208,138 @@ def test_build_uses_detail_for_matching_and_recommendation_content():
     assert recommendations[0].detail == item_detail.content
     assert recommendations[0].content_status == "full_text"
     assert recommendations[0].heat_level == 1
+
+
+def test_overlap_checks_all_board_group_ids_before_title_fallback():
+    title_fallback = item(
+        "toutiao_title",
+        "toutiao",
+        "AI工具 发布",
+        rank=1,
+        heat_value=100,
+        raw_payload={"ClusterIdStr": "wrong"},
+    )
+    group_id_match = item(
+        "toutiao_group",
+        "toutiao",
+        "另一榜单标题",
+        rank=2,
+        heat_value=200,
+        raw_payload={"ClusterIdStr": "strong"},
+    )
+    search_item = item(
+        "toutiao_search",
+        "toutiao",
+        "ＡＩ工具\u3000发布",
+        metric_name="search_rank",
+        raw_payload={"group_id": "strong"},
+    )
+
+    merged = merge_toutiao_results((title_fallback, group_id_match), (search_item,))
+    merged_search = next(record for record in merged if record.item_id == "toutiao_search")
+
+    assert merged_search.rank == 2
+    assert merged_search.heat == group_id_match.heat
+    assert merged_search.raw_payload["v1_evidence"]["board_item_id"] == "toutiao_group"
+    assert merged_search.raw_payload["v1_evidence"]["overlap_method"] == "group_id"
+
+
+@pytest.mark.parametrize(
+    ("overlap_method", "board_url", "search_url", "board_title", "search_title"),
+    [
+        (
+            "canonical_url",
+            "https://www.toutiao.com/group/900/",
+            "https://toutiao.com/group/900/?from=search",
+            "普通榜单标题",
+            "普通搜索标题",
+        ),
+        (
+            "normalized_title",
+            "https://example.com/board/",
+            "https://example.com/search/",
+            "普通 ＡＩ 主题",
+            "普通 ai 主题",
+        ),
+    ],
+)
+def test_url_or_title_overlap_can_use_official_detail_with_different_item_id(
+    overlap_method: str,
+    board_url: str,
+    search_url: str,
+    board_title: str,
+    search_title: str,
+):
+    board_item = item(
+        "toutiao_board",
+        "toutiao",
+        board_title,
+        url=board_url,
+        raw_payload={"ClusterIdStr": "board-id"},
+    )
+    search_item = item(
+        "toutiao_search",
+        "toutiao",
+        search_title,
+        url=search_url,
+        metric_name="search_rank",
+        raw_payload={"group_id": "search-id"},
+    )
+    official_detail = detail(board_item, "官方正文只在这里提到 AI工具")
+
+    recommendations = build_v1_recommendations(
+        profile(),
+        (board_item,),
+        (search_item,),
+        (),
+        {board_item.item_id: official_detail},
+    )
+
+    assert [record.hot_item_id for record in recommendations] == ["toutiao_search"]
+    assert recommendations[0].detail == official_detail.content
+    assert recommendations[0].content_status == official_detail.content_status
+    assert recommendations[0].evidence["overlap_method"] == overlap_method
+
+
+def test_empty_urls_are_skipped_during_overlap_matching():
+    board_item = replace(
+        item("toutiao_board", "toutiao", "榜单标题", raw_payload={"ClusterIdStr": "1"}),
+        url="",
+    )
+    search_item = replace(
+        item(
+            "toutiao_search",
+            "toutiao",
+            "不同搜索标题",
+            metric_name="search_rank",
+            raw_payload={"group_id": "2"},
+        ),
+        url="",
+    )
+
+    merged = merge_toutiao_results((board_item,), (search_item,))
+    merged_search = next(record for record in merged if record.item_id == "toutiao_search")
+
+    assert len(merged) == 2
+    assert merged_search.raw_payload["v1_evidence"]["source_kind"] == "keyword_search"
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_content", "expected_status"),
+    [
+        ("AI工具 摘要", "AI工具 摘要", "summary"),
+        ("", "AI工具 标题", "title_only"),
+    ],
+)
+def test_empty_detail_content_falls_back_to_summary_then_title(
+    summary: str, expected_content: str, expected_status: str
+):
+    juejin_item = item("juejin_1", "juejin", "AI工具 标题", summary=summary)
+    empty_detail = detail(juejin_item, "")
+
+    recommendations = build_v1_recommendations(
+        profile(), (), (), (juejin_item,), {juejin_item.item_id: empty_detail}
+    )
+
+    assert recommendations[0].detail == expected_content
+    assert recommendations[0].content_status == expected_status

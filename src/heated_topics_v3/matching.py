@@ -41,30 +41,51 @@ def _group_id(item: HotItem) -> str:
     return ""
 
 
-def _canonical_url(value: str) -> str:
+def _canonical_url(value: str) -> str | None:
     parsed = urlsplit(value.strip())
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+        return None
     host = (parsed.hostname or "").casefold()
     if host.startswith("www."):
         host = host[4:]
-    path = unquote(parsed.path).rstrip("/") or "/"
+    path = unquote(parsed.path).rstrip("/")
+    if not path:
+        return None
     return f"{host}{path}"
 
 
-def _overlap_method(board_item: HotItem, search_item: HotItem) -> str | None:
+def _same_group_id(board_item: HotItem, search_item: HotItem) -> bool:
     board_group_id = _group_id(board_item)
     search_group_id = _group_id(search_item)
-    if board_group_id and search_group_id and board_group_id == search_group_id:
-        return "group_id"
+    return bool(
+        board_group_id and search_group_id and board_group_id == search_group_id
+    )
 
+
+def _same_canonical_url(board_item: HotItem, search_item: HotItem) -> bool:
     board_url = _canonical_url(board_item.url)
     search_url = _canonical_url(search_item.url)
-    if board_url and search_url and board_url == search_url:
-        return "canonical_url"
+    return bool(board_url and search_url and board_url == search_url)
 
+
+def _same_normalized_title(board_item: HotItem, search_item: HotItem) -> bool:
     board_title = _normalized_text(board_item.title)
     search_title = _normalized_text(search_item.title)
-    if board_title and search_title and board_title == search_title:
-        return "normalized_title"
+    return bool(board_title and search_title and board_title == search_title)
+
+
+def _find_overlap(
+    board_items: Sequence[HotItem], search_item: HotItem
+) -> tuple[int, str] | None:
+    matchers = (
+        ("group_id", _same_group_id),
+        ("canonical_url", _same_canonical_url),
+        ("normalized_title", _same_normalized_title),
+    )
+    for method, matcher in matchers:
+        for index, board_item in enumerate(board_items):
+            if matcher(board_item, search_item):
+                return index, method
     return None
 
 
@@ -97,14 +118,7 @@ def merge_toutiao_results(
     unmatched: list[HotItem] = []
 
     for search_item in search:
-        match = next(
-            (
-                (index, method)
-                for index, board_item in enumerate(board_items)
-                if (method := _overlap_method(board_item, search_item)) is not None
-            ),
-            None,
-        )
+        match = _find_overlap(board_items, search_item)
         if match is None:
             evidence = {
                 "source_kind": "keyword_search",
@@ -139,7 +153,7 @@ def merge_toutiao_results(
 
 
 def _recommendation(item: HotItem, detail: ItemDetail | None, heat_level: int) -> RecommendationItem:
-    if detail is not None:
+    if detail is not None and detail.content.strip():
         content = detail.content
         content_status = detail.content_status
     elif item.summary:
@@ -186,10 +200,25 @@ def build_v1_recommendations(
     recommendations: list[RecommendationItem] = []
     for item in merge_toutiao_results(toutiao_board, toutiao_search):
         item_detail = details.get(item.item_id)
+        evidence = item.raw_payload.get("v1_evidence", {})
+        board_item_id = evidence.get("board_item_id")
+        board_detail = (
+            details.get(str(board_item_id)) if board_item_id is not None else None
+        )
+        matched_detail = None
         if matches_primary_keyword(profile, item, item_detail):
-            evidence = item.raw_payload.get("v1_evidence", {})
-            heat_level = 3 if evidence.get("source_kind") == "keyword_search" else 1
-            recommendations.append(_recommendation(item, item_detail, heat_level))
+            matched_detail = item_detail
+        elif board_detail is not item_detail and matches_primary_keyword(
+            profile, item, board_detail
+        ):
+            matched_detail = board_detail
+        else:
+            continue
+
+        if matched_detail is None and board_detail is not None:
+            matched_detail = board_detail
+        heat_level = 3 if evidence.get("source_kind") == "keyword_search" else 1
+        recommendations.append(_recommendation(item, matched_detail, heat_level))
 
     for item in juejin_board:
         item_detail = details.get(item.item_id)
