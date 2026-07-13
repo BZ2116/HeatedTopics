@@ -90,3 +90,28 @@ and commenting once is still accepted. The final independent regression root is
 Toutiao samples are 1158/12, 2976/45, and 188/4 characters/lines and all are
 `success/full_text`. Juejin was not invoked in this Toutiao-only regression, as
 recorded in its `smoke-summary.json`.
+
+## Trending aggregate coverage follow-up
+
+A clean 50-item collection exposed 17 trending pages that had no usable article
+body at snapshot time. Five live DOM samples shared the same explicit structure:
+
+- `事件详情`: 34–72 characters; four samples linked video, one linked article;
+- optional `事件脉络`: 132 characters in the sampled page where present;
+- `相关内容`: 215, 757, 229, 289, and 440 characters;
+- `网友讨论`: a separate 475–776-character block that must not be captured.
+
+The renderer now returns `.block-container` title/text pairs, never the body. For
+trending pages only, it concatenates `事件详情`, `事件脉络`, and `相关内容`, and
+stops before `网友讨论`, `头条热榜`, `推荐`, or `猜你喜欢`. Following a discovered
+article remains the first choice. It also waits up to four seconds for Toutiao's
+lazy `.topic-related-list-wrapper`/timeline before taking the bounded snapshot;
+this addressed article cards that appeared before their related-content block.
+
+The final independent retry is
+`smoke_data/toutiao-trending-bounded-17-final-20260713`. All 17 previously partial
+items are now `success/full_text` (259–4610 characters, 12–21 lines), with zero
+remaining failure types. Combined with the original 33 full-text items, this
+projects to 50/50 for the same captured board. An automated check confirmed none
+of the 17 texts contains `网友讨论`, `头条热榜`, `换一换`, or the login-comment
+prompt. Thresholds were unchanged.

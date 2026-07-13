@@ -14,6 +14,7 @@ from heated_topics_v3.providers.toutiao import (
     TOUTIAO_ARTICLE_EVALUATION_SCRIPT,
     PlaywrightArticleRenderer,
     ToutiaoProvider,
+    _trending_block_text,
 )
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -414,6 +415,121 @@ def test_trending_renderer_follows_event_detail_article_before_extracting_body()
         "https://www.toutiao.com/article/123456/",
     ]
     assert result == body
+
+
+def test_trending_renderer_uses_marker_bounded_event_and_related_blocks_without_article():
+    event = "事件视频说明了发生时间、地点和主要经过。" * 4
+    related = "相关报道补充了当事人回应、现场情况和后续处置。" * 5
+
+    class Page:
+        async def goto(self, *args, **kwargs):
+            return None
+
+        async def wait_for_selector(self, *args, **kwargs):
+            return None
+
+        async def evaluate(self, script):
+            return {
+                "text": "",
+                "detail_url": "",
+                "blocks": [
+                    {"title": "事件详情", "text": event},
+                    {"title": "相关内容", "text": related},
+                    {"title": "网友讨论", "text": "评论区内容" * 100},
+                    {"title": "头条热榜", "text": "其他热搜" * 100},
+                ],
+            }
+
+        async def close(self):
+            return None
+
+    class Context:
+        async def new_page(self):
+            return Page()
+
+    renderer = PlaywrightArticleRenderer()
+    renderer._context = Context()
+    renderer._semaphore = asyncio.Semaphore(3)
+
+    result = asyncio.run(renderer._fetch("https://www.toutiao.com/trending/999/"))
+
+    assert "事件详情" in result and event in result
+    assert "相关内容" in result and related in result
+    assert "网友讨论" not in result
+    assert "评论区内容" not in result
+    assert "头条热榜" not in result
+    assert "其他热搜" not in result
+
+
+def test_trending_renderer_waits_for_lazy_related_block_before_snapshot():
+    related = "稍后加载的相关报道包含事件经过、官方回应、数据和后续安排。" * 8
+
+    class Page:
+        def __init__(self):
+            self.related_ready = False
+
+        async def goto(self, *args, **kwargs):
+            return None
+
+        async def wait_for_selector(self, selector, **kwargs):
+            if ".topic-related-list-wrapper" in selector:
+                self.related_ready = True
+
+        async def evaluate(self, script):
+            blocks = [{"title": "事件详情", "text": "短事件卡片"}]
+            if self.related_ready:
+                blocks.append({"title": "相关内容", "text": related})
+            return {"text": "", "detail_url": "", "blocks": blocks}
+
+        async def close(self):
+            return None
+
+    page = Page()
+
+    class Context:
+        async def new_page(self):
+            return page
+
+    renderer = PlaywrightArticleRenderer()
+    renderer._context = Context()
+    renderer._semaphore = asyncio.Semaphore(3)
+
+    result = asyncio.run(renderer._fetch("https://www.toutiao.com/trending/999/"))
+
+    assert page.related_ready
+    assert related in result
+
+
+@pytest.mark.parametrize(
+    "blocks",
+    [
+        [{"title": "其他区域", "text": "无语义边界的长文本" * 30}],
+        [{"title": "网友讨论", "text": "请先登录后发表评论" * 30}],
+        [
+            {"title": "事件详情", "text": "登录\n评论\n分享"},
+            {"title": "网友讨论", "text": "评论内容" * 30},
+        ],
+    ],
+)
+def test_trending_blocks_without_meaningful_bounded_content_stay_empty_or_short(blocks):
+    result = _trending_block_text(blocks)
+
+    assert len(result) < 120
+
+
+def test_trending_block_boundary_stops_before_hot_list_even_without_discussion_block():
+    result = _trending_block_text(
+        [
+            {"title": "事件详情", "text": "事件解释" * 30},
+            {"title": "相关内容", "text": "相关报道" * 30},
+            {"title": "头条热榜", "text": "不相关热搜" * 50},
+            {"title": "推荐", "text": "不相关推荐" * 50},
+        ]
+    )
+
+    assert "事件解释" in result and "相关报道" in result
+    assert "头条热榜" not in result and "不相关热搜" not in result
+    assert "推荐" not in result and "不相关推荐" not in result
 
 def test_search_treats_malformed_publication_time_as_undated():
     raw = json.dumps({"data": [{"id": "bad-date", "title": "Still useful", "url": "https://www.toutiao.com/article/204/", "publish_time": "not-a-date"}]})

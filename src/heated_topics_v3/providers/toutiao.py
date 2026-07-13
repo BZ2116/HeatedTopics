@@ -27,13 +27,17 @@ TOUTIAO_ARTICLE_EVALUATION_SCRIPT = r"""() => {
         'article', '.syl-page-article', '.article-content',
         '.feed-card-article-l', '.weitoutiao-html'
     ];
+    const blocks = [...document.querySelectorAll('.block-container')].map(block => ({
+        title: (block.querySelector('.block-title')?.innerText || '').trim(),
+        text: (block.querySelector('.block-content')?.innerText || '').trim()
+    }));
     for (const selector of selectors) {
         const candidates = [...document.querySelectorAll(selector)];
         const texts = candidates.map(node => (node.innerText || '').trim())
             .filter(text => text.length > 80);
-        if (texts.length) return {text: texts.join('\n\n'), detail_url: detailLink?.getAttribute('href') || ''};
+        if (texts.length) return {text: texts.join('\n\n'), detail_url: detailLink?.getAttribute('href') || '', blocks};
     }
-    return {text: '', detail_url: detailLink?.getAttribute('href') || ''};
+    return {text: '', detail_url: detailLink?.getAttribute('href') || '', blocks};
 }"""
 
 
@@ -165,6 +169,14 @@ class PlaywrightArticleRenderer:
                     )
                 except Exception:
                     pass
+                if urlparse(url).path.startswith("/trending/"):
+                    try:
+                        await page.wait_for_selector(
+                            ".topic-related-list-wrapper, .timeline-container",
+                            timeout=min(4000, self.timeout_seconds * 1000),
+                        )
+                    except Exception:
+                        pass
                 extracted = await self._evaluate_page(page)
                 detail_url = str(extracted.get("detail_url") or "")
                 if urlparse(url).path.startswith("/trending/") and detail_url:
@@ -188,6 +200,10 @@ class PlaywrightArticleRenderer:
                     article_text = _clean_rendered_article_text(str(article.get("text") or ""))
                     if _is_meaningful_article(article_text, ""):
                         return article_text
+                if urlparse(url).path.startswith("/trending/"):
+                    bounded_text = _trending_block_text(extracted.get("blocks"))
+                    if bounded_text:
+                        return bounded_text
                 return _clean_rendered_article_text(str(extracted.get("text") or ""))
             finally:
                 await page.close()
@@ -198,7 +214,11 @@ class PlaywrightArticleRenderer:
             value = await page.evaluate(TOUTIAO_ARTICLE_EVALUATION_SCRIPT)
         except Exception:
             raise ToutiaoRendererUnavailable("PageEvaluateError") from None
-        return value if isinstance(value, dict) else {"text": str(value or ""), "detail_url": ""}
+        return value if isinstance(value, dict) else {
+            "text": str(value or ""),
+            "detail_url": "",
+            "blocks": [],
+        }
 
     async def _shutdown(self) -> None:
         for resource in (self._context, self._browser):
@@ -533,6 +553,32 @@ def _clean_rendered_article_text(text: str) -> str:
             continue
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def _trending_block_text(value) -> str:
+    if not isinstance(value, list):
+        return ""
+    allowed = {"事件详情", "事件脉络", "相关内容"}
+    boundaries = {"网友讨论", "头条热榜", "推荐", "猜你喜欢"}
+    started = False
+    parts: list[str] = []
+    for block in value:
+        if not isinstance(block, dict):
+            continue
+        title = str(block.get("title") or "").strip()
+        if title in boundaries:
+            if started:
+                break
+            continue
+        if title not in allowed:
+            if started:
+                break
+            continue
+        started = True
+        text = _clean_rendered_article_text(str(block.get("text") or ""))
+        if text:
+            parts.extend((title, text))
+    return "\n".join(parts).strip()
 
 
 def _is_page_chrome_line(line: str) -> bool:
