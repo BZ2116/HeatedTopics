@@ -39,7 +39,7 @@ Path B/C 搜索补拉 (build_candidates, 跳过 search gate 时不调用)
 四路径共用同一组 `PathFilters`（`src/heated_topics_v3/toutiao_paths.py:51`），按以下顺序执行：
 
 ```
-Path A  build_hot_board_candidates (热榜 + persona 过滤)
+Path A  build_hot_board_candidates (热榜 + persona_keywords 命中过滤)
        │
        ├── 热榜候选数 ≥ min_hot_board_before_search → return Path A
        ▼
@@ -90,10 +90,10 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 | --- | --- | --- |
 | `--profile-v2 PATH` | 指向 `config/profiles/{user_id}.json` | 必填 |
 | `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`，`src/heated_topics_v3/cli.py:86`） |
-| `--no-llm` | 完全跳过 LLM 调用 | `--no-llm` / `--llm-*` 三选一 |
-| `--llm-keywords` | LLM 提炼关键词 | 同上 |
-| `--llm-summary` | LLM 生成文章摘要 | 否 |
-| `--llm-rerank` | LLM 重排候选 | 否 |
+| `--no-llm` | 完全跳过 LLM 调用 | 与各 `--llm-*` 互斥；启用后以下三项均被强制关闭 |
+| `--llm-keywords` | LLM 提炼关键词 | 与 `--no-llm` 互斥；与 `--llm-summary` / `--llm-rerank` 彼此独立 |
+| `--llm-summary` | LLM 生成文章摘要 | 与 `--no-llm` 互斥；可单独启用 |
+| `--llm-rerank` | LLM 重排候选 | 与 `--no-llm` 互斥；可单独启用 |
 | `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | 否 |
 | `--offline` | 仅使用本地缓存，不发请求 | 否 |
 | `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`，`src/heated_topics_v3/cli.py:85`） |
@@ -137,14 +137,24 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 
 ## §7 正文获取优先级
 
+正文链路由 **Path 级预填充** + **单条 detail 兜底** 两层组成。优先级核心结论：**mobile API 的 `article_info.content_html` 永远优先于桌面页解析**。
+
+**Path 级预填充**（在 `fetch_toutiao_item_details` 之前给所有候选填好正文，避免下游空 body）：
+
+| 阶段 | 来源 | 说明 |
+| --- | --- | --- |
+| Path B/C 搜索循环 | mobile `article_info.content_html` | 搜索结果回流时调用 `attach_article_heat_fields`，把 `content_html` 写入 `raw_payload`（`src/heated_topics_v3/pipeline.py:355-366`） |
+| Path A 顶 N enrichment | 同上, 补拉 | Path A 候选未进搜索循环，ranking 后用 `_enrich_top_path_a_candidates` 补拉一次 `article_info`（`src/heated_topics_v3/pipeline.py:469-506`） |
+
+**单条 detail 兜底**（`fetch_toutiao_item_details` 内, `src/heated_topics_v3/providers/toutiao.py`）：
+
 | 优先级 | 来源 | 触发场景 | 失败兜底 |
 | --- | --- | --- | --- |
-| 1 | 桌面页 `<article>` 解析 | URL 直接指向 `/article/` 且非 JS 渲染 | 跳到优先级 2 |
-| 2 | mobile `article_info.content_html` | 移动端 API 返回完整正文（`src/heated_topics_v3/providers/toutiao.py:387`） | 跳到优先级 3 |
-| 3 | Path A 顶 N 补拉 article_info | Path A 候选未拿到正文时（`src/heated_topics_v3/pipeline.py:473`） | 跳到优先级 4 |
-| 4 | metadata（`item.summary` / `item.title`） | 上述全部失败时仅落标题（`src/heated_topics_v3/providers/toutiao.py:378` 的 `_partial_detail`） | 输出文件只剩标题 |
+| 1 | mobile `article_info.content_html` | `raw_payload.content_html` 已存在且非空（搜索或 Path A enrichment 已写入） | 跳到优先级 2 |
+| 2 | 桌面页 `<article>` 解析（`parse_toutiao_article_page`） | article_info 缺失或 desktop HTML 未被 JS 渲染时 | 跳到优先级 3 |
+| 3 | metadata（`item.summary` / `item.title`） | 上述全部失败时仅落标题（`_partial_detail`, `src/heated_topics_v3/providers/toutiao.py:387`） | 输出文件只剩标题 |
 
-`article_info` 对部分聚合型（aggregator）热搜主题会返回空 `content`，此时落盘文件只包含标题，正文留空。
+`article_info` 对部分聚合型（aggregator）热搜主题会返回空 `content`，桌面页又 JS 渲染时落盘文件只包含标题，正文留空。
 
 ## §8 缓存目录
 
@@ -161,7 +171,7 @@ cache/
 - 关键词缓存 7 天 TTL + 签名校验（`src/heated_topics_v3/llm_keywords.py:6` / `:24`）。
 - LLM 缓存按 prompt hash 命中，重复请求不重复计费。
 
-`--force-hot-board-refresh` 跳过热榜缓存，`--offline` 拒绝任何外网请求。
+`--force-hot-board-refresh` 跳过热榜缓存，`--offline` 仅在热榜环节生效 — 把 `fetcher=None` 传给 `get_or_fetch_hot_board`，等于禁用当日热榜抓取、回退到 `cache/hot_board/{date}.json` 命中或 yesterday 兜底；其它阶段（搜索 / `article_info` / 桌面页解析）依然会发请求。
 
 ## §9 反爬梯子
 
@@ -173,7 +183,7 @@ cache/
 | 2 | Playwright live Chromium | 阶段 1 连续失败 ≥ `DEMOTE_AFTER_FAILS=3`（`src/heated_topics_v3/fetcher_factory.py:57`） |
 | 3 | DrissionPage live Chromium | 阶段 2 也连续失败 ≥ 3 次 |
 
-阶段升级 / 降级 / 整段禁用规则与诊断细节见 [`docs/superpowers/specs/2026-07-14-toutiao-search-anti-bot-design.md`](docs/superpowers/specs/2026-07-14-toutiao-search-anti-bot-design.md)。
+阶段升级 / 降级 / 整段禁用规则与诊断细节见 [`docs/superpowers/specs/2026-07-14-toutiao-search-anti-bot-design.md`](docs/superpowers/specs/2026-07-14-toutiao-search-anti-bot-design.md)。该 spec 覆盖了热榜、搜索回包、桌面 `/article` 解析三阶段的失败模式诊断（不仅是搜索），是反爬梯子的完整因果说明书。
 
 ## §10 辅助脚本
 
