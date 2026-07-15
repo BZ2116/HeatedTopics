@@ -10,6 +10,7 @@ from heated_topics_v3.providers.toutiao import (
     compute_article_heat,
     extract_toutiao_article_id,
     fetch_toutiao_article_info,
+    fetch_toutiao_item_details,
     fetch_toutiao_search_pages,
 )
 
@@ -124,6 +125,7 @@ def test_attach_article_heat_fields_for_search_item_replaces_hot_value():
         "repin_count": 1,
         "is_toutiao_hot": True,
         "is_original": False,
+        "title": "中央财经大学2027年校园招聘公告",
     }
     expected_heat = 100 + 40 + 25 + 0 + 3
 
@@ -134,6 +136,20 @@ def test_attach_article_heat_fields_for_search_item_replaces_hot_value():
     assert enriched.raw_payload["is_toutiao_hot"] is True
     assert enriched.raw_payload["article_info_status"] == "ok"
     assert enriched.raw_payload["source_kind"] == "article_info"
+    assert enriched.raw_payload["article_title"] == "中央财经大学2027年校园招聘公告"
+
+
+def test_attach_article_heat_fields_handles_missing_title():
+    item = _search_hot_item("https://www.toutiao.com/group/12345/")
+    info = {
+        "impression_count": 100,
+        "digg_count": 20,
+        "comment_count": 5,
+        "repost_count": 0,
+        "repin_count": 1,
+    }
+    enriched = attach_article_heat_fields(item, info)
+    assert enriched.raw_payload["article_title"] == ""
 
 
 def test_attach_article_heat_fields_for_hot_board_preserves_hot_value():
@@ -145,6 +161,7 @@ def test_attach_article_heat_fields_for_hot_board_preserves_hot_value():
         "repost_count": 0,
         "repin_count": 0,
         "is_toutiao_hot": True,
+        "title": "马兴瑞被双开",
     }
 
     enriched = attach_article_heat_fields(item, info)
@@ -153,6 +170,7 @@ def test_attach_article_heat_fields_for_hot_board_preserves_hot_value():
     assert enriched.raw_payload["article_heat"] == 200 + 20
     assert enriched.raw_payload["metric_name"] == "hot_value+article_heat"
     assert enriched.raw_payload["is_toutiao_hot"] is True
+    assert enriched.raw_payload["article_title"] == "马兴瑞被双开"
 
 
 def test_attach_article_heat_fields_handles_none_info():
@@ -199,3 +217,169 @@ def test_fetch_toutiao_search_pages_dedupes_across_pages(tmp_path: Path):
     assert "B" in titles
     assert "C" in titles
     assert len(items) == 3
+
+
+def test_fetch_item_details_uses_content_html_when_live_fetch_fails():
+    """Bug fix: when the desktop page is JS-rendered (urllib gets no <article>),
+    the article body still comes back via the mobile article_info API and is
+    stored in raw_payload['content_html']. Make sure it ends up in detail.content.
+    """
+    captured_urls: list[str] = []
+
+    def empty_fetcher(url: str, timeout_seconds: int) -> str:
+        captured_urls.append(url)
+        # Simulate a JS-rendered SPA — no <article> tag in static HTML.
+        return (
+            "<html><head></head>"
+            "<body><div class='container'><div id='app'></div></div></body>"
+            "</html>"
+        )
+
+    content_html = (
+        "<p>点击进入招聘合集</p>"
+        "<p>更多国资央企精彩动态</p>"
+        "<p>尽在国资小新视频号</p>"
+        "<p>———— / END / ————</p>"
+        "<p>责任编辑丨蔡豪</p>"
+        "<script>var x = 1;</script>"
+        "<style>.foo { color: red }</style>"
+        "<mp-common-videosnap data-desc='国资小新 hello'></mp-common-videosnap>"
+    )
+    item = HotItem(
+        item_id="toutiao_search_校招_1",
+        platform="toutiao",
+        item_type="search_result",
+        title="【",
+        url="/search/jump?aid=1455&jtoken=abc123",
+        rank=1,
+        heat=HeatMetrics(value=304, label="304", metric_name="article_heat"),
+        summary="校招",
+        category="search",
+        matched_query_ids=(),
+        fetched_at="2026-07-14T17:01:25+08:00",
+        fetch_status="success",
+        raw_payload={
+            "search_phrase": "校招",
+            "source_kind": "article_info",
+            "article_heat": 304,
+            "content_html": content_html,
+        },
+    )
+
+    details = fetch_toutiao_item_details([item], fetcher=empty_fetcher)
+    assert len(details) == 1
+    detail = details[0]
+
+    assert detail.fetch_status == "partial"
+    assert detail.extraction_method == "article_info_content_html"
+    assert "招聘合集" in detail.content
+    assert "责任编辑丨蔡豪" in detail.content
+    assert detail.content != "校招"
+    assert "<script>" not in detail.content
+    assert "<style>" not in detail.content
+    assert "<p>" not in detail.content
+    assert "var x = 1" not in detail.content
+    # URL field must keep the raw /search/jump URL so _write_article_text
+    # can still match the detail back to its candidate.
+    assert detail.url.startswith("/search/jump")
+    # raw_payload pass-through for downstream consumers
+    assert detail.raw_payload["content_source"] == "article_info"
+    # Live fetch was tried (resolve before extract)
+    assert any("/search/jump" in url or "toutiao.com" in url for url in captured_urls)
+    # Block-level tags should preserve paragraph breaks so the saved article
+    # file is readable instead of one long single-spaced line.
+    assert "招聘合集" in detail.content
+    paragraphs = [line for line in detail.content.splitlines() if line.strip()]
+    assert len(paragraphs) >= 3, detail.content
+    for expected in ("招聘合集", "国资央企", "视频号", "责任编辑"):
+        assert any(expected in p for p in paragraphs), detail.content
+
+
+def test_fetch_item_details_falls_back_to_summary_when_no_content_html():
+    """When neither the live fetch nor content_html gives a body, we still
+    return a partial detail — content must come from item.summary so report
+    rendering doesn't crash."""
+    def empty_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html></html>"
+
+    item = HotItem(
+        item_id="toutiao_search_x",
+        platform="toutiao",
+        item_type="search_result",
+        title="【",
+        url="/search/jump?aid=1&jtoken=z",
+        rank=1,
+        heat=HeatMetrics(value=1, label="1", metric_name="article_heat"),
+        summary="校招",
+        category="search",
+        matched_query_ids=(),
+        fetched_at="2026-07-14T00:00:00+08:00",
+        fetch_status="success",
+        raw_payload={"search_phrase": "校招", "source_kind": "article_info"},
+    )
+
+    details = fetch_toutiao_item_details([item], fetcher=empty_fetcher)
+    assert len(details) == 1
+    detail = details[0]
+    assert detail.fetch_status == "partial"
+    assert detail.extraction_method == "toutiao_hot_board_payload"
+    assert detail.content == "校招"
+
+
+def test_fetch_item_details_uses_article_title_when_available():
+    """article_info API returns a real title even when the search result's
+    title field is the search keyword. detail.title should pick that up
+    via raw_payload['article_title']."""
+    def empty_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html></html>"
+
+    item = HotItem(
+        item_id="toutiao_search_t",
+        platform="toutiao",
+        item_type="search_result",
+        title="【",
+        url="/search/jump?aid=1&jtoken=z",
+        rank=1,
+        heat=HeatMetrics(value=1, label="1", metric_name="article_heat"),
+        summary="校招",
+        category="search",
+        matched_query_ids=(),
+        fetched_at="2026-07-14T00:00:00+08:00",
+        fetch_status="success",
+        raw_payload={
+            "search_phrase": "校招",
+            "source_kind": "article_info",
+            "article_title": "中央财经大学2027年校园招聘公告",
+            "content_html": "<p>正文第一段。</p>",
+        },
+    )
+
+    details = fetch_toutiao_item_details([item], fetcher=empty_fetcher)
+    detail = details[0]
+    assert detail.title == "中央财经大学2027年校园招聘公告"
+    assert detail.extraction_method == "article_info_content_html"
+
+
+def test_fetch_item_details_falls_back_to_item_title_when_article_title_missing():
+    def empty_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html></html>"
+
+    item = HotItem(
+        item_id="toutiao_search_fb",
+        platform="toutiao",
+        item_type="search_result",
+        title="学校招聘信息",
+        url="/search/jump?aid=1&jtoken=z",
+        rank=1,
+        heat=HeatMetrics(value=1, label="1", metric_name="article_heat"),
+        summary="",
+        category="search",
+        matched_query_ids=(),
+        fetched_at="2026-07-14T00:00:00+08:00",
+        fetch_status="success",
+        raw_payload={"search_phrase": "校招", "source_kind": "article_info", "content_html": "<p>x</p>"},
+    )
+
+    details = fetch_toutiao_item_details([item], fetcher=empty_fetcher)
+    detail = details[0]
+    assert detail.title == "学校招聘信息"

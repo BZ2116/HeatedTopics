@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from heated_topics_v3.contracts import ItemDetail, MatchResult, UserProfile
@@ -21,6 +21,7 @@ from heated_topics_v3.providers.toutiao import (
     fetch_toutiao_search_items,
     fetch_toutiao_search_pages,
     merge_toutiao_items,
+    resolve_toutiao_content_url,
 )
 from heated_topics_v3.reporting import (
     render_article_summary_md,
@@ -34,6 +35,8 @@ from heated_topics_v3.toutiao_paths import (
     PathFilters,
     apply_llm_rerank,
     build_candidates,
+    build_hot_board_candidates,
+    select_search_candidates_by_heat,
 )
 from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
 
@@ -319,54 +322,73 @@ def run_toutiao_pipeline_v2(
 
     keyword_phrases = tuple(k.keyword for k in extraction.keywords)
 
-    raw_search_by_keyword: dict[str, list] = {}
-    for keyword in keyword_phrases:
-        try:
-            results = fetch_toutiao_search_pages(
-                keyword,
-                fetched_at=fetched_at,
-                max_pages=path_filters.search_pages or 1,
-                per_page=path_filters.per_page,
-                fetcher=fetcher,
-            )
-        except Exception:
-            results = []
-        raw_search_by_keyword[keyword] = results
+    persona_keywords = profile.core_keywords + keyword_phrases
 
-    article_info_by_url: dict[str, dict] = {}
-    enriched_search_by_keyword: dict[str, list] = {}
-    seen_article_ids: set[str] = set()
-    for keyword, items in raw_search_by_keyword.items():
-        enriched: list = []
-        for item in items:
-            aid = extract_toutiao_article_id(item.url)
-            info = None
-            if aid and aid not in seen_article_ids:
-                info = fetch_toutiao_article_info(aid, fetcher=article_info_fetcher)
-                if info is not None:
-                    seen_article_ids.add(aid)
-            enriched_item = attach_article_heat_fields(item, info)
-            enriched.append(enriched_item)
-            canonical = _canonical_url(enriched_item.url)
-            article_info_by_url[canonical] = {
-                "impression_count": _safe_int(info, "impression_count") if info else None,
-                "digg_count": _safe_int(info, "digg_count") if info else None,
-                "comment_count": _safe_int(info, "comment_count") if info else None,
-                "repost_count": _safe_int(info, "repost_count") if info else None,
-                "repin_count": _safe_int(info, "repin_count") if info else None,
-                "is_toutiao_hot": bool(info and info.get("is_toutiao_hot")),
-                "article_heat": int(raw_payload_get(enriched_item.raw_payload, "article_heat", 0) or 0),
-            }
-        enriched_search_by_keyword[keyword] = enriched
-
-    candidates = build_candidates(
+    hot_board_only = build_hot_board_candidates(
         hot_board=list(hot_board_snapshot.items),
-        keywords=extraction.keywords,
-        persona_keywords=profile.core_keywords + keyword_phrases,
-        search_results_by_keyword=enriched_search_by_keyword,
-        article_info_by_url=article_info_by_url,
+        persona_keywords=persona_keywords,
         filters=path_filters,
     )
+    skip_search = (
+        len(hot_board_only) >= path_filters.min_hot_board_before_search
+        or not keyword_phrases
+    )
+
+    raw_search_by_keyword: dict[str, list] = {}
+    enriched_search_by_keyword: dict[str, list] = {}
+    article_info_by_url: dict[str, dict] = {}
+    if not skip_search:
+        for keyword in keyword_phrases:
+            try:
+                results = fetch_toutiao_search_pages(
+                    keyword,
+                    fetched_at=fetched_at,
+                    max_pages=path_filters.search_pages or 1,
+                    per_page=path_filters.per_page,
+                    fetcher=fetcher,
+                )
+            except Exception:
+                results = []
+            raw_search_by_keyword[keyword] = results
+
+        seen_article_ids: set[str] = set()
+        for keyword, items in raw_search_by_keyword.items():
+            enriched: list = []
+            for item in items:
+                resolved_url = resolve_toutiao_content_url(item.url)
+                aid = extract_toutiao_article_id(resolved_url)
+                info = None
+                if aid and aid not in seen_article_ids:
+                    info = fetch_toutiao_article_info(aid, fetcher=article_info_fetcher)
+                    if info is not None:
+                        seen_article_ids.add(aid)
+                enriched_item = attach_article_heat_fields(item, info)
+                enriched.append(enriched_item)
+                canonical = _canonical_url(enriched_item.url)
+                article_info_by_url[canonical] = {
+                    "impression_count": _safe_int(info, "impression_count") if info else None,
+                    "digg_count": _safe_int(info, "digg_count") if info else None,
+                    "comment_count": _safe_int(info, "comment_count") if info else None,
+                    "repost_count": _safe_int(info, "repost_count") if info else None,
+                    "repin_count": _safe_int(info, "repin_count") if info else None,
+                    "is_toutiao_hot": bool(info and info.get("is_toutiao_hot")),
+                    "article_heat": int(raw_payload_get(enriched_item.raw_payload, "article_heat", 0) or 0),
+                }
+            enriched_search_by_keyword[keyword] = enriched
+
+    if skip_search:
+        candidates = hot_board_only
+    else:
+        candidates = build_candidates(
+            hot_board=list(hot_board_snapshot.items),
+            keywords=extraction.keywords,
+            persona_keywords=persona_keywords,
+            search_results_by_keyword=enriched_search_by_keyword,
+            article_info_by_url=article_info_by_url,
+            filters=path_filters,
+        )
+
+    candidates = select_search_candidates_by_heat(candidates)
 
     if use_llm_rerank and candidates:
         body_excerpts: dict[str, str] = {}
@@ -374,12 +396,14 @@ def run_toutiao_pipeline_v2(
             candidates,
             llm=effective_llm,
             top_n_for_rerank=30,
-            persona_keywords=profile.core_keywords + keyword_phrases,
+            persona_keywords=persona_keywords,
             body_excerpts=body_excerpts,
         )
 
-    candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, profile.core_keywords + keyword_phrases)))
+    candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, persona_keywords)))
     top_candidates = candidates[: max(0, top_n)]
+
+    top_candidates = _enrich_top_path_a_candidates(top_candidates, article_info_fetcher)
 
     detail_fetcher_eff = detail_fetcher
     item_details = fetch_toutiao_item_details(
@@ -440,6 +464,46 @@ def run_toutiao_pipeline_v2(
         report_path=run_result.run_dir / "report.md",
         focused_path=run_result.run_dir / "focused.json",
     )
+
+
+def _enrich_top_path_a_candidates(
+    candidates: list["Candidate"],
+    article_info_fetcher: Callable[[str, int], str] | None,
+) -> list["Candidate"]:
+    """Fill in ``content_html`` for Path A hot-board candidates.
+
+    Path A items never go through ``attach_article_heat_fields`` in the search
+    loop, so ``raw_payload.content_html`` stays empty. When the desktop HTML
+    page is JS-rendered (the common case for hot-board trending items),
+    ``parse_toutiao_article_page`` returns ``fetch_status="empty"`` and
+    ``_partial_detail`` falls back to ``content_html`` — which is also empty —
+    leaving the article file body blank. Calling ``fetch_toutiao_article_info``
+    for these top candidates restores the fallback.
+
+    Path A items already keep their ``hot_value`` (see
+    ``attach_article_heat_fields``: ``was_hot_board`` branch), so this does
+    not perturb the candidate's preliminary score. When ``article_info_fetcher``
+    is None, ``fetch_toutiao_article_info`` falls back to plain ``urllib`` —
+    matching how Path B enrichment behaves for the same parameter.
+    """
+    enriched: list["Candidate"] = []
+    for candidate in candidates:
+        if not candidate.is_hot_board:
+            enriched.append(candidate)
+            continue
+        item = candidate.item
+        if item.raw_payload.get("article_info_status") == "ok":
+            enriched.append(candidate)
+            continue
+        resolved = resolve_toutiao_content_url(item.url)
+        article_id = extract_toutiao_article_id(resolved)
+        if not article_id:
+            enriched.append(candidate)
+            continue
+        info = fetch_toutiao_article_info(article_id, fetcher=article_info_fetcher)
+        new_item = attach_article_heat_fields(item, info)
+        enriched.append(replace(candidate, item=new_item))
+    return enriched
 
 
 @dataclass(frozen=True)

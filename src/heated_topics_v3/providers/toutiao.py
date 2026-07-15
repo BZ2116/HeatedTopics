@@ -4,7 +4,7 @@ import json
 import re
 import urllib.request
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail, TopicQuery
@@ -376,11 +376,36 @@ def _rendered_detail(item: HotItem, detail_url: str, content: str) -> ItemDetail
 
 
 def _partial_detail(item: HotItem) -> ItemDetail:
+    """Build a detail when the live article-page fetch failed.
+
+    Prefers the article body that the mobile ``article_info`` API already
+    returned (stored in ``raw_payload['content_html']`` by
+    ``attach_article_heat_fields``) when available — that path is reliable
+    while the desktop HTML page is JS-rendered and the ``<article>`` parser
+    misses the body. Falls back to ``item.summary`` when no body is on hand.
+    """
+    content_html = str(item.raw_payload.get("content_html") or "")
+    body = _extract_text_from_html(content_html) if content_html.strip() else ""
+    real_title = str(item.raw_payload.get("article_title") or "").strip() or item.title
+    if body:
+        return ItemDetail(
+            item_id=item.item_id,
+            platform=item.platform,
+            url=item.url,
+            title=real_title,
+            author="",
+            content=body,
+            published_at="",
+            tags=(),
+            extraction_method="article_info_content_html",
+            fetch_status="partial",
+            raw_payload={**item.raw_payload, "content_source": "article_info"},
+        )
     return ItemDetail(
         item_id=item.item_id,
         platform=item.platform,
         url=item.url,
-        title=item.title,
+        title=real_title,
         author="",
         content=item.summary or item.title,
         published_at="",
@@ -389,6 +414,49 @@ def _partial_detail(item: HotItem) -> ItemDetail:
         fetch_status="partial",
         raw_payload=item.raw_payload,
     )
+
+
+def _extract_text_from_html(html_str: str) -> str:
+    """Strip scripts/styles/tags and collapse whitespace; cheap HTML → text.
+
+    Block-level tags (``p``, ``div``, headings, …) become paragraph breaks so
+    multi-paragraph article bodies keep readable formatting. Inline tags are
+    dropped.
+    """
+    if not html_str:
+        return ""
+    cleaned = re.sub(
+        r"<script\b[^>]*>.*?</script>",
+        " ",
+        html_str,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"<style\b[^>]*>.*?</style>",
+        " ",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"</?(p|div|section|article|main|header|footer|aside|nav|blockquote|pre|"
+        r"ul|ol|li|dl|dt|dd|figure|figcaption|h[1-6])\b[^>]*>",
+        "\n\n",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"<(br|hr)\b[^>]*/?>",
+        "\n",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"<[^>]+>", " ", cleaned)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"[ \t]*\n[ \t]*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    lines = [line.strip() for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
 
 
 def parse_toutiao_article_page(response_text: str, item: HotItem) -> ItemDetail:
@@ -515,6 +583,17 @@ def _is_content_url(url: str) -> bool:
 
 
 def _canonical_url(url: str) -> str:
+    """Stable URL key for dedup.
+
+    For Toutiao's `/search/jump?aid=...&jtoken=...&url=...` redirect URLs,
+    the jtoken is the actual article identifier (multiple anchors on the
+    same card share one jtoken). Strip everything else to keep the key
+    compact and unique per article.
+    """
+    if url.startswith("/search/jump"):
+        match = re.search(r"jtoken=([^&]+)", url)
+        if match:
+            return f"/search/jump?jtoken={match.group(1)}"
     return url.split("?", maxsplit=1)[0].rstrip("/")
 
 
@@ -887,6 +966,7 @@ def attach_article_heat_fields(
     raw_payload["is_toutiao_hot"] = is_toutiao_hot
     raw_payload["is_original"] = is_original
     raw_payload["content_html"] = content_html
+    raw_payload["article_title"] = str(info.get("title") or "").strip()
     raw_payload["article_info_status"] = "ok"
 
     new_heat = item.heat

@@ -12,6 +12,18 @@ HeatedTopics V3 是一个面向内容选题的多平台热点采集项目。它�
 - 四路径筛选：热榜高热条目、关键词搜索、高热文章兜底和可选 LLM 重排。
 - 统一热度评分：综合平台 `HotValue`、文章互动数据和 persona 匹配度。
 - 按用户归档：每次运行保存报告、Top N、原始响应和文章正文。
+- 正文多段保留：保存的文章 txt 文件以元数据头 + 一段一行的方式渲染，便于人眼阅读。
+
+## 正文获取策略
+
+每篇文章正文按以下优先级写入：
+
+1. 桌面页 `<article>` 解析（`parse_toutiao_article_page`）—— 部分普通文章可拿到完整正文。
+2. mobile `article_info` 的 `content_html`（`_extract_text_from_html`）—— 关键词搜索路径（B）的稳定正文来源，会保留 `<p>`/`<div>`/`<br>` 等块级标签产生的段落边界。
+3. 顶 N 的热榜条目补一次 `article_info` 兜底（`_enrich_top_path_a_candidates`）—— 即使桌面页 JS 渲染失败，A 路径入选的 Top N 也会用 mobile API 拿正文。
+4. 文章元数据兜底（`item.summary` 或 `item.title`）—— 仅在前三步全部失败时使用，文件正文会出现仅为标题的情况。
+
+注意：`article_info` 对部分聚合型热搜话题返回空 `content`，且桌面页 JS 渲染 + 移动页 Argus 加密双重反爬；这种情况下正文必然缺失，需要人工访问原文。
 
 ## 环境要求
 
