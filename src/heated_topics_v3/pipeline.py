@@ -1,12 +1,13 @@
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from heated_topics_v3.contracts import ItemDetail, MatchResult, UserProfile
+from heated_topics_v3.contracts import ExtractedKeyword, ItemDetail, MatchResult, UserProfile
 from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, utc8_today
 from heated_topics_v3.llm_client import call_llm
-from heated_topics_v3.llm_keywords import extract_persona_keywords
+from heated_topics_v3.llm_keywords import PersonaKeywordExtraction, extract_persona_keywords
 from heated_topics_v3.matching import match_hot_item_to_queries
 from heated_topics_v3.profile_loader import is_legacy_profile, load_persona_profile
 from heated_topics_v3.profile_queries import build_topic_queries
@@ -274,6 +275,8 @@ def run_toutiao_pipeline_v2(
     detail_fetcher: Callable[[str, int], str] | None = None,
     rendered_text_fetcher: Callable[[str, int], str] | None = None,
     llm_caller: Callable[..., str] | None = None,
+    custom_keywords: tuple[str, ...] = (),
+    on_search_committed: Callable[[], None] | None = None,
 ) -> "ToutiaoV2Result":
     """Persona-driven Toutiao pipeline.
 
@@ -296,13 +299,22 @@ def run_toutiao_pipeline_v2(
 
     profile = load_persona_profile(profile_path)
     effective_llm = llm_caller or (lambda *a, **kw: call_llm(*a, cache_dir=llm_cache_root, **kw))
-    extraction = extract_persona_keywords(
-        profile,
-        cache_dir=persona_keyword_cache_root,
-        use_cache=True,
-        llm=effective_llm,
-        allow_llm=use_llm_keywords,
-    )
+    if custom_keywords:
+        extraction = PersonaKeywordExtraction(
+            user_id=profile.user_id,
+            persona_signature=profile.persona_signature,
+            generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in custom_keywords),
+            source="custom",
+        )
+    else:
+        extraction = extract_persona_keywords(
+            profile,
+            cache_dir=persona_keyword_cache_root,
+            use_cache=True,
+            llm=effective_llm,
+            allow_llm=use_llm_keywords,
+        )
 
     date = utc8_today()
     if offline:
@@ -322,7 +334,10 @@ def run_toutiao_pipeline_v2(
 
     keyword_phrases = tuple(k.keyword for k in extraction.keywords)
 
-    persona_keywords = profile.core_keywords + keyword_phrases
+    if custom_keywords:
+        persona_keywords = keyword_phrases
+    else:
+        persona_keywords = profile.core_keywords + keyword_phrases
 
     hot_board_only = build_hot_board_candidates(
         hot_board=list(hot_board_snapshot.items),
@@ -444,6 +459,9 @@ def run_toutiao_pipeline_v2(
         output_root=output_root,
         hot_board_cache_root=hot_board_cache_root,
     )
+
+    if on_search_committed is not None and not skip_search:
+        on_search_committed()
 
     if summary_md is not None:
         summary_path = run_result.run_dir / "articles" / "summary.md"
