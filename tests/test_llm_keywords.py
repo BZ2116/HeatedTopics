@@ -12,6 +12,13 @@ from heated_topics_v3.llm_keywords import (
 )
 
 
+def _by_tier(keywords):
+    out = {"热榜": [], "长尾": [], "兜底": []}
+    for k in keywords:
+        out[k.match_expectation].append(k.keyword)
+    return out
+
+
 def _profile(subject: str = "AI工具") -> PersonaProfile:
     from heated_topics_v3.profile_loader import compute_persona_signature
 
@@ -157,11 +164,17 @@ def test_extract_persona_keywords_pads_short_llm_output_from_core(tmp_path: Path
         )
 
     result = extract_persona_keywords(profile, cache_dir=tmp_path / "kw", llm=fake_llm)
-    assert len(result.keywords) >= MIN_KEYWORDS
+    # Strict 5/4/1 — parse internally pads from core to hit the quota.
+    assert result.source == "fresh"
+    assert len(result.keywords) == 10
     assert result.keywords[0].keyword == "AI写作"
     assert result.keywords[1].keyword == "AI办公"
-    fallback_keywords = {k.keyword for k in result.keywords[2:]}
-    assert fallback_keywords.issubset(set(profile.core_keywords))
+    padded = {k.keyword for k in result.keywords[2:]}
+    assert padded.issubset(set(profile.core_keywords))
+    by_tier = _by_tier(result.keywords)
+    assert len(by_tier["热榜"]) == 5
+    assert len(by_tier["长尾"]) == 4
+    assert len(by_tier["兜底"]) == 1
 
 
 def test_extract_persona_keywords_with_allow_llm_false_uses_core(tmp_path: Path):
@@ -216,5 +229,6 @@ def test_extract_persona_keywords_strips_code_fence(tmp_path: Path):
         ) + "\n```"
 
     result = extract_persona_keywords(profile, cache_dir=tmp_path / "kw", llm=fake_llm)
-    assert result.source == "fresh"
-    assert len(result.keywords) == 5
+    # Strict 5/4/1 — paddings needed, so source is "fresh_padded".
+    assert result.source in ("fresh", "fresh_padded")
+    assert len(result.keywords) == 10

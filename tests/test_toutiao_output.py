@@ -138,6 +138,89 @@ def test_write_toutiao_run_creates_per_user_directory_layout(tmp_path: Path):
     assert "# Report" in report_text
 
 
+def _search_item_jump(article_id: str, title: str) -> HotItem:
+    """Path B candidate whose URL is still wrapped in Toutiao's /search/jump shim."""
+    return HotItem(
+        item_id=f"search_{article_id}",
+        platform="toutiao",
+        item_type="search_result",
+        title=title,
+        url=(
+            f"/search/jump?aid=1455&jtoken=TOK_{article_id}"
+            f"&url=https%3A%2F%2Farticle.zlink.toutiao.com%2Fabcd"
+            f"%3Fh5_url%3Dhttps%253A%252F%252Ftoutiao.com%252Fgroup%252F{article_id}%252F"
+        ),
+        rank=1,
+        heat=HeatMetrics(value=2000, label="2000", metric_name="article_heat", metrics={}),
+        summary="",
+        category="search",
+        matched_query_ids=(),
+        fetched_at="2026-07-13T08:00:00+08:00",
+        fetch_status="success",
+        raw_payload={
+            "source_kind": "article_info",
+            "article_heat": 2000,
+            "is_toutiao_hot": False,
+            "raw_counts": {"impression_count": 100, "digg_count": 10},
+        },
+    )
+
+
+def test_write_toutiao_run_does_not_collapse_search_jump_urls(tmp_path: Path):
+    """Regression: /search/jump wrappers must not collapse distinct articles.
+
+    Without resolving the shim, every Path B candidate canonicalizes to
+    `/search/jump` and the lookup dict keeps only the last detail — so each
+    candidate's article file would carry the same (wrong) body.
+    """
+    articles = [
+        ("111", "第一篇", "body of article 111"),
+        ("222", "第二篇", "body of article 222"),
+        ("333", "第三篇", "body of article 333"),
+    ]
+    candidates = [
+        Candidate(
+            item=_search_item_jump(aid, title),
+            source_path=PATH_B,
+            matched_keyword="节气",
+            is_toutiao_hot=False,
+            preliminary_score=score,
+        )
+        for score, (aid, title, _) in enumerate(articles, start=10)
+    ]
+    item_details = [
+        _item_detail(candidates[i].item.url, title, body)
+        for i, (_, title, body) in enumerate(articles)
+    ]
+
+    write_toutiao_run(
+        user_id="feiyi_001",
+        date="2026-07-15",
+        candidates=candidates,
+        top_n=10,
+        hot_board_snapshot=None,
+        raw_search_by_keyword={},
+        raw_article_info_by_url={},
+        item_details=item_details,
+        report_markdown="",
+        output_root=tmp_path,
+        timestamp_suffix="120000",
+        hot_board_cache_root=tmp_path,
+    )
+
+    articles_dir = tmp_path / "users" / "feiyi_001" / "2026-07-15" / "run_120000" / "articles"
+    bodies = {p.read_text(encoding="utf-8") for p in articles_dir.glob("*.txt")}
+    for _, _, body in articles:
+        assert any(body in text for text in bodies), (
+            f"expected body {body!r} to appear in at least one article file; "
+            f"got {sorted(p.name for p in articles_dir.glob('*.txt'))}"
+        )
+    distinct_bodies = {text for text in bodies}
+    assert len(distinct_bodies) == len(articles), (
+        "all article files collapsed to the same body — /search/jump lookup bug regressed"
+    )
+
+
 def test_focused_json_contains_top_n_results_with_scores(tmp_path: Path):
     candidates = _make_candidates()
     item_details = [

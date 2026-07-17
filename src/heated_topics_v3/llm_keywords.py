@@ -22,21 +22,37 @@ from heated_topics_v3.llm_client import LLMUnavailable, call_llm, strip_code_fen
 
 DEFAULT_CACHE_DIR = "cache/core_keywords"
 DEFAULT_TTL_DAYS = 7
-MIN_KEYWORDS = 5
+MIN_KEYWORDS = 10
 MAX_KEYWORDS = 10
-VALID_EXPECTATIONS: tuple[str, ...] = ("热榜", "长尾", "兜底")
+HOT_TARGET = 5
+LONG_TAIL_TARGET = 4
+FALLBACK_TARGET = 1
+EXPECTATION_ORDER: tuple[str, ...] = ("热榜", "长尾", "兜底")
+VALID_EXPECTATIONS: tuple[str, ...] = EXPECTATION_ORDER
 
 
-KEYWORD_EXTRACTION_SYSTEM = """你是中文搜索引擎关键词策划助手。根据用户的 persona（一级赛道 / 二级赛道 / 角色 / 对象 / 场景 / 价值主张），生成 5-10 个检索关键词，要求：
+KEYWORD_EXTRACTION_SYSTEM = """你是中文搜索引擎关键词策划助手。根据用户的 persona（一级赛道 / 二级赛道 / 角色 / 对象 / 场景 / 价值主张），生成恰好 10 个检索关键词，分档如下：
 
+  热榜 : 5 个  (流量大、能快速召回 5 条以上，用于优先搜索)
+  长尾 : 4 个  (场景化、具体问题词，热榜不够时启用)
+  兜底 : 1 个  (persona 直接对应的小众词，最后保险)
+
+合计 5 + 4 + 1 = 10 个，严格按此数量。
+
+【搜索策略】
+- 先用「热榜」关键词搜索；命中 ≥5 条高热度文章即停止（控制成本）。
+- 「热榜」不足 5 条时，再加「长尾」关键词扩搜。
+- 「兜底」关键词是最后保险，平常用不到。
+
+【产出要求】
 1. 每个关键词必须能直接在中文搜索引擎（如今日头条、微信搜一搜、百度）上检索到内容
 2. 关键词必须和 persona 强相关，剔除通用大词（如「新闻」「热点」）
 3. 每个关键词给出 `match_expectation`：
-   - 「热榜」= 该词容易命中热搜/热榜条目
-   - 「长尾」= 该词容易召回长尾高质量内容
-   - 「兜底」= 该词作为兜底，与 persona 直接对应但搜索量低
-4. 严格输出 JSON 数组，不要代码块、不要额外解释。格式：
-   [{"keyword": "...", "match_expectation": "热榜|长尾|兜底"}, ...]
+   - 「热榜」= 该词容易命中热搜/热榜条目（流量大、能快速召回 5 条+）
+   - 「长尾」= 该词召回高质量长尾内容（精准但单次召回量小）
+   - 「兜底」= 与 persona 直接对应但搜索量极低（最后保险）
+4. 严格输出 JSON 数组，前 5 个是热榜，接下来 4 个是长尾，最后 1 个是兜底。不要代码块、不要额外解释。
+   格式： [{"keyword": "...", "match_expectation": "热榜|长尾|兜底"}, ...]
 """
 
 
@@ -144,6 +160,7 @@ def _build_prompt(profile: PersonaProfile) -> str:
 
 
 def _parse_keywords(raw_text: str, profile: PersonaProfile) -> list[ExtractedKeyword]:
+    """Parse and bucket keywords by tier, enforce 5/4/1 split, fall back to core."""
     cleaned = strip_code_fence(raw_text)
     match = re.search(r"\[.*\]", cleaned, flags=re.DOTALL)
     candidate = match.group(0) if match else cleaned
@@ -154,7 +171,7 @@ def _parse_keywords(raw_text: str, profile: PersonaProfile) -> list[ExtractedKey
     if not isinstance(data, list):
         return []
 
-    keywords: list[ExtractedKeyword] = []
+    parsed: list[ExtractedKeyword] = []
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -162,25 +179,73 @@ def _parse_keywords(raw_text: str, profile: PersonaProfile) -> list[ExtractedKey
         expectation = str(entry.get("match_expectation") or "").strip()
         if not kw or expectation not in VALID_EXPECTATIONS:
             continue
-        keywords.append(ExtractedKeyword(keyword=kw, match_expectation=expectation))
-        if len(keywords) >= MAX_KEYWORDS:
-            break
-    return keywords
+        parsed.append(ExtractedKeyword(keyword=kw, match_expectation=expectation))
+
+    # Bucket by tier in declared order.
+    buckets: dict[str, list[str]] = {tier: [] for tier in EXPECTATION_ORDER}
+    seen: set[str] = set()
+    for entry in parsed:
+        if entry.keyword in seen:
+            continue
+        seen.add(entry.keyword)
+        buckets[entry.match_expectation].append(entry.keyword)
+
+    targets = {
+        "热榜": HOT_TARGET,
+        "长尾": LONG_TAIL_TARGET,
+        "兜底": FALLBACK_TARGET,
+    }
+    rebalanced: list[ExtractedKeyword] = []
+    for tier in EXPECTATION_ORDER:
+        bucket = buckets[tier]
+        surplus: list[str] = []
+        if len(bucket) > targets[tier]:
+            surplus = bucket[targets[tier]:]
+            bucket = bucket[: targets[tier]]
+        used_in_tier: set[str] = set(bucket)
+        i = 0
+        while len(bucket) < targets[tier] and i < len(profile.core_keywords):
+            seed = profile.core_keywords[i]
+            if seed and seed not in used_in_tier:
+                bucket.append(seed)
+                used_in_tier.add(seed)
+            i += 1
+        if len(bucket) < targets[tier]:
+            for other_tier in EXPECTATION_ORDER:
+                if other_tier == tier:
+                    continue
+                while len(bucket) < targets[tier] and surplus:
+                    seed = surplus.pop(0)
+                    if seed not in used_in_tier:
+                        bucket.append(seed)
+                        used_in_tier.add(seed)
+                if len(bucket) >= targets[tier]:
+                    break
+        buckets[tier] = bucket
+        for kw in bucket:
+            rebalanced.append(ExtractedKeyword(keyword=kw, match_expectation=tier))
+    return rebalanced[:MAX_KEYWORDS]
 
 
 def _fallback_from_core(profile: PersonaProfile) -> list[ExtractedKeyword]:
-    seen: set[str] = set()
+    """Synthesize a 5/4/1 split purely from core_keywords when no LLM output."""
+    core = list(profile.core_keywords)
     keywords: list[ExtractedKeyword] = []
-    for core in profile.core_keywords:
-        if core and core not in seen:
-            keywords.append(ExtractedKeyword(keyword=core, match_expectation="兜底"))
-            seen.add(core)
-    return keywords
+    targets = [("热榜", HOT_TARGET), ("长尾", LONG_TAIL_TARGET), ("兜底", FALLBACK_TARGET)]
+    consumed = 0
+    for tier, count in targets:
+        for offset in range(count):
+            if consumed + offset >= len(core):
+                break
+            keywords.append(ExtractedKeyword(keyword=core[consumed + offset], match_expectation=tier))
+        consumed += count
+    return keywords[:MAX_KEYWORDS]
 
 
 def _pad_from_core(
     existing: list[ExtractedKeyword], profile: PersonaProfile,
 ) -> list[ExtractedKeyword]:
+    """Pad an under-filled extraction to MIN_KEYWORDS using core_keywords."""
     seen = {k.keyword for k in existing}
     padded = list(existing)
     for core in profile.core_keywords:

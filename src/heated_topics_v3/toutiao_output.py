@@ -24,6 +24,7 @@ from typing import Any
 
 from heated_topics_v3.contracts import HotBoardSnapshot, ItemDetail
 from heated_topics_v3.hot_board_cache import hot_board_cache_path
+from heated_topics_v3.providers.toutiao import resolve_toutiao_content_url
 from heated_topics_v3.serialization import to_plain_data
 from heated_topics_v3.toutiao_paths import Candidate
 
@@ -229,7 +230,16 @@ def _write_article_text(path: Path, candidate: Candidate, detail: ItemDetail) ->
 
 
 def _canonical_url(url: str) -> str:
-    return url.split("?", maxsplit=1)[0]
+    """Stable lookup key for matching candidates to fetched item details.
+
+    Path B search results come wrapped in `/search/jump?jtoken=...&url=...&h5_url=...`
+    which collapses to `/search/jump` under naive query-stripping — destroying
+    per-article identity and causing the detail lookup dict to keep only one
+    body for every search candidate. Resolve the shim first so each article
+    collapses to its own group/trending path.
+    """
+    resolved = resolve_toutiao_content_url(url)
+    return resolved.split("?", maxsplit=1)[0].rstrip("/") or url
 
 
 def _slugify(value: str) -> str:
