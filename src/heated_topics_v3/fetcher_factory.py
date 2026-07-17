@@ -9,7 +9,7 @@ Stages auto-promote when the higher stage recovers. Pacing between calls
 follows jitter + batch-pause rules. Every call is logged to a JSON file.
 
 Falls back automatically when cookies haven't been harvested yet (run
-`python tmp_3users_test/harvest_cookies.py`).
+`python scripts/harvest_cookies.py`).
 
 Response shape: Toutiao sometimes wraps JSON inside an HTML envelope
 (`<html><body><pre>{...}</pre></body></html>`). The fetcher strips that
@@ -375,7 +375,7 @@ def make_search_fetcher(
 
     Args:
         cookie_path: Path to a Cookie: header string file produced by
-            `tmp_3users_test/harvest_cookies.py`.
+            `scripts/harvest_cookies.py`.
         log_path: Path to write per-call JSON diagnostics.
         timeout: Default per-request timeout in seconds.
         dump_dir: Optional directory to dump each raw response body, named

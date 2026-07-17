@@ -27,10 +27,10 @@ uv run python -c "from DrissionPage import Chromium; Chromium().quit()"
 ### 3. Harvest 头条 cookie
 
 ```bash
-uv run python tmp_3users_test/harvest_cookies.py
+uv run python scripts/harvest_cookies.py
 ```
 
-会生成 `.toutiao_cookie`（在仓库根，`.gitignore` 已排除）。**没 cookie 的话阶段 1 必然失败**，会一路升到阶段 2/3，增加被风控的概率。
+会生成 `scripts/.toutiao_cookie`（`.gitignore` 已排除）。**没 cookie 的话阶段 1 必然失败**，会一路升到阶段 2/3，增加被风控的概率。
 
 ### 验证
 
@@ -40,7 +40,7 @@ uv run python tmp_3users_test/harvest_cookies.py
 uv run python -m heated_topics_v3.cli toutiao --help
 ```
 
-跑这条应该看到 `147 passed`（说明环境就绪）：
+跑这条应该看到 `162 passed`（说明环境就绪）：
 
 ```bash
 uv run pytest -q
@@ -100,7 +100,7 @@ Path C  is_toutiao_hot fallback            → 0 ≤ article_heat ≤ is_toutiao
 Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 fallback 分支
 ```
 
-`min_hot_board_before_search` 是 skip-search 的总闸门：`src/heated_topics_v3/toutiao_paths.py:119` 处判断热榜候选数；满足阈值直接返回 Path A，不再触发搜索抓取（`src/heated_topics_v3/toutiao_paths.py:105`）。
+`min_hot_board_before_search` 是 skip-search 的总闸门：`src/heated_topics_v3/toutiao_paths.py:119` 判断热榜候选数；满足阈值直接返回 Path A，不再触发搜索抓取（`src/heated_topics_v3/toutiao_paths.py:120`）。
 
 | `PathFilters` 字段 | 默认值 | 含义 |
 | --- | --- | --- |
@@ -118,7 +118,7 @@ Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 f
 最小可跑（无需 API key）：
 
 ```bash
-PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
+uv run python -m heated_topics_v3.cli toutiao \
     --profile-v2 config/profiles/zhao_001.json \
     --no-llm --top-n 10
 ```
@@ -129,7 +129,7 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 export MINIMAX_API_KEY=...
 export MINIMAX_BASE_URL=...
 export MINIMAX_MODEL=...
-PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
+uv run python -m heated_topics_v3.cli toutiao \
     --profile-v2 config/profiles/zhao_001.json \
     --llm-keywords --llm-summary --llm-rerank --top-n 10
 ```
@@ -137,15 +137,15 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 | 参数 | 作用 | 是否必填 |
 | --- | --- | --- |
 | `--profile-v2 PATH` | 指向 `config/profiles/{user_id}.json` | 必填 |
-| `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`，`src/heated_topics_v3/cli.py:86`） |
+| `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`，`src/heated_topics_v3/cli.py:108`） |
 | `--no-llm` | 完全跳过 LLM 调用 | 与各 `--llm-*` 互斥；启用后以下三项均被强制关闭 |
 | `--llm-keywords` | LLM 提炼关键词 | 与 `--no-llm` 互斥；与 `--llm-summary` / `--llm-rerank` 彼此独立 |
 | `--llm-summary` | LLM 生成文章摘要 | 与 `--no-llm` 互斥；可单独启用 |
 | `--llm-rerank` | LLM 重排候选 | 与 `--no-llm` 互斥；可单独启用 |
 | `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | 否 |
 | `--offline` | 仅使用本地缓存，不发请求 | 否 |
-| `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`，`src/heated_topics_v3/cli.py:85`） |
-| `--output-root PATH` | 输出根目录 | 否（默认 `outputs`，`src/heated_topics_v3/cli.py:83`） |
+| `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`，`src/heated_topics_v3/cli.py:107`） |
+| `--output-root PATH` | 输出根目录 | 否（默认 `outputs`，`src/heated_topics_v3/cli.py:105`） |
 
 完整参数见 `--help`。
 
@@ -175,7 +175,7 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 - `scenarios` — 适用场景列表，影响关键词 `scenarios` 命中权重。
 - `value` — 期望提供的价值，决定重排与摘要的取舍标准。
 
-`core_keywords` 是非 LLM 模式的关键词种子（`src/heated_topics_v3/llm_keywords.py:6`），当 `--no-llm` 启用时直接落入 `ExtractedKeyword`。
+`core_keywords` 是非 LLM 模式的关键词种子（`src/heated_topics_v3/llm_keywords.py:3`），当 `--no-llm` 启用时直接落入 `ExtractedKeyword`。
 
 > 修改 `personal.*` 任一字段都会让 `persona_signature` 漂移, 失效机制见 §6.
 
@@ -191,8 +191,8 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 
 | 阶段 | 来源 | 说明 |
 | --- | --- | --- |
-| Path B/C 搜索循环 | mobile `article_info.content_html` | 搜索结果回流时调用 `attach_article_heat_fields`，把 `content_html` 写入 `raw_payload`（`src/heated_topics_v3/pipeline.py:355-366`） |
-| Path A 顶 N enrichment | 同上, 补拉 | Path A 候选未进搜索循环，ranking 后用 `_enrich_top_path_a_candidates` 补拉一次 `article_info`（`src/heated_topics_v3/pipeline.py:469-506`） |
+| Path B/C 搜索循环 | mobile `article_info.content_html` | 搜索结果回流时调用 `attach_article_heat_fields`，把 `content_html` 写入 `raw_payload`（`src/heated_topics_v3/pipeline.py:380`） |
+| Path A 顶 N enrichment | 同上, 补拉 | Path A 候选未进搜索循环，ranking 后用 `_enrich_top_path_a_candidates` 补拉一次 `article_info`（`src/heated_topics_v3/pipeline.py:421` 调用，`src/heated_topics_v3/pipeline.py:487` 定义） |
 
 **单条 detail 兜底**（`fetch_toutiao_item_details` 内, `src/heated_topics_v3/providers/toutiao.py`）：
 
@@ -200,7 +200,7 @@ PYTHONPATH=src uv run python -m heated_topics_v3.cli toutiao \
 | --- | --- | --- | --- |
 | 1 | mobile `article_info.content_html` | `raw_payload.content_html` 已存在且非空（搜索或 Path A enrichment 已写入） | 跳到优先级 2 |
 | 2 | 桌面页 `<article>` 解析（`parse_toutiao_article_page`） | article_info 缺失或 desktop HTML 未被 JS 渲染时 | 跳到优先级 3 |
-| 3 | metadata（`item.summary` / `item.title`） | 上述全部失败时仅落标题（`_partial_detail`, `src/heated_topics_v3/providers/toutiao.py:387`） | 输出文件只剩标题 |
+| 3 | metadata（`item.summary` / `item.title`） | 上述全部失败时仅落标题（`_partial_detail`, `src/heated_topics_v3/providers/toutiao.py:378`） | 输出文件只剩标题 |
 
 `article_info` 对部分聚合型（aggregator）热搜主题会返回空 `content`，桌面页又 JS 渲染时落盘文件只包含标题，正文留空。
 
@@ -215,7 +215,7 @@ cache/
 
 三条兜底规则：
 
-- 热榜今日缺则回退昨日快照（`src/heated_topics_v3/hot_board_cache.py:36`）。
+- 热榜今日缺则回退昨日快照（`src/heated_topics_v3/hot_board_cache.py:126-130`）。
 - 关键词缓存 7 天 TTL + 签名校验（`src/heated_topics_v3/llm_keywords.py:6` / `:24`）。
 - LLM 缓存按 prompt hash 命中，重复请求不重复计费。
 
@@ -227,7 +227,7 @@ cache/
 
 | 阶段 | 实现 | 触发 |
 | --- | --- | --- |
-| 1 | `urllib + cookies`（`src/heated_topics_v3/fetcher_factory.py:143`） | 默认 |
+| 1 | `urllib + cookies`（`src/heated_topics_v3/fetcher_factory.py:232` 的 `_fetch_urllib`） | 默认 |
 | 2 | Playwright live Chromium | 阶段 1 连续失败 ≥ `DEMOTE_AFTER_FAILS=3`（`src/heated_topics_v3/fetcher_factory.py:57`） |
 | 3 | DrissionPage live Chromium | 阶段 2 也连续失败 ≥ 3 次 |
 
@@ -237,16 +237,16 @@ cache/
 
 | 脚本 | 一句话 |
 | --- | --- |
-| `tmp_3users_test/build_personas_from_xlsx.py` | 把人设 xlsx 批量转成 `config/profiles/{user_id}.json`（`--no-llm` / `--use-llm`，`--regenerate`）。 |
-| `tmp_3users_test/harvest_cookies.py` | Playwright + DrissionPage 取 `toutiao.com` 首页 cookie 并 merge 到 `.toutiao_cookie`。 |
-| `tmp_3users_test/run_pipeline.py` | 单用户烟测，打印 `kept_total` / `paths` / `fetcher.stage` 关键指标。 |
+| `scripts/build_personas_from_xlsx.py` | 把人设 xlsx 批量转成 `config/profiles/{user_id}.json`（`--no-llm` / `--use-llm`，`--regenerate`）。 |
+| `scripts/harvest_cookies.py` | Playwright + DrissionPage 取 `toutiao.com` 首页 cookie 并 merge 到 `scripts/.toutiao_cookie`。 |
+| `scripts/run_pipeline.py` | 单用户烟测（yingjie_001），打印 `kept_total` / `paths` / `fetcher.stage` 关键指标；输出 / 缓存 / cookie 都在 `scripts/` 下。 |
 
-`tmp_3users_test/` 已 `.gitignore`，cookie 与 `fetcher_log` 不进仓库。
+`tmp_3users_test/` 是 gitignored 的临时目录（cookie、fetcher 日志、原始 API dump、烟测 profile 副本），不属于分支。新 clone 不会带它，但运行期需要时可以临时建。
 
 ## §11 输出结构
 
 ```
-output/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
+outputs/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 ├── report.md
 ├── focused.json
 ├── raw/
@@ -262,10 +262,10 @@ output/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 ## §12 测试
 
 ```bash
-PYTHONPATH=src uv run pytest -q
+uv run pytest -q
 ```
 
-整套 ~3100 行，包含 toutiao v2 端到端、四路径、persona 失效契约、jump URL 解包、anti-bot 降级等。
+整套 ~3700 行，包含 toutiao v2 端到端、四路径、persona 失效契约、jump URL 解包、anti-bot 降级等。
 
 ## 每日配额与自定义关键词（上线用法）
 
@@ -297,3 +297,37 @@ PYTHONPATH=src uv run pytest -q
 
     python -m heated_topics_v3.cli toutiao --profile-v2 config/profiles/licai_001.json \
         --custom-keyword 比特币 --custom-keyword 美联储 --no-llm --top-n 10
+
+## 用户注册接口（集成方 import 用）
+
+集成方要新增一个用户时，调用 `register_persona`——一次调用走完「原始人设文本 →
+LLM 结构化 → 派生 core_keywords → 分配 user_id → 落库 JSON → 预热关键词缓存」。
+
+```python
+from heated_topics_v3.persona_intake import register_persona
+
+result = register_persona(
+    level1="财经",
+    level2="普通人理财",
+    persona_text="普通人理财博主，分享基金、存款、记账，帮小白避坑",
+    # 以下均可选，默认写 config/profiles/ 与 cache/core_keywords/
+    # profiles_dir=..., keyword_cache_dir=...,
+    # core_keywords=["比特币", "美联储"],   # 传了就用它，否则启发式派生
+    # use_llm=True,                          # False 则纯启发式，不碰 LLM
+)
+result.user_id       # "licai_001"（同 level2 再注册得 licai_002，始终新建）
+result.profile_path  # config/profiles/licai_001.json
+result.profile       # 已过 v2 validator 的 PersonaProfile
+result.keywords      # 预热好的 10 个 ExtractedKeyword
+```
+
+要点：
+
+- **user_id** 按 `level2 → slug` 映射（`src/heated_topics_v3/persona_slugs.py` 的
+  `LEVEL2_SLUG`）+ 递增序号分配；同 level2 的新用户始终拿下一个空位，不覆盖旧文件。
+- **结构化**用 LLM（`structure_persona`）；LLM 挂了自动退到启发式拆词，注册不会失败。
+- **关键词**在注册时就抽好写进 `cache/core_keywords/{user_id}.json`，之后跑 pipeline
+  首次命中缓存、不重复计费。`use_llm=False` 时关键词由 `core_keywords` 合成。
+- 写完 JSON 立刻 `load_persona_profile` 读回校验，schema 不合法当场抛错。
+- 测试注入：`structurer_llm=` / `keyword_llm=` 可传 fake caller（见
+  `tests/test_persona_intake.py`）。
