@@ -32,11 +32,15 @@ reports/search_discovery/
 
 # Local smoke-test and build artifacts
 tmp/
-tmp_3users_test/   # cookie + raw API output live here; never commit
+tmp_3users_test/
 local_archive/
 dailyhot/
 detail/
 *.egg-info/
+
+# Scripts/ runtime side-effects (cookie + fetcher logs live next to scripts/)
+scripts/.toutiao_cookie
+scripts/.fetcher_log*.json
 
 # Local secrets
 .env
