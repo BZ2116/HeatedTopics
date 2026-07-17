@@ -32,6 +32,7 @@ reports/search_discovery/
 
 # Local smoke-test and build artifacts
 tmp/
+tmp_3users_test/   # cookie + raw API output live here; never commit
 local_archive/
 dailyhot/
 detail/
@@ -39,3 +40,9 @@ detail/
 
 # Local secrets
 .env
+
+# Per-user daily quota state (managed by the backend, not source-controlled)
+state/
+
+
+1.png

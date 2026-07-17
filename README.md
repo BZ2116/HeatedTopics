@@ -218,3 +218,34 @@ PYTHONPATH=src uv run pytest -q
 ```
 
 整套 ~3100 行，包含 toutiao v2 端到端、四路径、persona 失效契约、jump URL 解包、anti-bot 降级等。
+
+## 每日配额与自定义关键词（上线用法）
+
+### 每日配额
+
+每个用户每天最多获取热榜 `--max-quota-per-day` 次（默认 3）。第 N+1 次调用时，
+后端在进入流程前拦截，向 stderr 打印 `今日额度已用完` 并以 exit code `2` 退出，
+不产出任何结果目录。
+
+- 配额状态存于 `state/quota/{user_id}.json`，格式 `{"date": "YYYY-MM-DD", "count": N}`。
+- 跨天自动重置：读取时若 `date` 不是当天，`count` 视为 0。
+- **计数语义**：只有「发起了搜索分支且流程完整走完」才 +1。若热榜命中已足够、
+  直接走 Path A 直出（`skip_search`），不发起搜索，则不消耗配额。
+
+### `--skip-quota`（前端集成必读）
+
+本项目会被另一个项目集成。若由前端自行管理调用次数，请在每次调用时传
+`--skip-quota`，后端将完全跳过配额检查与计数（不读写 `state/quota/`）。
+不传该 flag 时，后端用自己的默认配额状态兜底，CLI 手动跑也会受同一份状态限制。
+
+### 自定义关键词
+
+传入 `--custom-keyword`（可重复）即用这些关键词**替换本次运行**的自动抽取关键词，
+按输入顺序检索匹配；空白值会被过滤。`config/profiles/{user}.json` 里的
+`core_keywords` 不受影响（仍是持久 persona，只是本次不参与）。本次运行的
+`keyword_source` 会标记为 `custom`。
+
+示例：
+
+    python -m heated_topics_v3.cli toutiao --profile-v2 config/profiles/licai_001.json \
+        --custom-keyword 比特币 --custom-keyword 美联储 --no-llm --top-n 10
