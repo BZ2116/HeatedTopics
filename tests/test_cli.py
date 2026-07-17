@@ -1,9 +1,30 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from heated_topics_v3 import cli
+
+
+V2_PROFILE = {
+    "user_id": "zhao_001",
+    "level1": "科技AI",
+    "level2": "AI工具应用",
+    "personal": {
+        "role": "AI工具体验官",
+        "subject": "AI工具",
+        "scenarios": ["写作", "学习"],
+        "value": "真实建议",
+    },
+    "core_keywords": ["AI工具"],
+}
+
+
+def _write_v2_profile(tmp_path: Path, name: str = "zhao_001.json") -> Path:
+    path = tmp_path / name
+    path.write_text(json.dumps(V2_PROFILE, ensure_ascii=False), encoding="utf-8")
+    return path
 
 
 def _v2_result() -> SimpleNamespace:
@@ -19,7 +40,7 @@ def _v2_result() -> SimpleNamespace:
     )
 
 
-def test_toutiao_profile_v2_dispatches_all_options(monkeypatch, capsys):
+def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys):
     captured = {}
 
     def fake_run(**kwargs):
@@ -33,7 +54,7 @@ def test_toutiao_profile_v2_dispatches_all_options(monkeypatch, capsys):
             "heated-topics",
             "toutiao",
             "--profile-v2",
-            "config/profiles/zhao_001.json",
+            str(_write_v2_profile(tmp_path, "zhao_001.json")),
             "--output-root",
             "output",
             "--fetched-at",
@@ -47,13 +68,16 @@ def test_toutiao_profile_v2_dispatches_all_options(monkeypatch, capsys):
             "--llm-rerank",
             "--force-hot-board-refresh",
             "--offline",
+            "--skip-quota",
         ],
     )
 
     cli._main()
 
+    profile_path = Path(captured.pop("profile_path"))
+    custom_keywords = captured.pop("custom_keywords")
+    on_search_committed = captured.pop("on_search_committed")
     assert captured == {
-        "profile_path": Path("config/profiles/zhao_001.json"),
         "output_root": Path("output"),
         "fetched_at": "2026-07-13T10:00:00+08:00",
         "hot_board_cache_root": Path("cache-data"),
@@ -66,12 +90,15 @@ def test_toutiao_profile_v2_dispatches_all_options(monkeypatch, capsys):
         "offline": True,
         "top_n": 7,
     }
+    assert profile_path.name == "zhao_001.json"
+    assert custom_keywords == ()
+    assert on_search_committed is None  # --skip-quota wired nothing
     output = capsys.readouterr().out
     assert "report: outputs" in output
     assert "candidates: 7/12" in output
 
 
-def test_toutiao_profile_v2_no_llm_disables_all_llm_features(monkeypatch):
+def test_toutiao_profile_v2_no_llm_disables_all_llm_features(tmp_path, monkeypatch):
     captured = {}
 
     def fake_run(**kwargs):
@@ -85,8 +112,9 @@ def test_toutiao_profile_v2_no_llm_disables_all_llm_features(monkeypatch):
             "heated-topics",
             "toutiao",
             "--profile-v2",
-            "profile.json",
+            str(_write_v2_profile(tmp_path, "profile.json")),
             "--no-llm",
+            "--skip-quota",
         ],
     )
 
@@ -116,14 +144,20 @@ def test_toutiao_profile_keeps_legacy_dispatch(monkeypatch):
     assert captured["output_root"] == Path("output")
 
 
-def test_main_prints_v2_profile_errors(monkeypatch, capsys):
+def test_main_prints_v2_profile_errors(tmp_path, monkeypatch, capsys):
     def fake_run(**_kwargs):
         raise ValueError("profile.json uses legacy v1 schema; please migrate to v2")
 
     monkeypatch.setattr(cli, "run_toutiao_pipeline_v2", fake_run)
     monkeypatch.setattr(
         "sys.argv",
-        ["heated-topics", "toutiao", "--profile-v2", "profile.json"],
+        [
+            "heated-topics",
+            "toutiao",
+            "--profile-v2",
+            str(_write_v2_profile(tmp_path, "profile.json")),
+            "--skip-quota",
+        ],
     )
 
     with pytest.raises(SystemExit) as exc_info:
