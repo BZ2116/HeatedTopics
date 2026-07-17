@@ -1,5 +1,53 @@
 # Toutiao 分支使用手册
 
+## §0 新机器首次设置
+
+在另一台机器上从零拉取并运行，**必须**按顺序做这三步（任一漏掉都会在第一次跑时挂掉）：
+
+### 1. 装依赖
+
+```bash
+# 需先装 uv（见 https://docs.astral.sh/uv/）
+git clone <repo-url> && cd <repo>
+uv sync
+```
+
+`uv sync` 会自动 editable 安装 `heatedtopics` 包，装完后 `heated_topics_v3` 在任何位置都能 import，无需 `PYTHONPATH=src` 前缀。
+
+### 2. 装 Chromium（反爬梯子阶段 2/3 必需）
+
+```bash
+uv run playwright install chromium
+# DrissionPage 会按需自动下载它自己的 Chromium；首次若想预热：
+uv run python -c "from DrissionPage import Chromium; Chromium().quit()"
+```
+
+阶段 1（urllib）走默认不需要 Chromium；只有阶段 1 连续失败时才会升到阶段 2/3，那时才需要上面这步。`fetcher_factory.py:50-55` 的 `DEMOTE_AFTER_FAILS=3` 是触发阈值。
+
+### 3. Harvest 头条 cookie
+
+```bash
+uv run python tmp_3users_test/harvest_cookies.py
+```
+
+会生成 `.toutiao_cookie`（在仓库根，`.gitignore` 已排除）。**没 cookie 的话阶段 1 必然失败**，会一路升到阶段 2/3，增加被风控的概率。
+
+### 验证
+
+跑这条命令应该看到 CLI help（说明包已正确安装）：
+
+```bash
+uv run python -m heated_topics_v3.cli toutiao --help
+```
+
+跑这条应该看到 `147 passed`（说明环境就绪）：
+
+```bash
+uv run pytest -q
+```
+
+---
+
 ## §1 项目是什么
 
 HeatedTopics V3 的 toutiao 分支：为内容选题场景提供按用户画像驱动的头条热点采集、原文抓取和报告生成。
