@@ -1,4 +1,5 @@
 import json
+import inspect
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,10 @@ V2_PROFILE = {
     },
     "core_keywords": ["AI工具", "AI写作"],
 }
+
+
+def test_pipeline_has_no_llm_rerank_option():
+    assert "use_llm_rerank" not in inspect.signature(run_toutiao_pipeline_v2).parameters
 
 
 def _write_profile(tmp_path: Path, payload: dict | None = None) -> Path:
@@ -140,7 +145,6 @@ def test_run_toutiao_pipeline_v2_writes_per_user_output(tmp_path: Path):
         llm_cache_root=tmp_path / "cache" / "llm",
         use_llm_keywords=True,
         use_llm_summary=False,
-        use_llm_rerank=False,
         top_n=10,
         fetcher=fetcher,
         article_info_fetcher=fetcher,

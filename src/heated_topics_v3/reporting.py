@@ -54,7 +54,6 @@ def _render_platform_report(
             [
                 f"### {index}. {item.title}",
                 "",
-                f"- URL: {item.url}",
                 f"- Rank: {item.rank}",
                 f"- Heat: {item.heat.value} ({item.heat.metric_name})",
                 f"- Source: {item.raw_payload.get('source_kind', item.platform)}",

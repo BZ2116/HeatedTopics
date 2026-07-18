@@ -6,7 +6,6 @@ from heated_topics_v3.toutiao_paths import (
     Candidate,
     HeatSelection,
     PathFilters,
-    apply_llm_rerank,
     build_candidates,
     select_search_candidates_by_heat,
 )
@@ -233,65 +232,6 @@ def test_paths_dedupe_jump_url_for_same_article_across_keywords():
     assert candidates[0].source_path == PATH_B
     # matched_keyword is whichever scored higher (or first inserted).
     assert candidates[0].matched_keyword in {"校招", "秋招"}
-
-
-def test_apply_llm_rerank_reorders_top_k():
-    candidates = [
-        Candidate(
-            item=_search("1", "First", article_heat=2000), source_path=PATH_B,
-            matched_keyword="AI写作", preliminary_score=6.6,
-        ),
-        Candidate(
-            item=_search("2", "Second", article_heat=3000), source_path=PATH_B,
-            matched_keyword="AI写作", preliminary_score=6.9,
-        ),
-        Candidate(
-            item=_search("3", "Third", article_heat=1500), source_path=PATH_B,
-            matched_keyword="AI写作", preliminary_score=6.4,
-        ),
-    ]
-
-    # After score-sort: [Second(idx0), First(idx1), Third(idx2)].
-    # LLM returns: idx2 (Third) -> rank1, idx0 (Second) -> rank2, idx1 (First) -> rank3.
-    def fake_llm(prompt: str, *, system: str | None = None, **_kwargs) -> str:
-        return '[{"index": 2, "final_rank": 1}, {"index": 0, "final_rank": 2}, {"index": 1, "final_rank": 3}]'
-
-    reranked = apply_llm_rerank(candidates, llm=fake_llm, top_n_for_rerank=3)
-    titles = [c.item.title for c in reranked]
-    assert titles == ["Third", "Second", "First"]
-
-
-def test_apply_llm_rerank_falls_back_to_input_on_llm_unavailable():
-    from heated_topics_v3.llm_client import LLMUnavailable
-
-    candidates = [
-        Candidate(
-            item=_search("1", "A", article_heat=2000), source_path=PATH_B, preliminary_score=6.6,
-        ),
-        Candidate(
-            item=_search("2", "B", article_heat=3000), source_path=PATH_B, preliminary_score=6.9,
-        ),
-    ]
-
-    def boom(*_args, **_kwargs):
-        raise LLMUnavailable("network down")
-
-    reranked = apply_llm_rerank(candidates, llm=boom)
-    assert reranked == candidates
-
-
-def test_apply_llm_rerank_falls_back_when_json_invalid():
-    candidates = [
-        Candidate(
-            item=_search("1", "A", article_heat=2000), source_path=PATH_B, preliminary_score=6.6,
-        ),
-    ]
-
-    def fake_llm(*_args, **_kwargs):
-        return "not a json array"
-
-    reranked = apply_llm_rerank(candidates, llm=fake_llm)
-    assert reranked == candidates
 
 
 # ---------------------------------------------------------------------------

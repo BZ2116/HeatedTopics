@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from heated_topics_v3.contracts import ExtractedKeyword, ItemDetail, MatchResult, UserProfile
-from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, utc8_today
+from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, hot_board_cache_path, utc8_today
 from heated_topics_v3.llm_client import call_llm
 from heated_topics_v3.llm_keywords import PersonaKeywordExtraction, extract_persona_keywords
 from heated_topics_v3.matching import match_hot_item_to_queries
@@ -34,7 +34,6 @@ from heated_topics_v3.serialization import to_plain_data
 from heated_topics_v3.toutiao_output import write_toutiao_run
 from heated_topics_v3.toutiao_paths import (
     PathFilters,
-    apply_llm_rerank,
     build_candidates,
     build_hot_board_candidates,
     select_search_candidates_by_heat,
@@ -200,7 +199,6 @@ def _write_article_text(path: Path, detail: ItemDetail) -> None:
         [
             f"Title: {detail.title}",
             f"Platform: {detail.platform}",
-            f"URL: {detail.url}",
             f"Author: {detail.author}",
             f"Published at: {detail.published_at}",
             f"Fetch status: {detail.fetch_status}",
@@ -264,7 +262,6 @@ def run_toutiao_pipeline_v2(
     llm_cache_root: Path = Path("cache/llm"),
     use_llm_keywords: bool = True,
     use_llm_summary: bool = False,
-    use_llm_rerank: bool = False,
     force_hot_board_refresh: bool = False,
     allow_yesterday_fallback: bool = True,
     offline: bool = False,
@@ -285,7 +282,7 @@ def run_toutiao_pipeline_v2(
       2. Extract persona keywords (cache → LLM → core_keywords fallback).
       3. Read/write daily hot board cache.
       4. Per-keyword search, enrich with mobile article info.
-      5. Build candidates via Paths A/B/C; optional LLM rerank (Path D).
+      5. Build candidates via Paths A/B/C and rank by heat.
       6. Sort + slice top_n.
       7. Fetch item details for kept candidates.
       8. Render Markdown report (optional LLM summary section).
@@ -317,7 +314,18 @@ def run_toutiao_pipeline_v2(
         )
 
     date = utc8_today()
-    if offline:
+    # Smart hot board fetch: if offline but today's cache missing, auto-refresh
+    _cache_path = hot_board_cache_path(hot_board_cache_root, date)
+    _today_cached = _cache_path.exists()
+    if offline and not _today_cached:
+        # offline but no cache → upgrade to auto-refresh
+        hot_board_snapshot, source_label = get_or_fetch_hot_board(
+            hot_board_cache_root, date,
+            fetcher=fetcher,
+            force_refresh=True,
+            allow_yesterday_fallback=allow_yesterday_fallback,
+        )
+    elif offline:
         hot_board_snapshot, source_label = get_or_fetch_hot_board(
             hot_board_cache_root, date,
             fetcher=None,
@@ -404,16 +412,6 @@ def run_toutiao_pipeline_v2(
         )
 
     candidates = select_search_candidates_by_heat(candidates)
-
-    if use_llm_rerank and candidates:
-        body_excerpts: dict[str, str] = {}
-        candidates = apply_llm_rerank(
-            candidates,
-            llm=effective_llm,
-            top_n_for_rerank=30,
-            persona_keywords=persona_keywords,
-            body_excerpts=body_excerpts,
-        )
 
     candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, persona_keywords)))
     top_candidates = candidates[: max(0, top_n)]

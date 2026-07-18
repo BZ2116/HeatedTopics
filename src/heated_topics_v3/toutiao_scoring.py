@@ -63,12 +63,9 @@ def hybrid_score_v2(item: HotItem, persona_keywords: tuple[str, ...] = ()) -> Sc
 
 
 def as_sort_key(scored: ScoredCandidate) -> tuple[float, int, int]:
-    """Sort by (-score desc, -is_toutiao_hot desc, hot_board_rank asc)."""
-    return (
-        -scored.score,
-        0 if scored.is_toutiao_hot else 1,
-        scored.hot_board_rank,
-    )
+    """Sort by heat only: hot_value desc for hot_board, article_heat desc for search."""
+    heat = int(scored.item.heat.value or 0) if scored.is_hot_board else int(scored.item.raw_payload.get("article_heat") or 0)
+    return (-heat, 0 if scored.is_toutiao_hot else 1, scored.hot_board_rank)
 
 
 def _persona_matches(item: HotItem, persona_keywords: tuple[str, ...]) -> bool:

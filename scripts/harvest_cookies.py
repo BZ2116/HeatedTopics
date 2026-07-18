@@ -24,7 +24,8 @@ import sys
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# Project root (parent of scripts/)
+ROOT = Path(__file__).resolve().parent.parent
 COOKIE_PATH = ROOT / ".toutiao_cookie"
 TODAY_SECONDS = 35
 TODAY_HOME = "https://www.toutiao.com/"

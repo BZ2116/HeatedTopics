@@ -212,7 +212,6 @@ def _write_article_text(path: Path, candidate: Candidate, detail: ItemDetail) ->
     body = "\n".join(
         [
             f"Title: {detail.title}",
-            f"URL: {detail.url}",
             f"Keyword: {candidate.matched_keyword or 'n/a'}",
             f"Source path: {candidate.source_path}",
             f"Fetched at: {fetched_at}",

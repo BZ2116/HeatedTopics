@@ -27,8 +27,8 @@ def main() -> None:
     fetched_at = datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds")
 
     fetcher = make_search_fetcher(
-        cookie_path=ROOT / ".toutiao_cookie",
-        log_path=ROOT / ".fetcher_log.json",
+        cookie_path=REPO_ROOT / ".toutiao_cookie",
+        log_path=REPO_ROOT / ".fetcher_log.json",
         timeout=30,
     )
 

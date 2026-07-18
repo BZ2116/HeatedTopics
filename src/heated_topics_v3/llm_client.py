@@ -6,20 +6,25 @@ Caches responses on disk by sha256(model+system+prompt).
 from __future__ import annotations
 
 import hashlib
+import ssl
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import load_dotenv
+load_dotenv()
 
 
 class LLMUnavailable(RuntimeError):
     """Raised when the LLM API is unreachable, returns no text, or the key is missing."""
 
 
-DEFAULT_BASE_URL = "https://api.minimaxi.com/anthropic"
-DEFAULT_MODEL = "MiniMax-Text-01"
+DEFAULT_BASE_URL = "https://api.minimax.io/anthropic"
+DEFAULT_MODEL = "MiniMax-M2.7"
 DEFAULT_CACHE_DIR = "cache/llm"
 
 
@@ -116,28 +121,58 @@ def call_llm(
         "temperature": temperature,
         "messages": [{"role": "user", "content": prompt}],
     }
-    if system:
-        body["system"] = system
 
-    request = urllib.request.Request(
-        f"{cfg.base_url}/v1/messages",
-        data=json.dumps(body).encode("utf-8"),
-        headers={
+    # Use Anthropic format if base_url contains "/anthropic", otherwise OpenAI-compatible
+    if "/anthropic" in cfg.base_url:
+        if system:
+            body["system"] = system
+        endpoint = f"{cfg.base_url}/v1/messages"
+        headers = {
             "Content-Type": "application/json",
             "x-api-key": cfg.api_key,
             "anthropic-version": "2023-06-01",
             "User-Agent": user_agent,
-        },
+        }
+    else:
+        endpoint = f"{cfg.base_url}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {cfg.api_key}",
+            "User-Agent": user_agent,
+        }
+
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
         method="POST",
     )
+    # Use SSL context with TLS 1.2/1.3 to fix compatibility issues
+    ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as resp:
+        with urllib.request.urlopen(request, timeout=timeout_seconds, context=ctx) as resp:
             payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            detail = ""
+        if cfg.api_key:
+            detail = detail.replace(cfg.api_key, "[REDACTED]")
+        detail = re.sub(r"\s+", " ", detail)[:500]
+        suffix = f": {detail}" if detail else ""
+        raise LLMUnavailable(f"LLM call failed: HTTP {exc.code}{suffix}") from exc
     except Exception as exc:
         raise LLMUnavailable(f"LLM call failed: {exc}") from exc
 
-    parts = payload.get("content") or []
-    text = "".join(part.get("text", "") for part in parts if part.get("type") == "text")
+    # Parse response: Anthropic format uses content[].text, OpenAI uses choices[].message.content
+    if "/anthropic" in cfg.base_url:
+        parts = payload.get("content") or []
+        text = "".join(part.get("text", "") for part in parts if part.get("type") == "text")
+    else:
+        choices = payload.get("choices") or []
+        text = "".join(c.get("message", {}).get("content", "") for c in choices)
     if not text:
         raise LLMUnavailable(f"LLM returned no text: {payload}")
 

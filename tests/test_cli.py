@@ -65,7 +65,6 @@ def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys
             "7",
             "--llm-keywords",
             "--llm-summary",
-            "--llm-rerank",
             "--force-hot-board-refresh",
             "--offline",
             "--skip-quota",
@@ -85,7 +84,6 @@ def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys
         "llm_cache_root": Path("cache-data/llm"),
         "use_llm_keywords": True,
         "use_llm_summary": True,
-        "use_llm_rerank": True,
         "force_hot_board_refresh": True,
         "offline": True,
         "top_n": 7,
@@ -122,7 +120,6 @@ def test_toutiao_profile_v2_no_llm_disables_all_llm_features(tmp_path, monkeypat
 
     assert captured["use_llm_keywords"] is False
     assert captured["use_llm_summary"] is False
-    assert captured["use_llm_rerank"] is False
 
 
 def test_toutiao_profile_keeps_legacy_dispatch(monkeypatch):
@@ -165,3 +162,32 @@ def test_main_prints_v2_profile_errors(tmp_path, monkeypatch, capsys):
 
     assert exc_info.value.code == 1
     assert "legacy v1 schema" in capsys.readouterr().err
+
+
+def test_check_llm_bypasses_cache(monkeypatch, capsys):
+    captured = {}
+
+    def fake_call(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured.update(kwargs)
+        return "OK"
+
+    monkeypatch.setattr(cli, "call_llm", fake_call)
+    monkeypatch.setattr("sys.argv", ["heated-topics", "check-llm"])
+
+    cli._main()
+
+    assert captured["use_cache"] is False
+    assert captured["max_tokens"] == 16
+    assert captured["prompt"] == "Reply with exactly OK."
+    assert "LLM connection: OK" in capsys.readouterr().out
+
+
+def test_toutiao_help_does_not_offer_llm_rerank(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["heated-topics", "toutiao", "--help"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli._main()
+
+    assert exc_info.value.code == 0
+    assert "--llm-rerank" not in capsys.readouterr().out
