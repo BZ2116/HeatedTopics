@@ -1,4 +1,6 @@
 import json
+import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -6,8 +8,7 @@ from pathlib import Path
 
 from heated_topics_v3.contracts import ExtractedKeyword, ItemDetail, MatchResult, UserProfile
 from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, hot_board_cache_path, utc8_today
-from heated_topics_v3.llm_client import call_llm
-from heated_topics_v3.llm_keywords import PersonaKeywordExtraction, extract_persona_keywords
+from heated_topics_v3.llm_keywords import PersonaKeywordExtraction
 from heated_topics_v3.matching import match_hot_item_to_queries
 from heated_topics_v3.profile_loader import is_legacy_profile, load_persona_profile
 from heated_topics_v3.profile_queries import build_topic_queries
@@ -25,7 +26,6 @@ from heated_topics_v3.providers.toutiao import (
     resolve_toutiao_content_url,
 )
 from heated_topics_v3.reporting import (
-    render_article_summary_md,
     render_juejin_report,
     render_toutiao_report,
     render_toutiao_report_v2,
@@ -38,6 +38,7 @@ from heated_topics_v3.toutiao_paths import (
     build_hot_board_candidates,
     select_search_candidates_by_heat,
 )
+from heated_topics_v3.toutiao_search_cache import get_or_fetch_search_items
 from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
 
 def run_juejin_pipeline(
@@ -259,9 +260,6 @@ def run_toutiao_pipeline_v2(
     *,
     hot_board_cache_root: Path = Path("cache"),
     persona_keyword_cache_root: Path = Path("cache/core_keywords"),
-    llm_cache_root: Path = Path("cache/llm"),
-    use_llm_keywords: bool = True,
-    use_llm_summary: bool = False,
     force_hot_board_refresh: bool = False,
     allow_yesterday_fallback: bool = True,
     offline: bool = False,
@@ -271,21 +269,22 @@ def run_toutiao_pipeline_v2(
     article_info_fetcher: Callable[[str, int], str] | None = None,
     detail_fetcher: Callable[[str, int], str] | None = None,
     rendered_text_fetcher: Callable[[str, int], str] | None = None,
-    llm_caller: Callable[..., str] | None = None,
     custom_keywords: tuple[str, ...] = (),
     on_search_committed: Callable[[], None] | None = None,
+    search_phase_budget_seconds: float = 20.0,
+    _monotonic: Callable[[], float] = time.monotonic,
 ) -> "ToutiaoV2Result":
     """Persona-driven Toutiao pipeline.
 
     Steps:
       1. Load + validate v2 profile.
-      2. Extract persona keywords (cache → LLM → core_keywords fallback).
+      2. Build keywords from profile.core_keywords or custom_keywords.
       3. Read/write daily hot board cache.
       4. Per-keyword search, enrich with mobile article info.
       5. Build candidates via Paths A/B/C and rank by heat.
       6. Sort + slice top_n.
       7. Fetch item details for kept candidates.
-      8. Render Markdown report (optional LLM summary section).
+      8. Render Markdown report.
       9. Write per-user per-date run directory.
     """
     if is_legacy_profile(profile_path):
@@ -295,7 +294,6 @@ def run_toutiao_pipeline_v2(
         )
 
     profile = load_persona_profile(profile_path)
-    effective_llm = llm_caller or (lambda *a, **kw: call_llm(*a, cache_dir=llm_cache_root, **kw))
     if custom_keywords:
         extraction = PersonaKeywordExtraction(
             user_id=profile.user_id,
@@ -305,12 +303,13 @@ def run_toutiao_pipeline_v2(
             source="custom",
         )
     else:
-        extraction = extract_persona_keywords(
-            profile,
-            cache_dir=persona_keyword_cache_root,
-            use_cache=True,
-            llm=effective_llm,
-            allow_llm=use_llm_keywords,
+        # Use profile.core_keywords directly (keywords were pre-generated via refresh-keywords)
+        extraction = PersonaKeywordExtraction(
+            user_id=profile.user_id,
+            persona_signature=profile.persona_signature,
+            generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in profile.core_keywords),
+            source="core_keywords",
         )
 
     date = utc8_today()
@@ -361,14 +360,31 @@ def run_toutiao_pipeline_v2(
     enriched_search_by_keyword: dict[str, list] = {}
     article_info_by_url: dict[str, dict] = {}
     if not skip_search:
-        for keyword in keyword_phrases:
+        search_pages = path_filters.search_pages or 1
+        search_deadline = _monotonic() + max(0.0, search_phase_budget_seconds)
+        for index, keyword in enumerate(keyword_phrases):
+            if _monotonic() >= search_deadline:
+                for skipped_keyword in keyword_phrases[index:]:
+                    raw_search_by_keyword[skipped_keyword] = []
+                break
             try:
-                results = fetch_toutiao_search_pages(
+                results, _search_source = get_or_fetch_search_items(
+                    hot_board_cache_root,
+                    date,
                     keyword,
-                    fetched_at=fetched_at,
-                    max_pages=path_filters.search_pages or 1,
-                    per_page=path_filters.per_page,
-                    fetcher=fetcher,
+                    search_pages,
+                    path_filters.per_page,
+                    fetched_at,
+                    lambda remaining_seconds, keyword=keyword: fetch_toutiao_search_pages(
+                        keyword,
+                        fetched_at=fetched_at,
+                        max_pages=search_pages,
+                        per_page=path_filters.per_page,
+                        fetcher=fetcher,
+                        timeout_seconds=max(1, math.ceil(remaining_seconds)),
+                    ),
+                    deadline=search_deadline,
+                    monotonic=_monotonic,
                 )
             except Exception:
                 results = []
@@ -429,19 +445,12 @@ def run_toutiao_pipeline_v2(
         ),
     )
 
-    summary_md = render_article_summary_md(
-        top_candidates,
-        item_details,
-        llm=effective_llm if use_llm_summary else None,
-    )
-
     report_md = render_toutiao_report_v2(
         profile,
         extraction,
         top_candidates,
         fetched_at=fetched_at,
         item_details=item_details,
-        llm_summary=(effective_llm if use_llm_summary else None),
     )
 
     run_result = write_toutiao_run(
@@ -460,11 +469,6 @@ def run_toutiao_pipeline_v2(
 
     if on_search_committed is not None and not skip_search:
         on_search_committed()
-
-    if summary_md is not None:
-        summary_path = run_result.run_dir / "articles" / "summary.md"
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        summary_path.write_text(summary_md, encoding="utf-8")
 
     return ToutiaoV2Result(
         user_id=profile.user_id,

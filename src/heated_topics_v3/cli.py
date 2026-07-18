@@ -62,8 +62,6 @@ def _main() -> None:
     if args.command == "toutiao":
         fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         if args.profile_v2 is not None:
-            use_llm_keywords = args.llm_keywords and not args.no_llm
-            use_llm_summary = args.llm_summary and not args.no_llm
             custom_keywords = tuple(k.strip() for k in args.custom_keyword if k.strip())
             today = utc8_today()
             on_search_committed = None
@@ -83,6 +81,7 @@ def _main() -> None:
                 cookie_path=cookie_path,
                 log_path=log_path,
                 timeout=30,
+                paced=False,
             )
             result = run_toutiao_pipeline_v2(
                 profile_path=args.profile_v2,
@@ -90,9 +89,6 @@ def _main() -> None:
                 fetched_at=fetched_at,
                 hot_board_cache_root=args.cache_root,
                 persona_keyword_cache_root=args.cache_root / "core_keywords",
-                llm_cache_root=args.cache_root / "llm",
-                use_llm_keywords=use_llm_keywords,
-                use_llm_summary=use_llm_summary,
                 force_hot_board_refresh=args.force_hot_board_refresh,
                 offline=args.offline,
                 top_n=args.top_n,
@@ -101,7 +97,6 @@ def _main() -> None:
                 fetcher=fetcher,
             )
             print(f"run_dir: {result.run_dir}")
-            print(f"report: {result.report_path}")
             print(f"focused: {result.focused_path}")
             print(f"candidates: {result.kept_total}/{result.candidates_total}")
             print(f"paths: {result.paths}")
@@ -129,9 +124,6 @@ def _add_toutiao_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fetched-at", default=None)
     parser.add_argument("--cache-root", default=Path("cache"), type=Path)
     parser.add_argument("--top-n", default=10, type=int)
-    parser.add_argument("--llm-keywords", action="store_true")
-    parser.add_argument("--llm-summary", action="store_true")
-    parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--force-hot-board-refresh", action="store_true")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--custom-keyword", dest="custom_keyword", action="append", default=[])

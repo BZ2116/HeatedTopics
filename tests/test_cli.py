@@ -40,14 +40,20 @@ def _v2_result() -> SimpleNamespace:
     )
 
 
-def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys):
+def test_toutiao_profile_v2_dispatches_runtime_options(tmp_path, monkeypatch, capsys):
     captured = {}
+    fetcher_options = {}
 
     def fake_run(**kwargs):
         captured.update(kwargs)
         return _v2_result()
 
     monkeypatch.setattr(cli, "run_toutiao_pipeline_v2", fake_run)
+    monkeypatch.setattr(
+        cli,
+        "make_search_fetcher",
+        lambda **kwargs: fetcher_options.update(kwargs) or (lambda _url, _timeout: ""),
+    )
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -63,8 +69,6 @@ def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys
             "cache-data",
             "--top-n",
             "7",
-            "--llm-keywords",
-            "--llm-summary",
             "--force-hot-board-refresh",
             "--offline",
             "--skip-quota",
@@ -76,14 +80,12 @@ def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys
     profile_path = Path(captured.pop("profile_path"))
     custom_keywords = captured.pop("custom_keywords")
     on_search_committed = captured.pop("on_search_committed")
+    fetcher = captured.pop("fetcher")
     assert captured == {
         "output_root": Path("output"),
         "fetched_at": "2026-07-13T10:00:00+08:00",
         "hot_board_cache_root": Path("cache-data"),
         "persona_keyword_cache_root": Path("cache-data/core_keywords"),
-        "llm_cache_root": Path("cache-data/llm"),
-        "use_llm_keywords": True,
-        "use_llm_summary": True,
         "force_hot_board_refresh": True,
         "offline": True,
         "top_n": 7,
@@ -91,35 +93,27 @@ def test_toutiao_profile_v2_dispatches_all_options(tmp_path, monkeypatch, capsys
     assert profile_path.name == "zhao_001.json"
     assert custom_keywords == ()
     assert on_search_committed is None  # --skip-quota wired nothing
+    assert callable(fetcher)
+    assert fetcher_options["paced"] is False
     output = capsys.readouterr().out
-    assert "report: outputs" in output
+    assert "focused: outputs" in output
     assert "candidates: 7/12" in output
 
 
-def test_toutiao_profile_v2_no_llm_disables_all_llm_features(tmp_path, monkeypatch):
-    captured = {}
-
-    def fake_run(**kwargs):
-        captured.update(kwargs)
-        return _v2_result()
-
-    monkeypatch.setattr(cli, "run_toutiao_pipeline_v2", fake_run)
+def test_toutiao_help_does_not_offer_runtime_llm_options(monkeypatch, capsys):
     monkeypatch.setattr(
         "sys.argv",
-        [
-            "heated-topics",
-            "toutiao",
-            "--profile-v2",
-            str(_write_v2_profile(tmp_path, "profile.json")),
-            "--no-llm",
-            "--skip-quota",
-        ],
+        ["heated-topics", "toutiao", "--help"],
     )
 
-    cli._main()
+    with pytest.raises(SystemExit) as exc_info:
+        cli._main()
 
-    assert captured["use_llm_keywords"] is False
-    assert captured["use_llm_summary"] is False
+    assert exc_info.value.code == 0
+    output = capsys.readouterr().out
+    assert "--llm-keywords" not in output
+    assert "--llm-summary" not in output
+    assert "--no-llm" not in output
 
 
 def test_toutiao_profile_keeps_legacy_dispatch(monkeypatch):

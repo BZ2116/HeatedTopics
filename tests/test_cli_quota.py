@@ -59,7 +59,7 @@ def test_cli_quota_exceeded_prints_message_exit_2(tmp_path, monkeypatch, capsys)
     monkeypatch.setattr(
         cli.sys, "argv",
         ["prog", "toutiao", "--profile-v2", str(profile_path),
-         "--state-root", str(tmp_path / "state"), "--no-llm"],
+         "--state-root", str(tmp_path / "state")],
     )
 
     with pytest.raises(SystemExit) as exc:
@@ -87,7 +87,7 @@ def test_cli_skip_quota_bypasses_check(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         cli.sys, "argv",
         ["prog", "toutiao", "--profile-v2", str(profile_path),
-         "--state-root", str(tmp_path / "state"), "--skip-quota", "--no-llm"],
+         "--state-root", str(tmp_path / "state"), "--skip-quota"],
     )
 
     cli._main()
@@ -107,7 +107,7 @@ def test_cli_custom_keyword_passed_to_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cli.sys, "argv",
         ["prog", "toutiao", "--profile-v2", str(profile_path),
-         "--state-root", str(tmp_path / "state"), "--skip-quota", "--no-llm",
+         "--state-root", str(tmp_path / "state"), "--skip-quota",
          "--custom-keyword", "比特币", "--custom-keyword", " ",
          "--custom-keyword", "美联储"],
     )

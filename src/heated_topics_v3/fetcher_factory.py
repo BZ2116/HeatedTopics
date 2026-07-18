@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 import random
 import re
 import time
@@ -130,9 +131,11 @@ class SearchFetcher:
         log_path: Path,
         timeout: int = 30,
         random_seed: int | None = None,
+        paced: bool = True,
     ) -> None:
         self.cookie_path = cookie_path
         self.timeout = timeout
+        self.paced = paced
         self._log = FetcherLog(path=log_path, entries=deque(maxlen=500))
         self._random = random.Random(random_seed)
         self._cookies: str | None = None
@@ -182,6 +185,8 @@ class SearchFetcher:
 
     # ---------- pacing ----------
     def _pace(self) -> None:
+        if not self.paced:
+            return
         if self._last_url is None:
             return
         self._calls_in_batch += 1
@@ -195,10 +200,15 @@ class SearchFetcher:
     def _fetch_with_active(self, url: str, timeout: int) -> tuple[str, str, dict]:
         ladder = [STAGE_URLLIB, STAGE_PLAYWRIGHT, STAGE_DRISSION]
         active_idx = ladder.index(self._active_stage)
+        deadline = time.monotonic() + timeout
         last_info: dict = {"ok": False, "error": "no attempt"}
         last_body = ""
         for stage in ladder[active_idx:]:
-            body, info = self._fetch_one(stage, url, timeout)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            stage_timeout = max(1, math.ceil(remaining))
+            body, info = self._fetch_one(stage, url, stage_timeout)
             info["suspect"] = self._is_suspect(body, info)
             info["ok"] = not info["suspect"] and not info.get("error")
             if info["ok"]:
@@ -370,6 +380,7 @@ def make_search_fetcher(
     log_path: Path | str,
     timeout: int = 30,
     dump_dir: Path | str | None = None,
+    paced: bool = True,
 ) -> Callable[[str, int], str]:
     """Return a synchronous fetcher matching the pipeline's signature.
 
@@ -378,6 +389,7 @@ def make_search_fetcher(
             `scripts/harvest_cookies.py`.
         log_path: Path to write per-call JSON diagnostics.
         timeout: Default per-request timeout in seconds.
+        paced: Apply legacy jitter and batch rests between calls.
         dump_dir: Optional directory to dump each raw response body, named
             by call timestamp + sanitized URL keyword. For diagnostics only.
 
@@ -389,6 +401,7 @@ def make_search_fetcher(
         cookie_path=Path(cookie_path),
         log_path=Path(log_path),
         timeout=timeout,
+        paced=paced,
     )
 
     if dump_dir is not None:

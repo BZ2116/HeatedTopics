@@ -62,7 +62,7 @@ HeatedTopics V3 的 toutiao 分支：为内容选题场景提供按用户画像�
 profile (zhao_001.json)
        │
        ▼
-关键词提炼 (LLM 或 core_keywords) → 3-10 个 ExtractedKeyword
+关键词提炼 (从 profile.core_keywords 获取)
        │
        ▼
 日级热榜 (cache/hot_board/{date}.json, 含 is_toutiao_hot 标记)
@@ -105,7 +105,7 @@ Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 f
 | `PathFilters` 字段 | 默认值 | 含义 |
 | --- | --- | --- |
 | `hot_board_min` | `1_000_000` | Path A 入场最低热度 |
-| `article_heat_min` | `0` | Path B 入场最低热度 |
+| `article_heat_min` | `500` | Path B 入场最低热度 |
 | `is_toutiao_hot_min_article_heat` | `0` | `is_toutiao_hot` 标记生效的最低热度 |
 | `is_toutiao_hot_max_article_heat` | `500` | `is_toutiao_hot` 标记生效的最高热度 |
 | `include_is_toutiao_hot_fallback` | `True` | 是否启用 Path C 兜底 |
@@ -115,43 +115,41 @@ Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 f
 
 ## §4 CLI
 
-最小可跑（无需 API key）：
+使用流程分两步：**初始化时用 LLM 生成关键词**，之后运行时不再调用 LLM。
 
-```bash
-uv run python -m heated_topics_v3.cli toutiao \
-    --profile-v2 config/profiles/zhao_001.json \
-    --no-llm --top-n 10
-```
-
-完整 LLM 模式（关键词 + 摘要；候选排序不使用 LLM）：
+### 步骤 1：初始化（生成关键词，一次性）
 
 ```bash
 export MINIMAX_API_KEY=...
 export MINIMAX_BASE_URL=https://api.minimax.io/anthropic
 export MINIMAX_MODEL=MiniMax-M2.7
-uv run python -m heated_topics_v3.cli check-llm
-uv run python -m heated_topics_v3.cli toutiao \
-    --profile-v2 config/profiles/zhao_001.json \
-    --llm-keywords --llm-summary --top-n 10
+uv run python -m heated_topics_v3.cli check-llm  # 验证 LLM 连接
+uv run python -m heated_topics_v3.cli refresh-keywords \
+    --profile config/profiles/qiongyou_001.json --write
 ```
 
-中国区 MiniMax 账号把 Base URL 改为 `https://api.minimaxi.com/anthropic`。`check-llm` 会绕过本地响应缓存，实际请求一次 MiniMax，并只打印模型、Base URL 和连接结果，不打印 API key。LLM 请求失败时，CLI 会显示脱敏后的 HTTP 状态及最多 500 字符的响应正文。
+`--write` 会把生成的关键词回写到 profile JSON 的 `core_keywords` 字段。
+
+### 步骤 2：运行热点生成（不再调用 LLM）
+
+```bash
+uv run python -m heated_topics_v3.cli toutiao \
+    --profile-v2 config/profiles/qiongyou_001.json --top-n 10
+```
 
 | 参数 | 作用 | 是否必填 |
 | --- | --- | --- |
 | `--profile-v2 PATH` | 指向 `config/profiles/{user_id}.json` | 必填 |
-| `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`，`src/heated_topics_v3/cli.py:108`） |
-| `--no-llm` | 完全跳过 LLM 调用 | 与各 `--llm-*` 互斥；启用后关键词和摘要 LLM 均被强制关闭 |
-| `--llm-keywords` | LLM 提炼关键词 | 与 `--no-llm` 互斥；与 `--llm-summary` 彼此独立 |
-| `--llm-summary` | LLM 生成文章摘要 | 与 `--no-llm` 互斥；可单独启用 |
+| `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`） |
 | `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | 否 |
-| `--offline` | 仅使用本地缓存，不发请求 | 否 |
-| `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`，`src/heated_topics_v3/cli.py:107`） |
-| `--output-root PATH` | 输出根目录 | 否（默认 `outputs`，`src/heated_topics_v3/cli.py:105`） |
+| `--offline` | 热榜只读缓存；搜索、热度补充和正文仍可能请求网络 | 否 |
+| `--custom-keyword` | 自定义关键词（替换 profile 里的） | 否 |
+| `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`） |
+| `--output-root PATH` | 输出根目录 | 否（默认 `outputs`） |
 
 完整参数见 `--help`。
 
-候选文章固定按 heat 降序排列，不调用 LLM 重排：Path A 使用头条热榜 `HotValue`，Path B/C 使用 `article_heat`。同 heat 时，`is_toutiao_hot=true` 优先；仍相同时按热榜原始排名升序。`article_heat = 阅读量 × 1 + 点赞量 × 2 + 评论量 × 5 + 转发量 × 10 + 收藏量 × 3`。两种 heat 直接比较，因此百万级 `HotValue` 的 Path A 通常排在搜索文章之前。
+候选文章按 heat 降序排列：Path A 使用头条热榜 `HotValue`，Path B/C 使用 `article_heat`。同 heat 时，`is_toutiao_hot=true` 优先；仍相同时按热榜原始排名升序。
 
 ## §5 Profile schema
 
@@ -179,15 +177,11 @@ uv run python -m heated_topics_v3.cli toutiao \
 - `scenarios` — 适用场景列表，影响关键词 `scenarios` 命中权重。
 - `value` — 期望提供的价值，决定重排与摘要的取舍标准。
 
-`core_keywords` 是非 LLM 模式的关键词种子（`src/heated_topics_v3/llm_keywords.py:3`），当 `--no-llm` 启用时直接落入 `ExtractedKeyword`。
+> 修改画像后应重新运行 `refresh-keywords --write`，让 `core_keywords` 与新画像保持一致。
 
-LLM 关键词以画像相关性为硬约束，并在相关候选中优先选择更可能召回热门内容的词。关键词不必原样出现在画像字段中；中文概念优先压缩为 2–3 个字符，不可合理缩写的专有实体保留原名。结果去重后为 3–10 个，并按热榜优先分档：前 5 个热榜、第 6–9 个长尾、第 10 个兜底。
+## §6 persona_signature
 
-> 修改 `personal.*` 任一字段都会让 `persona_signature` 漂移, 失效机制见 §6.
-
-## §6 persona_signature 失效机制
-
-`compute_persona_signature(level1, level2, personal)`（`src/heated_topics_v3/profile_loader.py:138`）把 6 个字段（`level1` / `level2` / `role` / `subject` / `scenarios` / `value`）做 `ensure_ascii=False` + `sort_keys=True` 的 canonical JSON（`src/heated_topics_v3/profile_loader.py:142`），再 `sha256` 取前 16 位（`src/heated_topics_v3/profile_loader.py:155`）。任何字段变更 → 签名不同 → `cache/core_keywords/{user_id}.json`（`src/heated_topics_v3/llm_keywords.py:23`）被判定失效，下次运行重新生成。契约由 `tests/test_profile_loader.py:79`、`tests/test_profile_loader.py:99` 与 `tests/test_llm_keywords.py:105` 共同锁定。
+`compute_persona_signature(level1, level2, personal)`（`src/heated_topics_v3/profile_loader.py`）对画像核心字段生成稳定摘要，用于识别画像版本。热点运行阶段直接读取 profile 中已经持久化的 `core_keywords`，不会因为签名变化自动调用 LLM；画像修改后需要显式执行 `refresh-keywords --write`。
 
 ## §7 正文获取优先级
 
@@ -215,21 +209,28 @@ LLM 关键词以画像相关性为硬约束，并在相关候选中优先选择�
 ```
 cache/
 ├── hot_board/{YYYY-MM-DD}.json      # 今日优先; 缺则 yesterday 兜底
-├── core_keywords/{user_id}.json     # 7 天 TTL, persona_signature 触发失效
+├── core_keywords/{user_id}.json     # refresh-keywords 的生成记录
+├── toutiao_search/{date}/{key}.json # UTC+8 当日共享的有效搜索结果
+├── toutiao_search/{date}/{key}.lock # 同 key 跨线程/进程 single-flight
 └── llm/{prompt_hash}.json           # sha256(model+system+prompt)[:24]
 ```
 
-三条兜底规则：
+缓存与兜底规则：
 
 - 热榜今日缺则回退昨日快照（`src/heated_topics_v3/hot_board_cache.py:126-130`）。
-- 关键词缓存 7 天 TTL + 签名校验（`src/heated_topics_v3/llm_keywords.py:6` / `:24`）；来源会保留为 `cache_fresh`、`cache_fallback_core` 或 `cache_no_llm`，避免缓存掩盖 LLM 降级。
-- LLM 缓存按 prompt hash 命中，重复请求不重复计费。
+- `refresh-keywords` 会写生成记录到 `cache/core_keywords/{user_id}.json`；热点运行以 profile 的 `core_keywords` 为准，不读取该缓存决定搜索词。
+- 头条搜索缓存按 UTC+8 自然日、规范化 keyword、`search_pages`、`per_page` 和 schema version 隔离；同一天不同用户可共享相同搜索结果。
+- 只有解析出真实文章的非空搜索结果才写缓存；异常、空结果、关键词占位项和反爬假响应不会复用。`article_info` 与文章详情不进入该缓存，仍按每次运行实时请求。
+- 同一缓存 key 并发 miss 时使用文件锁合并请求；等待最多 2 秒，超时后跳过该关键词，不重复调用 Search API。锁文件会保留，由操作系统在进程退出时释放锁状态。
+- 关键词搜索阶段默认共享 20 秒总预算；预算耗尽后停止后续关键词并保留已完成结果。该预算不包含热榜、`article_info`、正文、报告和落盘，因此不等于整个 pipeline 的 20 秒 SLA。
 
-`--force-hot-board-refresh` 跳过热榜缓存，`--offline` 仅在热榜环节生效 — 把 `fetcher=None` 传给 `get_or_fetch_hot_board`，等于禁用当日热榜抓取、回退到 `cache/hot_board/{date}.json` 命中或 yesterday 兜底；其它阶段（搜索 / `article_info` / 桌面页解析）依然会发请求。
+`--force-hot-board-refresh` 跳过热榜缓存，`--offline` 仅在热榜环节生效 — 把 `fetcher=None` 传给 `get_or_fetch_hot_board`，等于禁用当日热榜抓取、回退到 `cache/hot_board/{date}.json` 命中或 yesterday 兜底；搜索阶段优先读取当日共享缓存，未命中时与 `article_info`、桌面页解析一样仍会发请求。
 
 ## §9 反爬梯子
 
 抓取侧采用三阶段 fetcher 梯子（`src/heated_topics_v3/fetcher_factory.py:1`），按运行期失败率自动升降级。
+
+CLI 在线搜索以 `paced=False` 创建 fetcher，不执行原有的 4–8 秒请求间隔和 60 秒批次暂停，三级 fallback 共用单次调用的剩余 timeout。缓存与 single-flight 负责抑制并发放大；诊断脚本默认仍保留 pacing。
 
 | 阶段 | 实现 | 触发 |
 | --- | --- | --- |
@@ -243,7 +244,7 @@ cache/
 
 | 脚本 | 一句话 |
 | --- | --- |
-| `scripts/build_personas_from_xlsx.py` | 把人设 xlsx 批量转成 `config/profiles/{user_id}.json`（`--no-llm` / `--use-llm`，`--regenerate`）。 |
+| `scripts/build_personas_from_xlsx.py` | 把人设 xlsx 批量转成 `config/profiles/{user_id}.json`（`--regenerate`）。 |
 | `scripts/harvest_cookies.py` | Playwright + DrissionPage 取 `toutiao.com` 首页 cookie 并 merge 到 `scripts/.toutiao_cookie`。 |
 | `scripts/run_pipeline.py` | 单用户烟测（yingjie_001），打印 `kept_total` / `paths` / `fetcher.stage` 关键指标；输出 / 缓存 / cookie 都在 `scripts/` 下。 |
 
@@ -262,7 +263,6 @@ outputs/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 └── articles/
     ├── 01_{slug}.txt
     ├── ...
-    └── summary.md              # --llm-summary 时
 ```
 
 ## §12 测试
@@ -271,7 +271,7 @@ outputs/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 uv run pytest -q
 ```
 
-整套 ~3700 行，包含 toutiao v2 端到端、四路径、persona 失效契约、jump URL 解包、anti-bot 降级等。
+测试覆盖 toutiao v2 端到端、四路径、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包和 anti-bot 降级。
 
 ## 每日配额与自定义关键词（上线用法）
 
@@ -302,36 +302,27 @@ uv run pytest -q
 示例：
 
     python -m heated_topics_v3.cli toutiao --profile-v2 config/profiles/licai_001.json \
-        --custom-keyword 比特币 --custom-keyword 美联储 --no-llm --top-n 10
+        --custom-keyword 比特币 --custom-keyword 美联储 --top-n 10
 
-### 关键词生成机制（LLM 模式）
+### 关键词生成机制（初始化时调用 LLM）
 
-当使用 `--llm-keywords` 时，系统会通过 LLM 从用户画像生成检索关键词：
+关键词在**初始化阶段**通过 LLM 生成，并回写到 profile JSON 的 `core_keywords` 字段。之后运行热点生成时直接使用，不再调用 LLM。
 
 **生成规则：**
 - 数量：去重后 3-10 个
-- 分档：前 5 个「热榜」，第 6-9 个「长尾」，第 10 个「兜底」
 - 词形：2-3 个汉字的简短名词或实体词，不可合理缩写的专有实体可保留原名
 - 来源：必须从 level1、level2 提取核心词（如"旅行攻略"→"旅行"+"攻略"），再从其他字段补充
 
 **关键词来源优先级：**
 1. 从 level1、level2 拆解 2-3 字核心词（最高优先级）
-2. 从 core_keywords_seed、role、subject、scenarios 中提取相关词
+2. 从 role、subject、scenarios、core_keywords_seed 中提取相关词
 3. 允许生成直接相关的上位词、下位词、品牌、产品词
 
-**缓存机制：**
-- 缓存在 `cache/core_keywords/{user_id}.json`，TTL 7 天
-- persona_signature 变更时自动失效重新生成
-- 可用 `refresh-keywords` 命令强制刷新
-
-**强制刷新关键词：**
+**生成并写入 profile：**
 
 ```bash
-# 测试模式（只打印，不写入）
-uv run python -m heated_topics_v3.cli refresh-keywords --profile config/profiles/qiongyou_001.json
-
-# 写入模式（将生成的关键词回写到 profile JSON 的 core_keywords）
-uv run python -m heated_topics_v3.cli refresh-keywords --profile config/profiles/qiongyou_001.json --write
+uv run python -m heated_topics_v3.cli refresh-keywords \
+    --profile config/profiles/qiongyou_001.json --write
 ```
 
 **检测 LLM 配置是否正确：**
@@ -343,7 +334,7 @@ uv run python -m heated_topics_v3.cli check-llm
 ## 用户注册接口（集成方 import 用）
 
 集成方要新增一个用户时，调用 `register_persona`——一次调用走完「原始人设文本 →
-LLM 结构化 → 派生 core_keywords → 分配 user_id → 落库 JSON → 预热关键词缓存」。
+LLM 结构化 → 派生 core_keywords → 分配 user_id → 落库 JSON」。
 
 ```python
 from heated_topics_v3.persona_intake import register_persona
@@ -352,24 +343,17 @@ result = register_persona(
     level1="财经",
     level2="普通人理财",
     persona_text="普通人理财博主，分享基金、存款、记账，帮小白避坑",
-    # 以下均可选，默认写 config/profiles/ 与 cache/core_keywords/
-    # profiles_dir=..., keyword_cache_dir=...,
-    # core_keywords=["比特币", "美联储"],   # 传了就用它，否则启发式派生
-    # use_llm=True,                          # False 则纯启发式，不碰 LLM
+    # 以下均可选，默认写 config/profiles/
+    # profiles_dir=...,
 )
 result.user_id       # "licai_001"（同 level2 再注册得 licai_002，始终新建）
 result.profile_path  # config/profiles/licai_001.json
 result.profile       # 已过 v2 validator 的 PersonaProfile
-result.keywords      # 预热好的 10 个 ExtractedKeyword
 ```
 
 要点：
 
 - **user_id** 按 `level2 → slug` 映射（`src/heated_topics_v3/persona_slugs.py` 的
   `LEVEL2_SLUG`）+ 递增序号分配；同 level2 的新用户始终拿下一个空位，不覆盖旧文件。
-- **结构化**用 LLM（`structure_persona`）；LLM 挂了自动退到启发式拆词，注册不会失败。
-- **关键词**在注册时就抽好写进 `cache/core_keywords/{user_id}.json`，之后跑 pipeline
-  首次命中缓存、不重复计费。`use_llm=False` 时关键词由 `core_keywords` 合成。
+- **结构化**用 LLM（`structure_persona`）。
 - 写完 JSON 立刻 `load_persona_profile` 读回校验，schema 不合法当场抛错。
-- 测试注入：`structurer_llm=` / `keyword_llm=` 可传 fake caller（见
-  `tests/test_persona_intake.py`）。
