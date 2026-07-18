@@ -117,7 +117,7 @@ Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 f
 
 ## §4 CLI
 
-使用流程分两步：**初始化时用 LLM 生成关键词**，之后运行时不再调用 LLM。
+完整流程分三步：**注册用户 -> 初始化关键词 -> 日常运行**。
 
 ### 环境变量（初始化前配置）
 
@@ -127,15 +127,45 @@ export MINIMAX_BASE_URL=https://api.minimax.io/anthropic
 export MINIMAX_MODEL=MiniMax-M2.7
 ```
 
-### 步骤 1：初始化（一次性）
+### 步骤 0：注册新用户（一次性）
+
+将自然语言人设文本转换为结构化 JSON profile，并自动用 LLM 提取关键词：
+
+```bash
+uv run python -m heated_topics_v3.cli register \
+    --level1 财经 --level2 普通人理财 \
+    --persona-text "财经专业学生，关注基金和理财，喜欢分享实用技巧，帮小白避坑"
+```
+
+输出示例：
+```
+user_id: licai_001
+profile: config/profiles/licai_001.json
+keywords (5): ['基金', '理财', '小白', '避坑', '实用']
+```
+
+**参数说明：**
+
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--level1` | 一级赛道（必填），如 `科技AI`、`财经` | - |
+| `--level2` | 二级赛道（必填），如 `AI工具应用`、`普通人理财` | - |
+| `--persona-text` | 自然语言人设描述（必填） | - |
+| `--profiles-dir` | profile 输出目录 | `config/profiles` |
+| `--cache-root` | LLM 关键词缓存目录 | `cache` |
+| `--no-llm` | 跳过 LLM，用启发式规则生成关键词 | False |
+
+> `level2` 决定 user_id 前缀（如 `licai_`、`qiongyou_`），同 level2 的新用户自动分配序号（`_001`, `_002`）。
+
+### 步骤 1：初始化关键词（一次性）
 
 ```bash
 # 验证 LLM 连接
 uv run python -m heated_topics_v3.cli check-llm
 
-# 生成关键词并回写到 profile
+# 为已有 profile 重新生成关键词
 uv run python -m heated_topics_v3.cli refresh-keywords \
-    --profile config/profiles/qiongyou_001.json --write
+    --profile config/profiles/licai_001.json --write
 ```
 
 `--write` 把生成的关键词回写到 profile JSON 的 `core_keywords` 字段。
@@ -144,10 +174,10 @@ uv run python -m heated_topics_v3.cli refresh-keywords \
 
 ```bash
 uv run python -m heated_topics_v3.cli toutiao \
-    --profile-v2 config/profiles/qiongyou_001.json --top-n 10
+    --profile-v2 config/profiles/licai_001.json --top-n 10
 ```
 
-### 完整参数一览
+### 完整参数一览（toutiao 子命令）
 
 | 参数 | 作用 | 默认值 |
 | --- | --- | --- |

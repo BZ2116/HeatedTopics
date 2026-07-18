@@ -17,6 +17,7 @@ from heated_topics_v3.pipeline import (
     run_toutiao_pipeline,
     run_toutiao_pipeline_v2,
 )
+from heated_topics_v3.persona_intake import register_persona
 from heated_topics_v3.profile_loader import load_persona_profile
 from heated_topics_v3.quota import (
     QuotaExceededError,
@@ -46,6 +47,9 @@ def _main() -> None:
 
     refresh_kw = subparsers.add_parser("refresh-keywords", help="Delete keyword cache for one or all users, forcing LLM re-extraction on next run.")
     _add_refresh_keywords_args(refresh_kw)
+
+    register = subparsers.add_parser("register", help="Register a new user persona: raw text -> structured profile + LLM keywords.")
+    _add_register_args(register)
 
     subparsers.add_parser("check-llm", help="Test the configured LLM without reading or writing response cache.")
 
@@ -112,6 +116,8 @@ def _main() -> None:
                 print(f"{name}: {path}")
     if args.command == "refresh-keywords":
         _handle_refresh_keywords(args)
+    if args.command == "register":
+        _handle_register(args)
     if args.command == "check-llm":
         _handle_check_llm()
 
@@ -136,6 +142,33 @@ def _add_refresh_keywords_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", type=Path, required=True, help="Path to a profile (e.g. config/profiles/qiongyou_001.json)")
     parser.add_argument("--cache-root", default=Path("cache"), type=Path)
     parser.add_argument("--write", action="store_true", help="Write LLM-generated keywords back to the profile JSON file (replaces core_keywords)")
+
+
+def _add_register_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--level1", required=True, help="一级赛道，如 科技AI")
+    parser.add_argument("--level2", required=True, help="二级赛道，如 AI工具应用")
+    parser.add_argument("--persona-text", dest="persona_text", required=True, help="自然语言描述的人设，如 财经专业学生，关注基金和理财，喜欢分享实用技巧")
+    parser.add_argument("--profiles-dir", dest="profiles_dir", default=Path("config/profiles"), type=Path)
+    parser.add_argument("--cache-root", default=Path("cache"), type=Path)
+    parser.add_argument("--no-llm", dest="no_llm", action="store_true", help="跳过 LLM 结构化和关键词生成，使用启发式规则")
+
+
+def _handle_register(args) -> None:
+    cache_dir = args.cache_root / "core_keywords"
+    result = register_persona(
+        level1=args.level1,
+        level2=args.level2,
+        persona_text=args.persona_text,
+        profiles_dir=args.profiles_dir,
+        keyword_cache_dir=cache_dir,
+        use_llm=not args.no_llm,
+        structurer_llm=lambda p, s, **kw: call_llm(p, system=s, **kw),
+        keyword_llm=lambda p, s, **kw: call_llm(p, system=s, **kw),
+    )
+    print(f"user_id: {result.user_id}")
+    print(f"profile: {result.profile_path}")
+    keywords = [k.keyword for k in result.keywords]
+    print(f"keywords ({len(keywords)}): {keywords}")
 
 
 def _handle_refresh_keywords(args) -> None:
