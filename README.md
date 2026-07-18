@@ -113,41 +113,56 @@ Path D  metadata 兜底 (item.summary / item.title) — 已并入 Path B/C 的 f
 | `per_page` | `10` | 每页结果数 |
 | `min_hot_board_before_search` | `5` | skip-search 阈值；达到此数 Path A 独占（`src/heated_topics_v3/toutiao_paths.py:59`） |
 
+**兜底机制**：当 Path A/B/C 过滤后候选数不足 `top_n` 时，自动用所有搜索结果按 `article_heat` 降序补足，确保最终输出至少有一篇。
+
 ## §4 CLI
 
 使用流程分两步：**初始化时用 LLM 生成关键词**，之后运行时不再调用 LLM。
 
-### 步骤 1：初始化（生成关键词，一次性）
+### 环境变量（初始化前配置）
 
 ```bash
-export MINIMAX_API_KEY=...
+export MINIMAX_API_KEY=你的API密钥
 export MINIMAX_BASE_URL=https://api.minimax.io/anthropic
 export MINIMAX_MODEL=MiniMax-M2.7
-uv run python -m heated_topics_v3.cli check-llm  # 验证 LLM 连接
+```
+
+### 步骤 1：初始化（一次性）
+
+```bash
+# 验证 LLM 连接
+uv run python -m heated_topics_v3.cli check-llm
+
+# 生成关键词并回写到 profile
 uv run python -m heated_topics_v3.cli refresh-keywords \
     --profile config/profiles/qiongyou_001.json --write
 ```
 
-`--write` 会把生成的关键词回写到 profile JSON 的 `core_keywords` 字段。
+`--write` 把生成的关键词回写到 profile JSON 的 `core_keywords` 字段。
 
-### 步骤 2：运行热点生成（不再调用 LLM）
+### 步骤 2：日常运行（不再调用 LLM）
 
 ```bash
 uv run python -m heated_topics_v3.cli toutiao \
     --profile-v2 config/profiles/qiongyou_001.json --top-n 10
 ```
 
-| 参数 | 作用 | 是否必填 |
-| --- | --- | --- |
-| `--profile-v2 PATH` | 指向 `config/profiles/{user_id}.json` | 必填 |
-| `--top-n INT` | 最终保留的候选条数 | 否（默认 `10`） |
-| `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | 否 |
-| `--offline` | 热榜只读缓存；搜索、热度补充和正文仍可能请求网络 | 否 |
-| `--custom-keyword` | 自定义关键词（替换 profile 里的） | 否 |
-| `--cache-root PATH` | 缓存根目录 | 否（默认 `cache`） |
-| `--output-root PATH` | 输出根目录 | 否（默认 `outputs`） |
+### 完整参数一览
 
-完整参数见 `--help`。
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--profile-v2 PATH` | 指向 v2 profile JSON（必填） | - |
+| `--top-n INT` | 最终保留的候选条数 | `10` |
+| `--output-root PATH` | 输出根目录 | `outputs` |
+| `--cache-root PATH` | 缓存根目录 | `cache` |
+| `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | False |
+| `--offline` | 热榜只读缓存；搜索、热度补充和正文仍可能请求网络 | False |
+| `--custom-keyword WORD` | 自定义关键词（可重复，替换 profile 里的） | [] |
+| `--state-root PATH` | 配额状态目录 | `state` |
+| `--max-quota-per-day INT` | 每日搜索配额上限 | `3` |
+| `--skip-quota` | 跳过每日配额检查（集成方使用） | False |
+
+完整参数见 `uv run python -m heated_topics_v3.cli toutiao --help`。
 
 候选文章按 heat 降序排列：Path A 使用头条热榜 `HotValue`，Path B/C 使用 `article_heat`。同 heat 时，`is_toutiao_hot=true` 优先；仍相同时按热榜原始排名升序。
 

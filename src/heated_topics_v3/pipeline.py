@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from heated_topics_v3.contracts import ExtractedKeyword, ItemDetail, MatchResult, UserProfile
+from heated_topics_v3.contracts import ExtractedKeyword, HotItem, ItemDetail, MatchResult, UserProfile
 from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, hot_board_cache_path, utc8_today
 from heated_topics_v3.llm_keywords import PersonaKeywordExtraction
 from heated_topics_v3.matching import match_hot_item_to_queries
@@ -33,6 +33,8 @@ from heated_topics_v3.reporting import (
 from heated_topics_v3.serialization import to_plain_data
 from heated_topics_v3.toutiao_output import write_toutiao_run
 from heated_topics_v3.toutiao_paths import (
+    PATH_B,
+    Candidate,
     PathFilters,
     build_candidates,
     build_hot_board_candidates,
@@ -429,6 +431,13 @@ def run_toutiao_pipeline_v2(
 
     candidates = select_search_candidates_by_heat(candidates)
 
+    # Fallback: if candidates < top_n, supplement with all search results sorted by heat
+    if len(candidates) < top_n:
+        all_search_candidates = _all_search_candidates(enriched_search_by_keyword, persona_keywords)
+        for c in all_search_candidates:
+            if c not in candidates:
+                candidates.append(c)
+
     candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, persona_keywords)))
     top_candidates = candidates[: max(0, top_n)]
 
@@ -484,6 +493,45 @@ def run_toutiao_pipeline_v2(
         report_path=run_result.run_dir / "report.md",
         focused_path=run_result.run_dir / "focused.json",
     )
+
+
+def _all_search_candidates(
+    enriched_search_by_keyword: dict[str, list],
+    persona_keywords: tuple[str, ...],
+) -> list["Candidate"]:
+    """Collect ALL search results as candidates, sorted by heat desc."""
+    all_items: list[HotItem] = []
+    for items in enriched_search_by_keyword.values():
+        all_items.extend(items)
+
+    candidates: list[Candidate] = []
+    seen_keys: set[str] = set()
+    for item in all_items:
+        resolved = resolve_toutiao_content_url(item.url)
+        article_id = extract_toutiao_article_id(resolved)
+        key = f"aid:{article_id}" if article_id else f"url:{_canonical_url(item.url)}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+
+        scored = hybrid_score_v2(item, persona_keywords)
+        info_raw = item.raw_payload or {}
+        is_th = bool(info_raw.get("is_toutiao_hot"))
+        candidates.append(Candidate(
+            item=item,
+            source_path=PATH_B,
+            matched_keyword=info_raw.get("matched_keyword") or None,
+            is_toutiao_hot=is_th,
+            is_hot_board=False,
+            persona_matched=scored.persona_matched,
+            preliminary_score=scored.score,
+        ))
+
+    def heat_of(c: Candidate) -> int:
+        return int((c.item.raw_payload or {}).get("article_heat", 0) or 0)
+
+    candidates.sort(key=heat_of, reverse=True)
+    return candidates
 
 
 def _enrich_top_path_a_candidates(
