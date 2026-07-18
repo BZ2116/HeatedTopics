@@ -289,9 +289,27 @@ CLI 在线搜索以 `paced=False` 创建 fetcher，不执行原有的 4–8 秒�
 
 | 脚本 | 一句话 |
 | --- | --- |
-| `scripts/build_personas_from_xlsx.py` | 把人设 xlsx 批量转成 `config/profiles/{user_id}.json`（`--regenerate`）。 |
+| `scripts/build_personas_from_xlsx.py` | 把人设 Excel 批量转成 `config/profiles/{user_id}.json`（支持 `--regenerate` 原地更新）。 |
 | `scripts/harvest_cookies.py` | Playwright + DrissionPage 取 `toutiao.com` 首页 cookie 并 merge 到 `scripts/.toutiao_cookie`。 |
 | `scripts/run_pipeline.py` | 单用户烟测（yingjie_001），打印 `kept_total` / `paths` / `fetcher.stage` 关键指标；输出 / 缓存 / cookie 都在 `scripts/` 下。 |
+
+### Excel 批量注册
+
+Excel 文件列：`一级赛道` / `二级赛道` / `人设`
+
+```bash
+# 首次批量导入（自动跳过已存在的 level2）
+uv run python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx
+
+# 重新生成已有用户的关键词（保留 user_id）
+uv run python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx --regenerate
+
+# 不调 LLM，纯启发式（离线用）
+uv run python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx --no-llm
+```
+
+- 同 `level2` 的行去重：已有文件不覆盖（除非加 `--regenerate`）
+- `zhao_001` 永远保留，不被覆盖
 
 `tmp_3users_test/` 是 gitignored 的临时目录（cookie、fetcher 日志、原始 API dump、烟测 profile 副本），不属于分支。新 clone 不会带它，但运行期需要时可以临时建。
 

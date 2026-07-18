@@ -1,24 +1,24 @@
 """Convert persona xlsx rows into config/profiles/{user_id}.json (v2 schema).
 
-Usage:
-    python tmp_3users_test/build_personas_from_xlsx.py --use-llm
-    python tmp_3users_test/build_personas_from_xlsx.py --no-llm --regenerate
+Excel 列： 一级赛道 / 二级赛道 / 人设
 
-Default LM behavior = heuristic only (offline-friendly). Pass --use-llm to
-route each row through `structure_persona`. LLM failures gracefully fall
-back to the heuristic so a flaky network won't break the batch.
+Usage:
+    python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx
+    python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx --use-llm
+    python scripts/build_personas_from_xlsx.py --input 人设数据.xlsx --regenerate
+
+Default behavior uses LLM to structure persona and extract keywords.
+Falls back to heuristic if LLM is unavailable.
 
 The script deduplicates by `(slug, level2)`: if a profile file already
-exists with the same level2, the row is skipped (zhao_001 falls under
-this — its hand-curated version is preserved).
+exists with the same level2, the row is skipped unless --regenerate is passed.
+zhao_001 is always preserved and never overwritten.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
-from typing import Iterable
 
 import openpyxl
 
@@ -27,90 +27,15 @@ SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from heated_topics_v3.llm_client import LLMUnavailable  # noqa: E402
-from heated_topics_v3.persona_slugs import (  # noqa: E402
-    FALLBACK_KEYWORDS,
-    LEVEL2_SLUG,
-)
-from heated_topics_v3.persona_structurer import (  # noqa: E402
-    PersonaStructureError,
-    _split_heuristic,
-    extract_short_keywords,
-    structure_persona,
-)
+from heated_topics_v3.llm_client import call_llm  # noqa: E402
+from heated_topics_v3.persona_intake import register_persona  # noqa: E402
 
-DEFAULT_XLSX = Path(
-    "E:/Tencent/WeChat/xwechat_files/wxid_vg07qwjotg2v22_6dbb/"
-    "msg/file/2026-07/人设数据收集.xlsx"
-)
+DEFAULT_XLSX = Path("人设数据.xlsx")
 DEFAULT_OUT = REPO_ROOT / "config" / "profiles"
 DEFAULT_HDR = ("一级赛道", "二级赛道", "人设")
 
-# Hand-curated profiles that must never be overwritten, even with --regenerate.
-# Currently just zhao_001 (科技AI/AI工具应用) — its persona was tuned manually
-# and should survive every script run.
+# Hand-curated profiles that must never be overwritten.
 PRESERVED_USER_IDS: set[str] = {"zhao_001"}
-
-
-def _row_to_payload(level1: str, level2: str, persona_text: str, *, use_llm: bool) -> dict:
-    if use_llm:
-        try:
-            personal = structure_persona(level1, level2, persona_text)
-        except (LLMUnavailable, PersonaStructureError) as exc:
-            print(f"  [fallback→heuristic] {level1}/{level2}: {exc}", file=sys.stderr)
-            personal = _heuristic_to_personal(level1, level2, persona_text)
-    else:
-        personal = _heuristic_to_personal(level1, level2, persona_text)
-
-    core = list(extract_short_keywords(level1, level2, persona_text))
-    return {
-        "user_id": "",  # filled by caller after collision check
-        "level1": level1,
-        "level2": level2,
-        "personal": {
-            "role": personal.role,
-            "subject": personal.subject,
-            "scenarios": list(personal.scenarios),
-            "value": personal.value,
-        },
-        "core_keywords": core,
-    }
-
-
-def _heuristic_to_personal(level1: str, level2: str, persona_text: str):
-    """Wrap the heuristic splitter into a PersonaPersonal-shaped object."""
-    from heated_topics_v3.contracts import PersonaPersonal
-
-    role, subject, scenarios, value = _split_heuristic(persona_text)
-    if not role:
-        role = level1
-    if not subject:
-        subject = level2
-    if not value:
-        value = f"围绕{level2}分享"
-    if not scenarios:
-        scenarios = _core_keywords(level2, [])
-    return PersonaPersonal(
-        role=role, subject=subject,
-        scenarios=tuple(scenarios[:6]), value=value,
-    )
-
-
-def _core_keywords(level2: str, scenarios: Iterable[str]) -> list[str]:
-    fb = FALLBACK_KEYWORDS.get(level2, [level2])
-    out: list[str] = []
-    seen: set[str] = set()
-    for src in (list(scenarios), fb):
-        for kw in src:
-            kw = str(kw).strip()
-            if kw and kw not in seen:
-                out.append(kw)
-                seen.add(kw)
-            if len(out) >= 3:
-                break
-        if len(out) >= 3:
-            break
-    return out
 
 
 def _iter_rows(xlsx: Path):
@@ -118,55 +43,40 @@ def _iter_rows(xlsx: Path):
     ws = wb.active
     rows = list(ws.iter_rows(values_only=True))
     header = rows[0]
-    col = {name: idx for idx, name in enumerate(header)}
+    col = {str(name).strip(): idx for idx, name in enumerate(header)}
     for row in rows[1:]:
-        level1 = row[col[DEFAULT_HDR[0]]]
-        level2 = row[col[DEFAULT_HDR[1]]]
-        persona_text = row[col[DEFAULT_HDR[2]]]
+        level1 = row[col.get(DEFAULT_HDR[0], -1)]
+        level2 = row[col.get(DEFAULT_HDR[1], -1)]
+        persona_text = row[col.get(DEFAULT_HDR[2], -1)]
         if not (level1 and level2 and persona_text):
             continue
-        yield level1, level2, persona_text
-
-
-def _user_id(
-    level2: str,
-    counter: int,
-    existing_stems: set[str],
-    generated_user_ids: set[str],
-) -> str:
-    slug = LEVEL2_SLUG.get(level2, "persona")
-    user_id = f"{slug}_{counter:03d}"
-    while user_id in existing_stems or user_id in generated_user_ids:
-        counter += 1
-        user_id = f"{slug}_{counter:03d}"
-    return user_id
+        yield str(level1).strip(), str(level2).strip(), str(persona_text).strip()
 
 
 def main(
     *,
     xlsx: Path = DEFAULT_XLSX,
     out_dir: Path = DEFAULT_OUT,
-    use_llm: bool = False,
+    use_llm: bool = True,
     regenerate: bool = False,
 ) -> int:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    existing_stems = {p.stem for p in out_dir.glob("*.json")}
-    generated_user_ids: set[str] = set()
-    slug_counter: dict[str, int] = {}
+    if not xlsx.exists():
+        print(f"xlsx not found: {xlsx}", file=sys.stderr)
+        return 1
 
-    written, skipped = [], []
+    cache_dir = REPO_ROOT / "cache" / "core_keywords"
+    llm = None if not use_llm else lambda p, s, **kw: call_llm(p, system=s, **kw)
+
+    written, skipped, errors = [], [], []
 
     for level1, level2, persona_text in _iter_rows(xlsx):
-        # Locate an existing file with matching (slug, level2), if any.
-        # Three cases:
-        #   1. Match exists and user_id is preserved → skip unconditionally.
-        #   2. Match exists and --regenerate → overwrite in place.
-        #   3. Match exists and not --regenerate → skip.
-        #   4. No match → create a new file with next free ID.
-        slug = LEVEL2_SLUG.get(level2, "persona")
-        existing_match: Path | None = None
+        # Check if level2 already has a profile (dedup by level2)
+        existing_match = None
+        slug = _slug_for(level2)
         for existing_file in out_dir.glob(f"{slug}_*.json"):
             try:
+                import json
+
                 payload = json.loads(existing_file.read_text(encoding="utf-8-sig"))
             except Exception:
                 continue
@@ -180,52 +90,161 @@ def main(
         if existing_match and not regenerate:
             skipped.append((level2, "already exists"))
             continue
-        if existing_match:
-            user_id = existing_match.stem
-            generated_user_ids.add(user_id)
-        else:
-            slug_counter[level2] = slug_counter.get(level2, 0) + 1
-            user_id = _user_id(
-                level2, slug_counter[level2], existing_stems, generated_user_ids
-            )
-            generated_user_ids.add(user_id)
 
-        payload = _row_to_payload(
-            level1, level2, str(persona_text), use_llm=use_llm
-        )
-        payload["user_id"] = user_id
+        try:
+            if existing_match and regenerate:
+                # Regenerate: reuse existing user_id, re-run LLM structure + keywords
+                user_id = existing_match.stem
+                result = _regenerate_profile(
+                    existing_match,
+                    level1,
+                    level2,
+                    persona_text,
+                    cache_dir,
+                    llm,
+                )
+                written.append((user_id, result))
+                print(f"  ~ {user_id} ({level2}) [regenerated]")
+            else:
+                # New registration
+                result = register_persona(
+                    level1=level1,
+                    level2=level2,
+                    persona_text=persona_text,
+                    profiles_dir=out_dir,
+                    keyword_cache_dir=cache_dir,
+                    use_llm=use_llm,
+                    structurer_llm=llm,
+                    keyword_llm=llm,
+                )
+                written.append((result.user_id, result.profile_path))
+                print(f"  + {result.user_id} ({level2})")
+        except Exception as exc:
+            errors.append((level2, str(exc)))
+            print(f"  ! {level2}: {exc}", file=sys.stderr)
 
-        out_path = out_dir / f"{user_id}.json"
-        out_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-        written.append(out_path)
-
-    print(f"wrote {len(written)} files (use_llm={use_llm})")
-    for p in written:
-        print(f"  {p}")
-    print(f"skipped {len(skipped)} rows:")
-    for level2, reason in skipped:
-        print(f"  {level2} -> {reason}")
+    print(f"\nwrote {len(written)}, skipped {len(skipped)}, errors {len(errors)}")
+    if skipped:
+        print("skipped rows:")
+        for level2, reason in skipped:
+            print(f"  {level2} -> {reason}")
+    if errors:
+        print("errors:")
+        for level2, err in errors:
+            print(f"  {level2}: {err}")
     return 0
+
+
+def _regenerate_profile(
+    profile_path: Path,
+    level1: str,
+    level2: str,
+    persona_text: str,
+    cache_dir: Path,
+    llm: callable | None,
+) -> Path:
+    """Overwrite existing profile with re-structured persona + fresh LLM keywords."""
+    import json
+
+    from heated_topics_v3.llm_keywords import extract_persona_keywords
+    from heated_topics_v3.persona_structurer import structure_persona
+    from heated_topics_v3.profile_loader import load_persona_profile
+
+    # Re-structure personal fields
+    try:
+        personal = structure_persona(level1, level2, persona_text, llm=llm)
+    except Exception:
+        from heated_topics_v3.persona_structurer import _split_heuristic
+        from heated_topics_v3.contracts import PersonaPersonal
+
+        role, subject, scenarios, value = _split_heuristic(persona_text)
+        if not role:
+            role = level1
+        if not subject:
+            subject = level2
+        if not value:
+            value = f"围绕{level2}分享"
+        personal = PersonaPersonal(
+            role=role,
+            subject=subject,
+            scenarios=tuple(scenarios[:6]) if scenarios else (),
+            value=value,
+        )
+
+    # Build minimal profile for keyword extraction
+    temp_profile_path = profile_path.parent / f"_temp_{profile_path.stem}.json"
+    import json as jsonmod
+
+    temp_payload = {
+        "user_id": profile_path.stem,
+        "level1": level1,
+        "level2": level2,
+        "personal": {
+            "role": personal.role,
+            "subject": personal.subject,
+            "scenarios": list(personal.scenarios),
+            "value": personal.value,
+        },
+        "core_keywords": [],
+    }
+    temp_profile_path.write_text(
+        jsonmod.dumps(temp_payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    try:
+        profile = load_persona_profile(temp_profile_path)
+        extraction = extract_persona_keywords(
+            profile,
+            cache_dir=cache_dir,
+            llm=llm,
+            allow_llm=llm is not None,
+        )
+        new_keywords = [k.keyword for k in extraction.keywords]
+    finally:
+        temp_profile_path.unlink(missing_ok=True)
+
+    # Write back to original file
+    payload = jsonmod.loads(profile_path.read_text(encoding="utf-8-sig"))
+    payload["level1"] = level1
+    payload["level2"] = level2
+    payload["personal"] = {
+        "role": personal.role,
+        "subject": personal.subject,
+        "scenarios": list(personal.scenarios),
+        "value": personal.value,
+    }
+    payload["core_keywords"] = new_keywords
+
+    profile_path.write_text(
+        jsonmod.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return profile_path
+
+
+def _slug_for(level2: str) -> str:
+    from heated_topics_v3.persona_slugs import slug_for_level2
+
+    return slug_for_level2(level2)
 
 
 def _cli() -> int:
     p = argparse.ArgumentParser(description="Build v2 persona JSON files from an xlsx.")
     p.add_argument("--input", dest="xlsx", type=Path, default=DEFAULT_XLSX)
     p.add_argument("--out", dest="out_dir", type=Path, default=DEFAULT_OUT)
-    p.add_argument("--use-llm", action="store_true")
+    p.add_argument("--use-llm", action="store_true", default=True)
     p.add_argument("--no-llm", action="store_true")
     p.add_argument("--regenerate", action="store_true")
     args = p.parse_args()
-    if args.use_llm and args.no_llm:
-        print("--use-llm and --no-llm are mutually exclusive", file=sys.stderr)
-        return 2
+    if args.no_llm:
+        use_llm = False
+    else:
+        use_llm = args.use_llm
     return main(
         xlsx=args.xlsx,
         out_dir=args.out_dir,
-        use_llm=args.use_llm,
+        use_llm=use_llm,
         regenerate=args.regenerate,
     )
 
