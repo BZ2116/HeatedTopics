@@ -245,3 +245,100 @@ def test_pipeline_stops_keyword_search_at_budget_and_keeps_completed_results(tmp
     assert search_keywords == ["关键词一"]
     assert timeouts == [20]
     assert result.candidates_total >= 1
+
+
+def test_custom_keywords_searched_not_llm_generated(tmp_path: Path):
+    """custom_keywords drives the search loop; profile.core_keywords must NOT be searched."""
+    profile_path = _write_profile(tmp_path)
+    searched_urls: list[str] = []
+
+    def fetcher(url: str, _timeout_seconds: int) -> str:
+        if "hot-event/hot-board" in url:
+            return json.dumps(
+                {
+                    "status": "success",
+                    "data": [
+                        {
+                            "ClusterId": "0",
+                            "Title": "无关低热度新闻",
+                            "Url": "https://www.toutiao.com/group/0/",
+                            "HotValue": 10,
+                            "QueryWord": "无关内容",
+                        }
+                    ],
+                }
+            )
+        if "so.toutiao.com/search" in url:
+            from urllib.parse import unquote
+
+            searched_urls.append(unquote(url))
+            return json.dumps({"dom": "", "count": 0})
+        if "/i" in url and "/info" in url:
+            return json.dumps({"data": {}})
+        return ""
+
+    def detail_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html><body><article><p>body</p></article></body></html>"
+
+    result = run_toutiao_pipeline_v2(
+        profile_path=profile_path,
+        output_root=tmp_path / "output",
+        fetched_at="2026-07-13T10:00:00+08:00",
+        hot_board_cache_root=tmp_path / "cache",
+        custom_keywords=("比特币", "美联储"),
+        fetcher=fetcher,
+        article_info_fetcher=fetcher,
+        detail_fetcher=detail_fetcher,
+    )
+
+    assert result.keyword_source == "custom"
+    assert result.keyword_count == 2
+
+    joined = " ".join(searched_urls)
+    assert "比特币" in joined
+    assert "美联储" in joined
+    # V2_PROFILE.core_keywords = ["AI工具", "AI写作"]; custom path must not search them.
+    assert "AI工具" not in joined
+    assert "AI写作" not in joined
+
+
+def test_skip_search_does_not_call_commit_callback(tmp_path: Path):
+    """When Path A already meets min_hot_board_before_search (5), the commit callback must not fire."""
+    profile_path = _write_profile(tmp_path)
+    calls: list[int] = []
+
+    hot_board = [
+        {
+            "ClusterId": str(i),
+            "Title": f"AI工具评测 {i}",
+            "Url": f"https://www.toutiao.com/group/{i}/",
+            "HotValue": 2_000_000,
+            "QueryWord": "AI工具评测",
+        }
+        for i in range(1, 7)
+    ]
+
+    def fetcher(url: str, _timeout_seconds: int) -> str:
+        if "hot-event/hot-board" in url:
+            return json.dumps({"status": "success", "data": hot_board})
+        if "so.toutiao.com/search" in url:
+            raise AssertionError(f"search should not run when skip_search=True: {url}")
+        if "/i" in url and "/info" in url:
+            return json.dumps({"data": {}})
+        return ""
+
+    def detail_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html><body><article><p>body</p></article></body></html>"
+
+    run_toutiao_pipeline_v2(
+        profile_path=profile_path,
+        output_root=tmp_path / "output",
+        fetched_at="2026-07-13T10:00:00+08:00",
+        hot_board_cache_root=tmp_path / "cache",
+        on_search_committed=lambda: calls.append(1),
+        fetcher=fetcher,
+        article_info_fetcher=fetcher,
+        detail_fetcher=detail_fetcher,
+    )
+
+    assert calls == []

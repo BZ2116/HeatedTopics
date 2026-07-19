@@ -4,7 +4,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import fcntl
 import pytest
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem
@@ -226,21 +225,23 @@ def test_held_lock_times_out_without_duplicate_fetch(tmp_path: Path):
     cache_path = search_cache_path(tmp_path, "2026-07-18", "AI Agent", 1, 10)
     cache_path.parent.mkdir(parents=True)
     lock_path = cache_path.with_suffix(".lock")
+    # Simulate another process holding the lock by pre-creating the lock file.
+    lock_path.touch()
     called = False
 
-    with lock_path.open("a+") as held:
-        fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    def fetch_live(_remaining_seconds):
+        nonlocal called
+        called = True
+        return [_item()]
 
-        def fetch_live(_remaining_seconds):
-            nonlocal called
-            called = True
-            return [_item()]
-
+    try:
         items, source = get_or_fetch_search_items(
             tmp_path, "2026-07-18", "AI Agent", 1, 10,
             "2026-07-18T10:00:00+08:00", fetch_live,
             lock_wait_seconds=0.05,
         )
+    finally:
+        lock_path.unlink(missing_ok=True)
 
     assert items == []
     assert source == "lock_timeout"

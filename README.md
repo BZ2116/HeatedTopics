@@ -40,7 +40,7 @@ uv run python scripts/harvest_cookies.py
 uv run python -m heated_topics_v3.cli toutiao --help
 ```
 
-跑这条应该看到 `162 passed`（说明环境就绪）：
+跑这条应该看到 `184 passed`（说明环境就绪）：
 
 ```bash
 uv run pytest -q
@@ -266,7 +266,7 @@ cache/
 - `refresh-keywords` 会写生成记录到 `cache/core_keywords/{user_id}.json`；热点运行以 profile 的 `core_keywords` 为准，不读取该缓存决定搜索词。
 - 头条搜索缓存按 UTC+8 自然日、规范化 keyword、`search_pages`、`per_page` 和 schema version 隔离；同一天不同用户可共享相同搜索结果。
 - 只有解析出真实文章的非空搜索结果才写缓存；异常、空结果、关键词占位项和反爬假响应不会复用。`article_info` 与文章详情不进入该缓存，仍按每次运行实时请求。
-- 同一缓存 key 并发 miss 时使用文件锁合并请求；等待最多 2 秒，超时后跳过该关键词，不重复调用 Search API。锁文件会保留，由操作系统在进程退出时释放锁状态。
+- 同一缓存 key 并发 miss 时使用文件锁合并请求；等待最多 2 秒，超时后跳过该关键词，不重复调用 Search API。锁基于 `os.open(O_CREAT|O_EXCL)` 原子创建锁文件，POSIX 和 Windows 一致不依赖 `fcntl`；正常路径在 `finally` 显式 `unlink` 释放，进程崩溃时锁文件残留也由 `lock_wait_seconds` 兜底超时回收。
 - 关键词搜索阶段默认共享 20 秒总预算；预算耗尽后停止后续关键词并保留已完成结果。该预算不包含热榜、`article_info`、正文、报告和落盘，因此不等于整个 pipeline 的 20 秒 SLA。
 
 `--force-hot-board-refresh` 跳过热榜缓存，`--offline` 仅在热榜环节生效 — 把 `fetcher=None` 传给 `get_or_fetch_hot_board`，等于禁用当日热榜抓取、回退到 `cache/hot_board/{date}.json` 命中或 yesterday 兜底；搜索阶段优先读取当日共享缓存，未命中时与 `article_info`、桌面页解析一样仍会发请求。
@@ -334,7 +334,7 @@ outputs/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 uv run pytest -q
 ```
 
-测试覆盖 toutiao v2 端到端、四路径、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包和 anti-bot 降级。
+测试覆盖 toutiao v2 端到端、四路径、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包、anti-bot 降级、`--custom-keyword` 自定义词替换 vs LLM 自动路径，以及 `skip_search` 时不触发配额回调。
 
 ## 每日配额与自定义关键词（上线用法）
 

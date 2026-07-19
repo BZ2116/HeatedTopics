@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import time
 from collections.abc import Callable
@@ -10,13 +11,35 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-import fcntl
-
 from heated_topics_v3.contracts import HeatMetrics, HotItem
 
 
 SCHEMA_VERSION = 1
 DEFAULT_SEARCH_CACHE_SUBDIR = "toutiao_search"
+
+
+def _acquire_lock_nonblocking(lock_path: Path) -> int | None:
+    """Atomically claim an advisory lock by creating the lock file.
+
+    Returns the open file descriptor on success, or None if another holder
+    already owns it. Works on POSIX and Windows without platform-specific
+    modules (the existence of the file *is* the lock).
+    """
+    try:
+        return os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+
+
+def _release_lock(lock_path: Path, fd: int) -> None:
+    """Release the advisory lock: close the fd and remove the lock file."""
+    try:
+        os.close(fd)
+    finally:
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def search_cache_path(
@@ -61,44 +84,44 @@ def get_or_fetch_search_items(
     if deadline is not None:
         wait_deadline = min(wait_deadline, deadline)
 
-    with lock_path.open("a+") as lock_file:
-        while True:
+    lock_fd: int | None = None
+    while True:
+        lock_fd = _acquire_lock_nonblocking(lock_path)
+        if lock_fd is not None:
+            break
+        now = monotonic()
+        if now >= wait_deadline:
+            source = "deadline_exceeded" if deadline is not None and now >= deadline else "lock_timeout"
+            return [], source
+        sleep(min(0.02, wait_deadline - now))
+
+    try:
+        cached = _load_search_items(cache_root, date, keyword, search_pages, per_page)
+        if cached:
+            return cached, "cache_after_wait"
+
+        now = monotonic()
+        if deadline is not None and now >= deadline:
+            return [], "deadline_exceeded"
+        remaining_seconds = float("inf") if deadline is None else deadline - now
+        items = fetch_live(remaining_seconds)
+        if items and all(_is_cacheable_item(item) for item in items):
             try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                now = monotonic()
-                if now >= wait_deadline:
-                    source = "deadline_exceeded" if deadline is not None and now >= deadline else "lock_timeout"
-                    return [], source
-                sleep(min(0.02, wait_deadline - now))
-
-        try:
-            cached = _load_search_items(cache_root, date, keyword, search_pages, per_page)
-            if cached:
-                return cached, "cache_after_wait"
-
-            now = monotonic()
-            if deadline is not None and now >= deadline:
-                return [], "deadline_exceeded"
-            remaining_seconds = float("inf") if deadline is None else deadline - now
-            items = fetch_live(remaining_seconds)
-            if items and all(_is_cacheable_item(item) for item in items):
-                try:
-                    _save_search_items(
-                        cache_root,
-                        date,
-                        keyword,
-                        search_pages,
-                        per_page,
-                        fetched_at,
-                        items,
-                    )
-                except (OSError, TypeError, ValueError):
-                    pass
-            return items, "fresh"
-        finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                _save_search_items(
+                    cache_root,
+                    date,
+                    keyword,
+                    search_pages,
+                    per_page,
+                    fetched_at,
+                    items,
+                )
+            except (OSError, TypeError, ValueError):
+                pass
+        return items, "fresh"
+    finally:
+        if lock_fd is not None:
+            _release_lock(lock_path, lock_fd)
 
 
 def _cache_identity(keyword: str, search_pages: int, per_page: int) -> dict[str, Any]:
