@@ -182,3 +182,87 @@ def parse_baidu_search_response(
             )
         )
     return out
+
+
+class _BaijiahaoArticleParser(HTMLParser):
+    """Pull concatenated <p> text inside the first <article> tag, skip <script>/<style>.
+
+    HTML entity decoding (e.g. &amp; &lt;) is handled automatically by
+    ``HTMLParser(convert_charrefs=True)`` (the default), which delivers
+    already-decoded text to ``handle_data``. Real baijiahao pages contain
+    entities inside <p>/<article> bodies, so this matters.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._seen_article = False
+        self._in_article = False
+        self._depth = 0
+        # Stack of opened ignored tag names ("script"/"style"). We pop only
+        # when the close-tag matches the top of the stack, so nested
+        # <script><script>...</script>...</script> stays balanced.
+        self._ignored_stack: list[str] = []
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        # First-article-only guard: once we've opened (or finished) the first
+        # <article>, any later <article> start-tag must not re-enter.
+        if tag == "article" and not self._in_article and not self._seen_article:
+            self._in_article = True
+            self._seen_article = True
+            self._depth = 1
+            return
+        if self._in_article and tag in {"script", "style"}:
+            self._ignored_stack.append(tag)
+            return
+        if self._ignored_stack:
+            return
+        if self._in_article:
+            self._depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        # Only pop the ignored-stack on a matching close-tag. This is what
+        # keeps nested <script><script>...</script>...</script> balanced.
+        if self._ignored_stack and tag == self._ignored_stack[-1]:
+            self._ignored_stack.pop()
+            return
+        if self._ignored_stack:
+            return
+        if self._in_article:
+            self._depth -= 1
+            if self._depth <= 0:
+                self._in_article = False
+
+    def handle_data(self, data: str) -> None:
+        if self._in_article and not self._ignored_stack:
+            text = " ".join(data.split())
+            if text:
+                self._parts.append(text)
+
+    def text(self) -> str:
+        return "\n".join(self._parts)
+
+
+def parse_baidu_article_response(
+    response_text: str,
+    item_id: str,
+    item_url: str,
+    fetched_at: str,
+) -> ItemDetail:
+    parser = _BaijiahaoArticleParser()
+    parser.feed(response_text)
+    content = parser.text()
+    status = "success" if content else "empty"
+    return ItemDetail(
+        item_id=item_id,
+        platform="baidu",
+        url=item_url,
+        title="",
+        author="",
+        content=content,
+        published_at="",
+        tags=(),
+        extraction_method="baijiahao_article_page",
+        fetch_status=status,
+        raw_payload={"html_length": len(response_text)},
+    )

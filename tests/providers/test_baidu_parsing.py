@@ -1,4 +1,5 @@
 from heated_topics_v3.providers.baidu import (
+    parse_baidu_article_response,
     parse_baidu_board_response,
     parse_baidu_search_response,
 )
@@ -73,3 +74,85 @@ def test_parse_search_prefers_h3_text_inside_anchor():
     articles = parse_baidu_search_response(html, source_word="头条")
     assert [a.article_id for a in articles] == ["3330000000000000003"]
     assert articles[0].title == "头条新闻标题"
+
+
+ARTICLE_HTML = """
+<html><body>
+<article>
+<p>第一段：背景介绍。</p>
+<p>第二段：核心观点。</p>
+<style>.x{}</style>
+</article>
+<div>页面其它内容，应当被忽略。</div>
+</body></html>
+"""
+
+
+def test_parse_article_extracts_paragraph_text_and_excludes_style():
+    detail = parse_baidu_article_response(
+        ARTICLE_HTML,
+        item_id="baidu_article_111",
+        item_url="https://baijiahao.baidu.com/s?id=111",
+        fetched_at="2026-07-19T20:00:00+08:00",
+    )
+    assert detail.item_id == "baidu_article_111"
+    assert detail.url == "https://baijiahao.baidu.com/s?id=111"
+    assert detail.platform == "baidu"
+    assert detail.extraction_method == "baijiahao_article_page"
+    assert detail.fetch_status == "success"
+    assert "第一段" in detail.content
+    assert "第二段" in detail.content
+    assert "页面其它内容" not in detail.content
+    assert ".x{}" not in detail.content  # style block excluded
+
+
+def test_parse_article_returns_empty_when_no_article_tag():
+    detail = parse_baidu_article_response(
+        "<html><body>no article</body></html>",
+        item_id="baidu_article_222",
+        item_url="https://baijiahao.baidu.com/s?id=222",
+        fetched_at="2026-07-19T20:00:00+08:00",
+    )
+    assert detail.fetch_status == "empty"
+    assert detail.content == ""
+
+
+def test_parse_article_keeps_only_first_article_block():
+    html = """<html><body>
+<article><p>FIRST</p></article>
+<article><p>SECOND should not appear</p></article>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-19T20:00:00+08:00"
+    )
+    assert "FIRST" in detail.content
+    assert "SECOND" not in detail.content
+    assert detail.fetch_status == "success"
+
+
+def test_parse_article_decodes_entities_inside_paragraph():
+    html = """<html><body>
+<article>
+<p>AT&amp;T &lt;研究&gt; &#x4E2D;文</p>
+</article>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-19T20:00:00+08:00"
+    )
+    assert "AT&T <研究> 中文" in detail.content  # entities decoded
+
+
+def test_parse_article_excludes_text_in_nested_script():
+    html = """<html><body>
+<article>
+<p>before nested script</p>
+<script type="application/json">{"comment":"hidden"}</script>
+<p>after nested script</p>
+</article>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-19T20:00:00+08:00"
+    )
+    assert "before nested script" in detail.content
+    assert "after nested script" in detail.content
+    assert "hidden" not in detail.content  # script body excluded
