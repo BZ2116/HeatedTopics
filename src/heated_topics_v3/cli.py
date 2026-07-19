@@ -8,11 +8,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-from heated_topics_v3.fetcher_factory import make_search_fetcher
+from heated_topics_v3.fetcher_factory import make_baidu_fetcher, make_search_fetcher
 from heated_topics_v3.hot_board_cache import utc8_today
 from heated_topics_v3.llm_client import call_llm, load_llm_config
 from heated_topics_v3.llm_keywords import KEYWORD_EXTRACTION_SYSTEM, extract_persona_keywords
 from heated_topics_v3.pipeline import (
+    run_baidu_pipeline,
     run_juejin_pipeline,
     run_toutiao_pipeline,
     run_toutiao_pipeline_v2,
@@ -44,6 +45,9 @@ def _main() -> None:
 
     toutiao = subparsers.add_parser("toutiao", help="Collect Toutiao hot list and match it to a user profile.")
     _add_toutiao_args(toutiao)
+
+    baidu = subparsers.add_parser("baidu", help="Collect Baidu hot search and match it to a user profile.")
+    _add_baidu_args(baidu)
 
     refresh_kw = subparsers.add_parser("refresh-keywords", help="Delete keyword cache for one or all users, forcing LLM re-extraction on next run.")
     _add_refresh_keywords_args(refresh_kw)
@@ -114,6 +118,8 @@ def _main() -> None:
             )
             for name, path in outputs.items():
                 print(f"{name}: {path}")
+    if args.command == "baidu":
+        _handle_baidu(args)
     if args.command == "refresh-keywords":
         _handle_refresh_keywords(args)
     if args.command == "register":
@@ -220,6 +226,37 @@ def _add_platform_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", required=True, type=Path)
     parser.add_argument("--output-root", "--output-dir", dest="output_root", default=Path("outputs"), type=Path)
     parser.add_argument("--fetched-at", default=None)
+
+
+def _add_baidu_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profile", required=True, type=Path)
+    parser.add_argument("--output-root", "--output-dir", dest="output_root", default=Path("outputs"), type=Path)
+    parser.add_argument("--cache-root", default=Path("cache"), type=Path)
+    parser.add_argument("--fetched-at", default=None)
+    parser.add_argument("--top-n", dest="top_n", default=30, type=int)
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--force-board-refresh", dest="force_board_refresh", action="store_true")
+    parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+
+
+def _handle_baidu(args) -> None:
+    fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
+    log_path = Path(__file__).resolve().parent.parent / ".baidu_fetcher_log.json"
+    fetcher = make_baidu_fetcher(log_path=log_path)
+    outputs = run_baidu_pipeline(
+        profile_path=args.profile,
+        output_root=args.output_root,
+        fetched_at=fetched_at,
+        cache_root=args.cache_root,
+        top_n=args.top_n,
+        offline=args.offline,
+        force_board_refresh=args.force_board_refresh,
+        matched_query_ids=matched_query_ids,
+        fetcher=fetcher,
+    )
+    for name, path in outputs.items():
+        print(f"{name}: {path}")
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ import math
 import random
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
@@ -431,3 +432,64 @@ def make_search_fetcher(
 
 def _slug_for_path(value: str) -> str:
     return re.sub(r"[^\w一-鿿\-]+", "_", value).strip("_")[:40]
+
+
+# ---------------------------------------------------------------------------
+# Baidu fetcher — plain urllib with mobile UA, no cookies, no stage ladder.
+# ---------------------------------------------------------------------------
+
+BAIDU_MOBILE_UA = (
+    "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+)
+
+
+def _referer_for(url: str) -> str | None:
+    host = urllib.parse.urlparse(url).netloc
+    if host.endswith("top.baidu.com"):
+        return "https://top.baidu.com/"
+    if host.endswith("m.baidu.com"):
+        return "https://m.baidu.com/"
+    if host.endswith("baijiahao.baidu.com"):
+        return "https://m.baidu.com/s"
+    return None
+
+
+def make_baidu_fetcher(
+    *,
+    timeout: int = 15,
+    log_path: Path | str | None = None,
+) -> Callable[[str, int], str]:
+    """Return a synchronous fetcher for Baidu board / search / article URLs.
+
+    Plain urllib with mobile UA and a per-host Referer. No cookies, no stage
+    ladder, no pacing — Baidu's mobile endpoints don't require any of that.
+
+    On HTTPError / URLError, the error body is returned as a string so callers
+    can inspect it (e.g. detect a captcha HTML page). Non-recoverable errors
+    (no body, or non-HTML errors) are re-raised.
+    """
+
+    def _fetcher(url: str, timeout_seconds: int = timeout) -> str:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", BAIDU_MOBILE_UA)
+        req.add_header("Accept", "application/json, text/html, */*")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+        referer = _referer_for(url)
+        if referer is not None:
+            req.add_header("Referer", referer)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                return resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body = ""
+            if body and ("<html" in body.lower() or "<!doctype" in body.lower()):
+                return body
+            raise
+        except urllib.error.URLError as exc:
+            raise
+
+    return _fetcher
