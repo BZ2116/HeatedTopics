@@ -112,8 +112,16 @@ def run_baidu_pipeline(
             cache_root_path, today, live_board
         )
     body = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
-    hot_words: list[HotItem] = parse_baidu_board_response(
-        body, fetched_at=fetched_at, matched_query_ids=matched_query_ids
+    # Offline mode with an empty cache yields an empty board marker (``{}``),
+    # leaving ``body`` blank. ``parse_baidu_board_response`` assumes valid JSON,
+    # so guard the empty case here and treat it as "no hot words" rather than
+    # crashing on ``json.loads("")``.
+    hot_words: list[HotItem] = (
+        parse_baidu_board_response(
+            body, fetched_at=fetched_at, matched_query_ids=matched_query_ids
+        )
+        if body.strip()
+        else []
     )
 
     # ---- stage 2: per-word search → synthesized article HotItems ----
