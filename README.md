@@ -190,6 +190,33 @@ uv run python -m heated_topics_v3.cli toutiao \
     --custom-keyword 比特币 --custom-keyword 美联储 --top-n 10
 ```
 
+### Baidu 热搜 (百度热搜)
+
+```powershell
+cd E:\.code\My\heatedTopics-V3
+$env:PYTHONPATH='src'
+uv run python -m heated_topics_v3.cli baidu `
+  --profile config\profiles\tech_ai_creator.json `
+  --output-root outputs `
+  --cache-root cache `
+  --top-n 30
+```
+
+Outputs land in `outputs/<profile>/baidu/run_<ts>/` (same shape as `toutiao`/`juejin`).
+
+**完整参数一览（baidu 子命令）**
+
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--profile PATH` | v1 profile JSON（必填） | - |
+| `--top-n INT` | 抓取的热词数量上限 | `30` |
+| `--output-root PATH` | 输出根目录 | `outputs` |
+| `--cache-root PATH` | 缓存根目录 | `cache` |
+| `--fetched-at ISO` | 时间戳覆盖 | 当前时间 |
+| `--offline` | 只读缓存；空缓存返回空报告 | False |
+| `--force-board-refresh` | 忽略 board 缓存跑新鲜数据 | False |
+| `--matched-query-ids ID` | 透传给 HotItem（可重复） | [] |
+
 ### 完整参数一览（toutiao 子命令）
 
 | 参数 | 作用 | 默认值 |
