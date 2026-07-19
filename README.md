@@ -177,6 +177,19 @@ uv run python -m heated_topics_v3.cli toutiao \
     --profile-v2 config/profiles/licai_001.json --top-n 10
 ```
 
+需要临时换检索词（比如跟踪突发热点、跨 persona 验证）时，传 `--custom-keyword`
+（可重复）即用这些关键词**替换本次运行**的自动抽取词，按输入顺序检索，空白值被过滤。
+profile 里的 `core_keywords` 不受影响（仍是持久 persona，只是本次不参与），本次运行的
+`keyword_source` 会标记为 `custom`。
+
+示例：
+
+```bash
+uv run python -m heated_topics_v3.cli toutiao \
+    --profile-v2 config/profiles/licai_001.json \
+    --custom-keyword 比特币 --custom-keyword 美联储 --top-n 10
+```
+
 ### 完整参数一览（toutiao 子命令）
 
 | 参数 | 作用 | 默认值 |
@@ -336,7 +349,7 @@ uv run pytest -q
 
 测试覆盖 toutiao v2 端到端、四路径、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包、anti-bot 降级、`--custom-keyword` 自定义词替换 vs LLM 自动路径，以及 `skip_search` 时不触发配额回调。
 
-## 每日配额与自定义关键词（上线用法）
+## 每日配额（上线用法）
 
 ### 每日配额
 
@@ -354,18 +367,6 @@ uv run pytest -q
 本项目会被另一个项目集成。若由前端自行管理调用次数，请在每次调用时传
 `--skip-quota`，后端将完全跳过配额检查与计数（不读写 `state/quota/`）。
 不传该 flag 时，后端用自己的默认配额状态兜底，CLI 手动跑也会受同一份状态限制。
-
-### 自定义关键词
-
-传入 `--custom-keyword`（可重复）即用这些关键词**替换本次运行**的自动抽取关键词，
-按输入顺序检索匹配；空白值会被过滤。`config/profiles/{user}.json` 里的
-`core_keywords` 不受影响（仍是持久 persona，只是本次不参与）。本次运行的
-`keyword_source` 会标记为 `custom`。
-
-示例：
-
-    python -m heated_topics_v3.cli toutiao --profile-v2 config/profiles/licai_001.json \
-        --custom-keyword 比特币 --custom-keyword 美联储 --top-n 10
 
 ### 关键词生成机制（初始化时调用 LLM）
 
