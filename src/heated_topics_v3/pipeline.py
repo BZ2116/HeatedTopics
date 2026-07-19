@@ -6,12 +6,26 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from heated_topics_v3.contracts import ExtractedKeyword, HotItem, ItemDetail, MatchResult, UserProfile
+from heated_topics_v3.contracts import ExtractedKeyword, HeatMetrics, HotItem, ItemDetail, MatchResult, UserProfile
+from heated_topics_v3.baidu_cache import (
+    get_or_fetch_article_with_record,
+    get_or_fetch_board_with_record,
+    get_or_fetch_search_with_record,
+)
 from heated_topics_v3.hot_board_cache import get_or_fetch_hot_board, hot_board_cache_path, utc8_today
 from heated_topics_v3.llm_keywords import PersonaKeywordExtraction
 from heated_topics_v3.matching import match_hot_item_to_queries
 from heated_topics_v3.profile_loader import is_legacy_profile, load_persona_profile
 from heated_topics_v3.profile_queries import build_topic_queries
+from heated_topics_v3.providers.baidu import (
+    BaiduSearchArticle,
+    fetch_baidu_article_text,
+    fetch_baidu_board_text,
+    fetch_baidu_search_text,
+    parse_baidu_article_response,
+    parse_baidu_board_response,
+    parse_baidu_search_response,
+)
 from heated_topics_v3.providers.juejin import fetch_juejin_hot_items, fetch_juejin_item_detail
 from heated_topics_v3.providers.toutiao import (
     attach_article_heat_fields,
@@ -26,6 +40,7 @@ from heated_topics_v3.providers.toutiao import (
     resolve_toutiao_content_url,
 )
 from heated_topics_v3.reporting import (
+    render_baidu_report,
     render_juejin_report,
     render_toutiao_report,
     render_toutiao_report_v2,
@@ -42,6 +57,212 @@ from heated_topics_v3.toutiao_paths import (
 )
 from heated_topics_v3.toutiao_search_cache import get_or_fetch_search_items
 from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
+
+def _fetch_text_default(url: str, timeout_seconds: int = 15) -> str:
+    """Stand-in fetcher used when callers omit one — never silent, never online.
+
+    The pipeline must surface a clear error rather than silently substituting a
+    urllib fallback. Tests inject deterministic fetchers; CLI entrypoints in
+    Task 7 wire a real fetcher. This helper only exists so the offline branch
+    has something to bind to when no fetcher is provided.
+    """
+    raise RuntimeError(
+        f"Baidu fetcher not provided and live mode unavailable for {url}"
+    )
+
+
+def run_baidu_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    cache_root: Path,
+    fetcher: Callable[[str, int], str] | None = None,
+    search_fetcher: Callable[[str, int], str] | None = None,
+    article_fetcher: Callable[[str, int], str] | None = None,
+    top_n: int = 30,
+    offline: bool = False,
+    force_board_refresh: bool = False,
+    matched_query_ids: tuple[str, ...] = (),
+) -> dict[str, Path]:
+    """Three-stage Baidu pipeline: board → per-word search → per-article body."""
+    profile = load_user_profile(profile_path)
+    board_fetch = fetcher or _fetch_text_default
+    search_fetch = search_fetcher or board_fetch
+    article_fetch = article_fetcher or board_fetch
+
+    today = utc8_today()
+    cache_root_path = Path(cache_root)
+
+    # ---- stage 1: board ----
+    def live_board(_date: str) -> dict[str, str]:
+        return {"response_text": fetch_baidu_board_text(board_fetch)}
+
+    if force_board_refresh:
+        board_payload = {"response_text": fetch_baidu_board_text(board_fetch)}
+        # refresh path: ignore cache, just write a fresh snapshot back so a
+        # subsequent non-offline run sees the data.
+        get_or_fetch_board_with_record(cache_root_path, today, lambda d: board_payload)
+    elif offline:
+        board_payload, _src = get_or_fetch_board_with_record(
+            cache_root_path, today, live_board, deadline=time.monotonic()
+        )
+    else:
+        board_payload, _src = get_or_fetch_board_with_record(
+            cache_root_path, today, live_board
+        )
+    body = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
+    hot_words: list[HotItem] = parse_baidu_board_response(
+        body, fetched_at=fetched_at, matched_query_ids=matched_query_ids
+    )
+
+    # ---- stage 2: per-word search → synthesized article HotItems ----
+    expanded: list[HotItem] = []
+    for word_item in hot_words[:top_n]:
+        word = word_item.title
+
+        def live_search(_w: str = word) -> list[dict[str, str]]:
+            html = fetch_baidu_search_text(word, search_fetch)
+            articles: list[BaiduSearchArticle] = parse_baidu_search_response(html, source_word=word)
+            return [
+                {
+                    "article_id": a.article_id,
+                    "title": a.title,
+                    "url": a.url,
+                    "source_word": a.source_word,
+                }
+                for a in articles
+            ]
+
+        if offline:
+            ids_payload, _src = get_or_fetch_search_with_record(
+                cache_root_path, today, word, live_search, deadline=time.monotonic()
+            )
+        else:
+            ids_payload, _src = get_or_fetch_search_with_record(
+                cache_root_path, today, word, live_search
+            )
+        if not isinstance(ids_payload, list):
+            continue
+        # Keep at most ONE baijiahao article per hot word — the search page
+        # surfaces many links, but only the first baijiahao entry represents
+        # the word's most relevant recall. Capping here also keeps downstream
+        # article-body fetches bounded and prevents one noisy page from
+        # dominating the matched set.
+        word_added = False
+        for entry in ids_payload:
+            if word_added:
+                break
+            if not isinstance(entry, dict):
+                continue
+            article_id = str(entry.get("article_id", "")).strip()
+            if not article_id:
+                continue
+            word_added = True
+            expanded.append(
+                HotItem(
+                    item_id=f"baidu_article_{article_id}",
+                    platform="baidu",
+                    item_type="article",
+                    title=word,
+                    url=str(entry.get("url", "") or ""),
+                    rank=None,
+                    heat=HeatMetrics(value=None, label="", metric_name="search_recall", metrics={}),
+                    summary="",
+                    category="baijiahao",
+                    matched_query_ids=matched_query_ids,
+                    fetched_at=fetched_at,
+                    fetch_status="success",
+                    raw_payload={
+                        "source_kind": "baidu_search_recall",
+                        "source_word": word,
+                        "source_word_url": word_item.url,
+                        "article_id": article_id,
+                    },
+                )
+            )
+
+    # ---- matching ----
+    queries = tuple(build_topic_queries(profile))
+    matches = [
+        result
+        for item in expanded
+        if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
+    ]
+
+    # ---- stage 3: per-article body ----
+    item_details: list[ItemDetail] = []
+    for match in matches:
+        item = match.item
+        article_id = str(item.raw_payload.get("article_id", "")).strip()
+
+        def live_article(_aid: str = article_id) -> dict[str, object]:
+            html = fetch_baidu_article_text(article_id, article_fetch)
+            detail = parse_baidu_article_response(
+                html,
+                item_id=item.item_id,
+                item_url=item.url,
+                fetched_at=fetched_at,
+            )
+            return {
+                "title": item.title,
+                "content": detail.content,
+                "extraction_method": detail.extraction_method,
+                "fetch_status": detail.fetch_status,
+                "html_length": len(html),
+            }
+
+        if offline:
+            payload, _src = get_or_fetch_article_with_record(
+                cache_root_path, today, article_id, live_article, deadline=time.monotonic()
+            )
+        else:
+            payload, _src = get_or_fetch_article_with_record(
+                cache_root_path, today, article_id, live_article
+            )
+        if not isinstance(payload, dict) or not payload:
+            detail = ItemDetail(
+                item_id=item.item_id,
+                platform=item.platform,
+                url=item.url,
+                title=item.title,
+                author="",
+                content="",
+                published_at="",
+                tags=(),
+                extraction_method="baijiahao_article_page",
+                fetch_status="empty",
+                raw_payload={"html_length": 0},
+            )
+        else:
+            content = str(payload.get("content", ""))
+            detail = ItemDetail(
+                item_id=item.item_id,
+                platform=item.platform,
+                url=item.url,
+                title=str(payload.get("title", item.title)),
+                author="",
+                content=content,
+                published_at="",
+                tags=(),
+                extraction_method=str(payload.get("extraction_method", "baijiahao_article_page")),
+                fetch_status=str(payload.get("fetch_status", "success" if content else "empty")),
+                raw_payload={"html_length": int(payload.get("html_length", 0) or 0)},
+            )
+        item_details.append(detail)
+
+    details_by_item_id = {detail.item_id: detail for detail in item_details}
+
+    return _run_platform_pipeline(
+        profile_path=profile_path,
+        output_root=output_root,
+        fetched_at=fetched_at,
+        source_id="baidu",
+        hot_items_fetcher=lambda _fetched_at: expanded,
+        item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
+        report_renderer=render_baidu_report,
+    )
+
 
 def run_juejin_pipeline(
     profile_path: Path,

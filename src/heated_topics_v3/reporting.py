@@ -14,6 +14,21 @@ def render_juejin_report(
     return _render_platform_report("Juejin Hot Topics Report", profile, matches, fetched_at, item_details)
 
 
+def render_baidu_report(
+    profile: UserProfile,
+    matches: list[MatchResult],
+    fetched_at: str,
+    item_details: list[ItemDetail] | None = None,
+) -> str:
+    body = _render_platform_report("Baidu 热搜日报", profile, matches, fetched_at, item_details)
+    if not matches:
+        # Design spec: empty Baidu run must surface a dedicated notice so a
+        # human reader does not mistake a quiet board for a healthy run.
+        notice = "<h3>本次未抓到任何条目</h3>"
+        return body.replace("No matched hot topics.", notice)
+    return body
+
+
 def render_toutiao_report(
     profile: UserProfile,
     matches: list[MatchResult],

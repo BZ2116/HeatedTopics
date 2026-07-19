@@ -8,11 +8,41 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import quote
 
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
+
+
+BOARD_URL = "https://top.baidu.com/api/board?platform=wise&page=realtime"
+SEARCH_URL_TEMPLATE = "https://m.baidu.com/s?word={word}"
+ARTICLE_URL_TEMPLATE = "https://baijiahao.baidu.com/s?id={article_id}"
+
+
+def fetch_baidu_board_text(
+    fetcher: Callable[[str, int], str],
+    timeout_seconds: int = 15,
+) -> str:
+    return fetcher(BOARD_URL, timeout_seconds)
+
+
+def fetch_baidu_search_text(
+    word: str,
+    fetcher: Callable[[str, int], str],
+    timeout_seconds: int = 15,
+) -> str:
+    return fetcher(SEARCH_URL_TEMPLATE.format(word=quote(word)), timeout_seconds)
+
+
+def fetch_baidu_article_text(
+    article_id: str,
+    fetcher: Callable[[str, int], str],
+    timeout_seconds: int = 20,
+) -> str:
+    return fetcher(ARTICLE_URL_TEMPLATE.format(article_id=article_id), timeout_seconds)
 
 
 def _safe_word_slug(word: str) -> str:
