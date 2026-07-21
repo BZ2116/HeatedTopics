@@ -273,16 +273,56 @@ class _BaijiahaoArticleParser(HTMLParser):
         return "\n".join(self._parts)
 
 
+# Baijiahao has migrated away from wrapping article body in <article>/<p>
+# tags. Current (2026) pages ship the body as a sequence of bare SSR text
+# runs sitting directly between ``>`` and ``<`` — typically 8-50 segments,
+# 30-300 chars each, in document order. The first segment is usually the
+# article title (it also appears in <title>, which is why we dedupe).
+#
+# Threshold of 30 chars filters out JSON keys, CSS class names, and short
+# noise that would otherwise dominate the match list on JS-heavy pages.
+_SSR_TEXT_RUN_RE = re.compile(r'>([^<>{}\\\s]{30,})<')
+
+
+def _extract_baijiahao_ssr_text(html: str) -> str:
+    """Fallback article-body extractor for SSR-only baijiahao pages.
+
+    Returns concatenated text runs (deduped, in document order), or empty
+    string when nothing meets the length threshold. Used only when the
+    <article>-tag parser returns empty.
+    """
+    seen: set[str] = set()
+    parts: list[str] = []
+    for match in _SSR_TEXT_RUN_RE.finditer(html):
+        text = " ".join(match.group(1).split())
+        if text in seen:
+            continue
+        seen.add(text)
+        parts.append(text)
+    return "\n".join(parts)
+
+
 def parse_baidu_article_response(
     response_text: str,
     item_id: str,
     item_url: str,
     fetched_at: str,
 ) -> ItemDetail:
+    # Try <article>-tag path first (backwards compatible with old HTML).
     parser = _BaijiahaoArticleParser()
     parser.feed(response_text)
-    content = parser.text()
-    status = "success" if content else "empty"
+    article_text = parser.text()
+    if article_text:
+        content = article_text
+        method = "baijiahao_article_page"
+        status = "success"
+    else:
+        # SSR fallback for pages without an <article> wrapper. The current
+        # baijiahao layout puts article body into SSR text runs that the
+        # HTMLParser cannot reach, so we extract them with a regex.
+        content = _extract_baijiahao_ssr_text(response_text)
+        method = "baijiahao_ssr_text_runs" if content else "baijiahao_article_page"
+        status = "success" if content else "empty"
     return ItemDetail(
         item_id=item_id,
         platform="baidu",
@@ -292,7 +332,7 @@ def parse_baidu_article_response(
         content=content,
         published_at="",
         tags=(),
-        extraction_method="baijiahao_article_page",
+        extraction_method=method,
         fetch_status=status,
         raw_payload={"html_length": len(response_text)},
     )

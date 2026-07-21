@@ -156,3 +156,82 @@ def test_parse_article_excludes_text_in_nested_script():
     assert "before nested script" in detail.content
     assert "after nested script" in detail.content
     assert "hidden" not in detail.content  # script body excluded
+
+
+# Baijiahao migrated away from <article>/<p> wrappers. Current pages ship
+# the article body as bare SSR text runs (8-50 segments, 30-300 chars each,
+# in document order). The parser must fall back to those runs when no
+# <article> tag is found.
+
+SSR_HTML = """<html><head>
+<title>携手推动人工智能造福人类</title>
+<script>var cfg = {"appId":"x1","key":"short","desc":"noise"};</script>
+</head><body>
+<span>携手推动人工智能造福人类——习近平主席重要讲话为加强全球人工智能治理贡献中国智慧</span>
+<div>第一段正文内容，系统推进全球人工智能发展治理，贡献中国智慧与方案。</div>
+<div>第二段正文内容，携手推动人工智能成为造福人类的国际公共产品，构建人类命运共同体。</div>
+</body></html>"""
+
+
+def test_parse_article_falls_back_to_ssr_text_runs_when_no_article_tag():
+    detail = parse_baidu_article_response(
+        SSR_HTML,
+        item_id="baidu_article_ssr_001",
+        item_url="https://baijiahao.baidu.com/s?id=999",
+        fetched_at="2026-07-21T20:00:00+08:00",
+    )
+    assert detail.fetch_status == "success"
+    assert detail.extraction_method == "baijiahao_ssr_text_runs"
+    assert "携手推动人工智能造福人类" in detail.content
+    assert "第一段正文内容" in detail.content
+    assert "第二段正文内容" in detail.content
+    # Short JSON keys / values excluded by 30-char threshold
+    assert "noise" not in detail.content
+    assert "appId" not in detail.content
+
+
+def test_parse_article_prefers_article_tag_over_ssr_fallback():
+    html = """<html><body>
+<article><p>INSIDE_ARTICLE_TAG_BODY</p></article>
+<span>SSR_RUN_LONG_ENOUGH_TO_PASS_THRESHOLD_BUT_SHOULD_BE_IGNORED</span>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-21T20:00:00+08:00"
+    )
+    assert "INSIDE_ARTICLE_TAG_BODY" in detail.content
+    assert "SSR_RUN_LONG" not in detail.content
+    assert detail.extraction_method == "baijiahao_article_page"
+
+
+def test_parse_article_dedupes_repeated_ssr_runs():
+    """Article title typically appears in <title> and as an SSR run — the
+    fallback extractor must dedupe so the title isn't echoed twice."""
+    html = """<html><head>
+<title>携手推动人工智能造福人类</title>
+</head><body>
+<span>携手推动人工智能造福人类——习近平主席重要讲话为加强全球人工智能治理贡献中国智慧</span>
+<span>携手推动人工智能造福人类——习近平主席重要讲话为加强全球人工智能治理贡献中国智慧</span>
+<span>第一段正文内容，系统推进全球人工智能发展治理，贡献中国智慧与方案。</span>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-21T20:00:00+08:00"
+    )
+    assert detail.fetch_status == "success"
+    title_count = detail.content.count("携手推动人工智能造福人类")
+    assert title_count == 1, f"title appears {title_count} times, expected 1"
+    assert "第一段正文内容" in detail.content
+
+
+def test_parse_article_ssr_fallback_keeps_empty_when_too_short():
+    """SSR fallback must yield empty (not crash) when no run meets the
+    30-char threshold — keeps the existing 'empty' contract intact."""
+    html = """<html><body>
+<span>too short</span>
+<span>also too short</span>
+<script>var x={"k":"v"}</script>
+</body></html>"""
+    detail = parse_baidu_article_response(
+        html, item_id="x", item_url="u", fetched_at="2026-07-21T20:00:00+08:00"
+    )
+    assert detail.fetch_status == "empty"
+    assert detail.content == ""
