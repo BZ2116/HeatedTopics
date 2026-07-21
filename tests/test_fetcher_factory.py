@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import heated_topics_v3.fetcher_factory as fetcher_factory
-from heated_topics_v3.fetcher_factory import SearchFetcher
+from heated_topics_v3.fetcher_factory import SearchFetcher, _referer_for
 
 
 def _fetcher(tmp_path: Path, *, paced: bool) -> SearchFetcher:
@@ -58,3 +58,14 @@ def test_stage_fallbacks_share_one_total_timeout_budget(tmp_path, monkeypatch):
     instance._fetch_with_active("https://so.toutiao.com/search/", 5)
 
     assert attempts == [(fetcher_factory.STAGE_URLLIB, 5)]
+
+
+def test_referer_for_baidu_hosts():
+    # News search host → news search referer (post-2026-07-21 switch from m.baidu.com).
+    assert _referer_for("https://www.baidu.com/s?wd=test&tn=news") == "https://www.baidu.com/"
+    # baijiahao article pages need a baidu referer (was m.baidu.com/s before the switch).
+    assert _referer_for("https://baijiahao.baidu.com/s?id=123") == "https://www.baidu.com/s"
+    # Board endpoint unchanged.
+    assert _referer_for("https://top.baidu.com/api/board") == "https://top.baidu.com/"
+    # Unknown hosts return None.
+    assert _referer_for("https://example.com/foo") is None

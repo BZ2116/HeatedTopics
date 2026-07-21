@@ -18,7 +18,10 @@ from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
 
 
 BOARD_URL = "https://top.baidu.com/api/board?platform=wise&page=realtime"
-SEARCH_URL_TEMPLATE = "https://m.baidu.com/s?word={word}"
+# News search (tn=news) is captcha-free under repeated calls — mobile search
+# (m.baidu.com/s?word=...) hits 100% captcha. Live evidence: 10/10 calls in
+# 2026-07-21 stress test, 0 captchas; see scripts/probe_news_search_stress.py.
+SEARCH_URL_TEMPLATE = "https://www.baidu.com/s?wd={word}&tn=news"
 ARTICLE_URL_TEMPLATE = "https://baijiahao.baidu.com/s?id={article_id}"
 
 

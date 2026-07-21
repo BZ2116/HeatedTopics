@@ -448,10 +448,10 @@ def _referer_for(url: str) -> str | None:
     host = urllib.parse.urlparse(url).netloc
     if host.endswith("top.baidu.com"):
         return "https://top.baidu.com/"
-    if host.endswith("m.baidu.com"):
-        return "https://m.baidu.com/"
+    if host.endswith("www.baidu.com"):
+        return "https://www.baidu.com/"
     if host.endswith("baijiahao.baidu.com"):
-        return "https://m.baidu.com/s"
+        return "https://www.baidu.com/s"
     return None
 
 
