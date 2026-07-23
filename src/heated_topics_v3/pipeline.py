@@ -41,6 +41,7 @@ from heated_topics_v3.providers.toutiao import (
 )
 from heated_topics_v3.reporting import (
     render_baidu_report,
+    render_bilibili_report,
     render_juejin_report,
     render_toutiao_report,
     render_toutiao_report_v2,
@@ -57,6 +58,19 @@ from heated_topics_v3.toutiao_paths import (
 )
 from heated_topics_v3.toutiao_search_cache import get_or_fetch_search_items
 from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
+from heated_topics_v3.bilibili_cache import (
+    get_or_fetch_article_with_record as bilibili_get_article,
+    get_or_fetch_search_with_record as bilibili_get_search,
+)
+from heated_topics_v3.providers.bilibili import (
+    fetch_bilibili_article_text,
+    fetch_bilibili_nav,
+    fetch_bilibili_search_text,
+    build_search_url,
+    parse_bilibili_article_response,
+    parse_bilibili_search_response,
+)
+from heated_topics_v3.bilibili_wbi import img_sub_from_nav
 
 def _fetch_text_default(url: str, timeout_seconds: int = 15) -> str:
     """Stand-in fetcher used when callers omit one — never silent, never online.
@@ -269,6 +283,159 @@ def run_baidu_pipeline(
         hot_items_fetcher=lambda _fetched_at: expanded,
         item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
         report_renderer=render_baidu_report,
+    )
+
+
+def run_bilibili_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    cache_root: Path,
+    fetcher: Callable[[str, int], str] | None = None,
+    top_n: int = 20,
+    offline: bool = False,
+    force_search_refresh: bool = False,
+    force_article_refresh: bool = False,
+    matched_query_ids: tuple[str, ...] = (),
+) -> dict[str, Path]:
+    """两段 B站 pipeline：关键词搜专栏 → 专栏正文。"""
+    profile = load_user_profile(profile_path)
+    fetch = fetcher or _fetch_text_default
+    today = utc8_today()
+    cache_root_path = Path(cache_root)
+    stats = BaiduCacheStats()
+
+    # 对齐 Toutiao：B 站无 board 兜底，core_keywords 为空 → 跳过整个 pipeline
+    # （不拉 nav、不跑 search、不抓 article），产出空 hot_items + 空报告。
+    if not profile.core_keywords:
+        return _run_platform_pipeline(
+            profile_path=profile_path,
+            output_root=output_root,
+            fetched_at=fetched_at,
+            source_id="bilibili",
+            hot_items_fetcher=lambda _f: [],
+            item_detail_fetcher=lambda _it: None,
+            report_renderer=render_bilibili_report,
+            cache_stats=stats,
+        )
+
+    # WBI key（单次 run 拉一次 nav）
+    img_key, sub_key = "", ""
+    if not offline:
+        try:
+            img_key, sub_key = img_sub_from_nav(fetch_bilibili_nav(fetch))
+        except Exception:
+            img_key, sub_key = "", ""
+
+    expanded: list[HotItem] = []
+    for word in profile.core_keywords[:top_n]:
+        def live_search(_w: str = word) -> list[dict]:
+            url = build_search_url(_w, page=1, img_key=img_key, sub_key=sub_key)
+            text = fetch_bilibili_search_text(url, fetch)
+            items = parse_bilibili_search_response(text, source_word=_w, fetched_at=fetched_at)
+            return [
+                {"cvid": it.raw_payload["cvid"], "title": it.title, "url": it.url,
+                 "views": it.heat.metrics.get("views", 0), "likes": it.heat.metrics.get("likes", 0),
+                 "replies": it.heat.metrics.get("replies", 0), "desc": it.summary,
+                 "author": it.raw_payload.get("author", ""), "source_word": _w}
+                for it in items
+            ]
+
+        if force_search_refresh:
+            payload, src = bilibili_get_search(cache_root_path, today, word, live_search, force_refresh=True)
+        elif offline:
+            payload, src = bilibili_get_search(cache_root_path, today, word, live_search, deadline=time.monotonic())
+        else:
+            payload, src = bilibili_get_search(cache_root_path, today, word, live_search)
+        stats.record("search", src, forced=force_search_refresh)
+        if not isinstance(payload, list):
+            continue
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            cvid = str(entry.get("cvid", "")).strip()
+            if not cvid:
+                continue
+            expanded.append(
+                HotItem(
+                    item_id=f"bilibili_article_{cvid}",
+                    platform="bilibili",
+                    item_type="article",
+                    title=str(entry.get("title") or word),
+                    url=str(entry.get("url", "")),
+                    rank=None,
+                    heat=HeatMetrics(
+                        value=int(entry.get("views", 0) or 0),
+                        label=str(entry.get("views", "")),
+                        metric_name="article_view",
+                        metrics={"views": int(entry.get("views", 0) or 0),
+                                 "likes": int(entry.get("likes", 0) or 0),
+                                 "replies": int(entry.get("replies", 0) or 0)},
+                    ),
+                    summary=str(entry.get("desc", "")),
+                    category="bilibili_article",
+                    matched_query_ids=matched_query_ids,
+                    fetched_at=fetched_at,
+                    fetch_status="success",
+                    raw_payload={"source_kind": "bilibili_search_recall",
+                                 "cvid": cvid,
+                                 "author": entry.get("author", "")},
+                )
+            )
+
+    queries = tuple(build_topic_queries(profile))
+    matches = [
+        result for item in expanded
+        if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
+    ]
+
+    item_details: list[ItemDetail] = []
+    for match in matches:
+        item = match.item
+        cvid = str(item.raw_payload.get("cvid", "")).strip()
+
+        def live_article(_cvid: str = cvid, _item=item) -> dict:
+            html = fetch_bilibili_article_text(_cvid, fetch)
+            detail = parse_bilibili_article_response(
+                html, item_id=_item.item_id, item_url=_item.url, fetched_at=fetched_at)
+            return {"title": detail.title or _item.title, "content": detail.content,
+                    "author": detail.author, "extraction_method": detail.extraction_method,
+                    "fetch_status": detail.fetch_status, "html_length": len(html)}
+
+        if force_article_refresh:
+            payload, src = bilibili_get_article(cache_root_path, today, cvid, live_article, force_refresh=True)
+        elif offline:
+            payload, src = bilibili_get_article(cache_root_path, today, cvid, live_article, deadline=time.monotonic())
+        else:
+            payload, src = bilibili_get_article(cache_root_path, today, cvid, live_article)
+        stats.record("article", src, forced=force_article_refresh)
+        if not isinstance(payload, dict) or not payload:
+            detail = ItemDetail(item_id=item.item_id, platform="bilibili", url=item.url,
+                                title=item.title, author="", content="", published_at="",
+                                tags=(), extraction_method="bilibili_article_view",
+                                fetch_status="empty", raw_payload={"html_length": 0})
+        else:
+            content = str(payload.get("content", ""))
+            detail = ItemDetail(item_id=item.item_id, platform="bilibili", url=item.url,
+                                title=str(payload.get("title", item.title)),
+                                author=str(payload.get("author", "")), content=content,
+                                published_at="", tags=(),
+                                extraction_method=str(payload.get("extraction_method", "bilibili_article_view")),
+                                fetch_status=str(payload.get("fetch_status", "success" if content else "empty")),
+                                raw_payload={"html_length": int(payload.get("html_length", 0) or 0)})
+        item_details.append(detail)
+
+    details_by_item_id = {d.item_id: d for d in item_details}
+    return _run_platform_pipeline(
+        profile_path=profile_path,
+        output_root=output_root,
+        fetched_at=fetched_at,
+        source_id="bilibili",
+        hot_items_fetcher=lambda _f: expanded,
+        item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
+        report_renderer=render_bilibili_report,
+        cache_stats=stats,
     )
 
 

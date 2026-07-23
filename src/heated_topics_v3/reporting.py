@@ -88,6 +88,23 @@ def _detail_status(detail: ItemDetail | None) -> str:
     return f"{detail.extraction_method}, {len(detail.content)} chars"
 
 
+def render_bilibili_report(
+    profile: UserProfile,
+    matches: list[MatchResult],
+    fetched_at: str,
+    item_details: list[ItemDetail] | None = None,
+    cache_stats: "BaiduCacheStats | None" = None,
+) -> str:
+    body = _render_platform_report("B站专栏日报", profile, matches, fetched_at, item_details)
+    if cache_stats is not None:
+        section = _render_cache_stats_section(cache_stats)
+        marker = "## Matched Topics"
+        body = body.replace(marker, section + marker, 1) if marker in body else body.rstrip() + "\n\n" + section + "\n"
+    if not matches:
+        return body.replace("No matched hot topics.", "<h3>本次未抓到任何条目</h3>")
+    return body
+
+
 # ---------------------------------------------------------------------------
 # Toutiao v2 report (persona-driven)
 # ---------------------------------------------------------------------------
