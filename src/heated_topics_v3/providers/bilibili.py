@@ -2,6 +2,7 @@
 window.__INITIAL_STATE__ 里的 readInfo。"""
 from __future__ import annotations
 
+import html
 import json
 import re
 import urllib.parse
@@ -15,7 +16,10 @@ BILIBILI_NAV_URL = "https://api.bilibili.com/x/web-interface/nav"
 BILIBILI_READ_URL = "https://www.bilibili.com/read/cv"
 
 _EM_RE = re.compile(r"</?em[^>]*>")
-_INITIAL_STATE_RE = re.compile(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});", re.DOTALL)
+_INITIAL_STATE_RE = re.compile(
+    r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;\s*</script>",
+    re.DOTALL,
+)
 _TAG_RE = re.compile(r"<[^>]+>")
 
 
@@ -137,13 +141,14 @@ def parse_bilibili_article_response(response_text: str, *, item_id: str, item_ur
     )
 
 
-def _html_to_text(html: str) -> str:
-    text = _TAG_RE.sub("\n", html)
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    return "\n".join(lines)
+def _html_to_text(raw_html: str) -> str:
+    text = _TAG_RE.sub(" ", raw_html)
+    text = html.unescape(text)
+    lines = [re.sub(r"\s+", " ", ln).strip() for ln in text.splitlines()]
+    return "\n".join(ln for ln in lines if ln)
 
 
-def _int_or_none(value):
+def _int_or_none(value) -> int | None:
     try:
         return int(value)
     except (TypeError, ValueError):
