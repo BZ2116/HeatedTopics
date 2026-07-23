@@ -127,6 +127,18 @@ class QualifiedArticle:
 
 
 @dataclass(frozen=True)
+class SearchCacheRecord:
+    status: Literal["success", "empty", "failed"]
+    business_date: str
+    platform: str
+    normalized_keyword: str
+    collected_at: str
+    articles: tuple[QualifiedArticle, ...] = ()
+    rejected: tuple[Mapping[str, Any], ...] = ()
+    retry_after: str | None = None
+
+
+@dataclass(frozen=True)
 class PlatformCollectionStatus:
     platform: str
     status: CollectionStatus

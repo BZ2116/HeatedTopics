@@ -6,14 +6,76 @@ from pathlib import Path
 import pytest
 
 from heated_topics_v3.contracts import (
+    ContentValidation,
     DailySnapshot,
+    HeatEvidence,
     HeatMetrics,
     HotItem,
+    ItemDetail,
     PlatformCollectionStatus,
+    QualifiedArticle,
     RecommendationBundle,
     RecommendationItem,
+    SearchCacheRecord,
 )
 from heated_topics_v3.storage import FileRepository
+
+
+def make_qualified_article(item_id="sina-1", **changes):
+    item = HotItem(
+        item_id=item_id,
+        platform="sina_news",
+        title="人工智能突破",
+        url="https://example.test/a",
+        rank=1,
+        heat=HeatMetrics(
+            value=100,
+            label="100",
+            metric_name="top_num",
+            metrics={"top_num": 100, "comments": 30},
+        ),
+        summary="摘要",
+        publication_time="2026-07-22T09:00:00+08:00",
+        collected_at="2026-07-22T08:00:00+08:00",
+        raw_payload={"commentid": "1-2-3"},
+    )
+    detail = ItemDetail(
+        item_id=item_id,
+        content="正文段落一。正文段落二。正文段落三。",
+        content_status="full_text",
+        publication_time="2026-07-22T09:00:00+08:00",
+        collected_at="2026-07-22T08:00:00+08:00",
+        source_url="https://example.test/a",
+        fetch_status="success",
+    )
+    evidence = HeatEvidence(
+        source_kind="official_hot_board",
+        platform_rank=1,
+        native_hot_value=100.0,
+        metrics={"top_num": 100.0, "comments": 30.0},
+        threshold_metrics={"comments": 10.0},
+        qualified_by=("official_hot_board",),
+    )
+    validation = ContentValidation(
+        status="accepted",
+        parser="sina_dom",
+        character_count=300,
+        paragraph_count=3,
+        reasons=(),
+    )
+    article = QualifiedArticle(
+        hot_item=item,
+        detail=detail,
+        heat_evidence=evidence,
+        content_validation=validation,
+        platform_heat_score=0.42,
+    )
+    return replace(article, **changes)
+
+
+@pytest.fixture
+def qualified_article():
+    return make_qualified_article()
 
 
 def hot_item(**changes):
@@ -240,3 +302,154 @@ def test_user_result_storage_rejects_resolved_user_results_outside_data_root(
         )
 
     assert not (outside / "safe-user").exists()
+
+
+def test_eligible_and_rejected_are_separate(tmp_path, qualified_article):
+    repository = FileRepository(tmp_path)
+    repository.save_eligible("2026-07-23", "sina_news", (qualified_article,))
+    repository.save_rejected(
+        "2026-07-23",
+        "sina_news",
+        ({"item_id": "bad", "reasons": ["too_short"]},),
+    )
+
+    loaded = repository.load_eligible("2026-07-23", "sina_news")
+    assert [item.hot_item.item_id for item in loaded] == [
+        qualified_article.hot_item.item_id
+    ]
+    assert loaded == (qualified_article,)
+
+    rejected = repository._read_json(
+        tmp_path / "daily_hot_lists/2026-07-23/rejected/sina_news.json"
+    )
+    assert rejected == [{"item_id": "bad", "reasons": ["too_short"]}]
+
+    # eligible and rejected occupy distinct subdirectories.
+    assert (tmp_path / "daily_hot_lists/2026-07-23/eligible/sina_news.json").is_file()
+    assert (tmp_path / "daily_hot_lists/2026-07-23/rejected/sina_news.json").is_file()
+
+
+def test_search_cache_hashes_keyword_and_distinguishes_states(
+    tmp_path, qualified_article
+):
+    repository = FileRepository(tmp_path)
+
+    repository.save_search_cache(
+        "2026-07-23",
+        "thepaper",
+        " 人工智能 ",
+        status="success",
+        articles=(qualified_article,),
+        rejected=(),
+    )
+    cache = repository.load_search_cache("2026-07-23", "thepaper", "人工智能")
+    assert isinstance(cache, SearchCacheRecord)
+    assert cache.status == "success"
+    assert cache.articles == (qualified_article,)
+    assert cache.normalized_keyword == "人工智能"
+
+    # Directory name is derived from a SHA256 digest; the raw keyword never leaks
+    # into the path.
+    cache_dir = repository.search_cache_dir("2026-07-23", "thepaper", "人工智能")
+    assert "人工智能" not in str(cache_dir)
+    # Leading/trailing whitespace normalizes to the same directory.
+    assert repository.search_cache_dir(
+        "2026-07-23", "thepaper", " 人工智能 "
+    ) == cache_dir
+
+    # Empty and failed states are distinguishable from success and from each other.
+    repository.save_search_cache(
+        "2026-07-23", "thepaper", "空结果", status="empty", articles=(), rejected=()
+    )
+    empty = repository.load_search_cache("2026-07-23", "thepaper", "空结果")
+    assert empty.status == "empty"
+    assert empty.articles == ()
+
+    repository.save_search_cache(
+        "2026-07-23",
+        "thepaper",
+        "失败",
+        status="failed",
+        articles=(),
+        rejected=(),
+        retry_after="2026-07-23T12:10:00+08:00",
+    )
+    failed = repository.load_search_cache("2026-07-23", "thepaper", "失败")
+    assert failed.status == "failed"
+    assert failed.retry_after == "2026-07-23T12:10:00+08:00"
+
+    # A keyword that was never searched has no cache record.
+    assert repository.load_search_cache("2026-07-23", "thepaper", "未搜索") is None
+
+
+def test_news_results_do_not_collide_with_existing_v1_results(tmp_path):
+    repository = FileRepository(tmp_path)
+    assert repository.news_user_dir("u1") == tmp_path / "news_user_results/u1"
+    assert repository.user_dir("u1") == tmp_path / "user_results/u1"
+
+
+def test_news_user_bundle_round_trips_in_isolated_root(tmp_path):
+    repository = FileRepository(tmp_path)
+
+    final = repository.write_news_user_result_atomic(
+        "user_001",
+        "2026-07-23",
+        lambda directory: repository.write_json(
+            directory / "result.json", bundle("2026-07-23")
+        ),
+    )
+    assert final == tmp_path / "news_user_results/user_001/2026-07-23"
+    assert repository.load_news_user_bundle("user_001", "2026-07-23") == bundle(
+        "2026-07-23"
+    )
+    # V1 result store is untouched.
+    assert repository.load_user_bundle("user_001", "2026-07-23") is None
+
+
+def test_news_user_bundle_rejects_unsafe_user_ids(tmp_path):
+    repository = FileRepository(tmp_path / "data")
+    with pytest.raises(ValueError, match="user_id"):
+        repository.news_user_dir("../../outside")
+    with pytest.raises(ValueError, match="user_id"):
+        repository.load_news_user_bundle("../../outside", "2026-07-23")
+
+
+def test_active_snapshot_resolves_at_most_forty_eight_hours_old(
+    tmp_path, qualified_article
+):
+    repository = FileRepository(tmp_path)
+    repository.save_eligible("2026-07-22", "sina_news", (qualified_article,))
+    pointer = repository.publish_active_snapshot("sina_news", "2026-07-22")
+    assert pointer == tmp_path / "active_snapshots/sina_news.json"
+
+    resolved = repository.resolve_eligible_snapshot(
+        "sina_news", "2026-07-23T12:00:00+08:00", max_age_hours=48
+    )
+    assert resolved is not None
+    assert resolved[0] == "2026-07-22"
+    assert resolved[1] == (qualified_article,)
+
+    # Beyond the 48-hour window the snapshot is no longer eligible.
+    assert (
+        repository.resolve_eligible_snapshot(
+            "sina_news", "2026-07-25T12:01:00+08:00", max_age_hours=48
+        )
+        is None
+    )
+
+    # A platform without any published snapshot resolves to None.
+    assert (
+        repository.resolve_eligible_snapshot(
+            "thepaper", "2026-07-23T12:00:00+08:00", max_age_hours=48
+        )
+        is None
+    )
+
+
+def test_stable_detail_uses_safe_item_id(tmp_path):
+    repository = FileRepository(tmp_path)
+    path = repository.save_stable_detail(
+        "2026-07-23", "netease_news", "doc/abc 123", "中文正文"
+    )
+    assert path == tmp_path / "daily_hot_lists/2026-07-23/details/netease_news_doc_abc_123.txt"
+    assert path.read_text("utf-8") == "中文正文"
