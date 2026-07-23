@@ -6,7 +6,7 @@ import re
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Iterable
+from typing import Iterable, Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -156,6 +156,10 @@ def _extract_docid(url: str) -> str | None:
 
 
 class NeteaseNewsProvider:
+    platform = "netease_news"
+    weights = NETEASE_WEIGHTS
+    absolute_floors = NETEASE_ABSOLUTE_FLOORS
+
     def __init__(self, client: httpx.Client):
         self.client = client
 
@@ -202,12 +206,10 @@ class NeteaseNewsProvider:
 
     def enrich_metrics(
         self,
-        items: HotItem | tuple[HotItem, ...],
+        items: Sequence[HotItem],
         collected_at: str,
-    ) -> tuple[HotItem, ...] | HotItem:
-        if isinstance(items, HotItem):
-            return items
-        return items
+    ) -> tuple[HotItem, ...]:
+        return tuple(items)
 
     @staticmethod
     def parse_hot_list(raw: str, collected_at: str) -> tuple[HotItem, ...]:

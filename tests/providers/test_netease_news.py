@@ -180,12 +180,12 @@ def test_enrich_metrics_keeps_search_comment_count(fixtures):
 
 
 def test_enrich_metrics_never_invents_zero_on_malformed_response():
-    item = _hot_item()
+    items = (_hot_item(),)
     provider = NeteaseNewsProvider(
         _client(lambda r: httpx.Response(200, text="not json"))
     )
-    enriched = provider.enrich_metrics(item, NOW)
-    assert enriched == item
+    enriched = provider.enrich_metrics(items, NOW)
+    assert enriched == items
 
 
 def test_parse_hot_list_requires_doc_type():

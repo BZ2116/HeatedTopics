@@ -5,6 +5,7 @@ import json
 import re
 from datetime import datetime, timezone
 from html.parser import HTMLParser
+from typing import Sequence
 
 import httpx
 from gne import GeneralNewsExtractor
@@ -61,6 +62,10 @@ class _NextDataParser(HTMLParser):
 
 
 class ThePaperProvider:
+    platform = "thepaper"
+    weights = THEPAPER_WEIGHTS
+    absolute_floors = THEPAPER_ABSOLUTE_FLOORS
+
     def __init__(self, client: httpx.Client):
         self.client = client
 
@@ -72,7 +77,19 @@ class ThePaperProvider:
         response = self.client.get(THEPAPER_HOT_URL)
         response.raise_for_status()
         raw = response.text
-        return ProviderCapture(raw, ".json", self.parse_hot_list(raw, collected_at))
+        try:
+            items = self.parse_hot_list(raw, collected_at)
+        except ProviderContractError as error:
+            warning = _describe_schema(raw, error)
+            return ProviderCapture(
+                raw, ".json", (), metadata={"schema_warning": warning}
+            )
+        try:
+            warning = _schema_warning(raw)
+        except (TypeError, ValueError):
+            warning = ""
+        metadata = {"schema_warning": warning} if warning else {}
+        return ProviderCapture(raw, ".json", items, metadata=metadata)
 
     def search(
         self,
@@ -121,11 +138,11 @@ class ThePaperProvider:
         )
 
     def enrich_metrics(
-        self, items: HotItem | tuple[HotItem, ...], collected_at: str
-    ):
-        if isinstance(items, HotItem):
-            return items
-        return items
+        self,
+        items: Sequence[HotItem],
+        collected_at: str,
+    ) -> tuple[HotItem, ...]:
+        return tuple(items)
 
     @staticmethod
     def parse_hot_list(raw: str, collected_at: str) -> tuple[HotItem, ...]:
@@ -187,13 +204,19 @@ def _parse_rows(
     except (TypeError, ValueError) as exc:
         raise ProviderContractError("thepaper response is not valid JSON") from exc
     data = payload.get("data") if isinstance(payload, dict) else None
-    rows = (
-        data.get("hotNews") if isinstance(data, dict) else None
-    ) or (
-        data.get("list") if isinstance(data, dict) else None
-    )
-    if not isinstance(rows, list) or not rows:
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if isinstance(data, dict) and code not in (None, 0, "0", 200, "200"):
+        # Real envelope returned `code != 0`; the daily collection should
+        # downgrade the platform to `partial` instead of marking it `failed`.
+        return ()
+    rows = _extract_rows(data)
+    if rows is None:
         raise ProviderContractError("thepaper response has no row list")
+    if not isinstance(rows, list):
+        raise ProviderContractError(
+            "thepaper hot list candidate is not a list: "
+            f"type={type(rows).__name__}"
+        )
     items: list[HotItem] = []
     for rank, row in enumerate(rows, 1):
         if not isinstance(row, dict):
@@ -238,6 +261,64 @@ def _parse_rows(
             )
         )
     return tuple(items)
+
+
+_ROW_PATHS: tuple[tuple[str, ...], ...] = (
+    ("hotNews", "contList"),
+    ("hotNews",),
+    ("hotList",),
+    ("associateContList",),
+    ("list",),
+)
+
+
+def _extract_rows(data: object) -> list | None:
+    """Probe a small set of likely hot-list locations inside ``data``.
+
+    The live `cache.thepaper.cn` endpoint has historically wrapped the hot
+    rows under ``data.hotNews`` (list) but has also served them under
+    ``data.hotNews.contList`` or ``data.associateContList``. We accept any of
+    those shapes so that schema drift downgrades to an empty capture instead
+    of raising.
+    """
+    if not isinstance(data, dict):
+        return None
+    for path in _ROW_PATHS:
+        cursor: object = data
+        for key in path:
+            if not isinstance(cursor, dict):
+                cursor = None
+                break
+            cursor = cursor.get(key)
+        if cursor is None:
+            continue
+        if isinstance(cursor, list):
+            return cursor
+    return None
+
+
+def _schema_warning(raw: str) -> str:
+    """Return a short, non-secret description of any oddities in the envelope.
+
+    Currently only reports ``code`` values that are not in the success set so
+    the daily collection can surface a ``partial`` platform status with a
+    human-readable reason, without revealing the underlying payload.
+    """
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    code = payload.get("code")
+    if code in (None, 0, "0", 200, "200"):
+        return ""
+    return f"thepaper envelope code={code}"
+
+
+def _describe_schema(raw: str, error: Exception) -> str:
+    base = _schema_warning(raw)
+    return base or f"thepaper schema drift: {type(error).__name__}"
 
 
 def _optional_publication(value: object) -> str | None:

@@ -170,10 +170,10 @@ def test_fetch_detail_rejects_short_or_empty_body():
 
 
 def test_enrich_metrics_is_noop():
-    item = _hot_item()
+    items = (_hot_item(),)
     provider = ThePaperProvider(_client(lambda r: httpx.Response(200, text="{}")))
-    enriched = provider.enrich_metrics(item, NOW)
-    assert enriched == item
+    enriched = provider.enrich_metrics(items, NOW)
+    assert enriched == items
 
 
 def test_enrich_metrics_noop_for_search_items(fixtures):
@@ -186,3 +186,89 @@ def test_enrich_metrics_noop_for_search_items(fixtures):
 def test_parse_hot_list_rejects_non_dict_or_missing_data():
     with pytest.raises(Exception):
         ThePaperProvider.parse_hot_list("{}", NOW)
+
+
+def test_parse_hot_list_tolerates_alternate_schema():
+    """Real `cache.thepaper.cn/.../rightSidebar` may wrap hot rows under
+    `data.hotNews.contList` or `data.associateContList` instead of the legacy
+    `data.hotNews` list. Provider should return an empty capture rather than
+    raise so that `_collect_news_platform` records a `partial` status instead
+    of hard-failing the entire platform."""
+
+    raw = json.dumps(
+        {
+            "code": 0,
+            "data": {
+                "hotNews": {
+                    "contList": [
+                        {
+                            "contId": "3100101",
+                            "name": "<font>示例</font>产业政策更新",
+                            "interactionNum": 22,
+                            "praiseTimes": 120,
+                            "contType": 0,
+                            "paywalled": False,
+                            "summary": "示例摘要",
+                            "pubTimeLong": 1721712600000,
+                            "url": "https://www.thepaper.cn/newsDetail_forward_3100101",
+                        },
+                        {
+                            "contId": "3100102",
+                            "name": "示例外部链接条目",
+                            "interactionNum": 5,
+                            "praiseTimes": 10,
+                            "contType": 0,
+                            "paywalled": False,
+                            "summary": "示例外链",
+                            "pubTimeLong": 1721709000000,
+                            "url": "https://example.com/external/3100102",
+                        },
+                    ]
+                }
+            },
+            "message": "ok",
+        }
+    )
+    items = ThePaperProvider.parse_hot_list(raw, NOW)
+    assert items
+    assert items[0].item_id == "thepaper_3100101"
+    assert "newsDetail_forward_" in items[0].url
+
+
+def test_parse_hot_list_returns_empty_for_unrecognised_schema():
+    """A `code != 0` envelope with no row list must yield an empty capture
+    rather than raise, so the daily collection surfaces a `partial` status
+    instead of marking the entire platform as `failed`."""
+
+    raw = json.dumps(
+        {
+            "code": 9999,
+            "data": {"hotList": [], "associateContList": []},
+            "message": "schema_drift",
+        }
+    )
+    items = ThePaperProvider.parse_hot_list(raw, NOW)
+    assert items == ()
+
+
+def test_collect_hot_list_records_schema_warning_on_unrecognised_envelope():
+    """When the live endpoint drifts but still returns HTTP 200, the provider
+    must surface a capture with empty items instead of throwing, so that
+    Task 7's `_collect_news_platform` can downgrade the platform status
+    rather than treating it as a hard failure."""
+
+    raw = json.dumps(
+        {
+            "code": 9999,
+            "data": {"hotList": [], "associateContList": []},
+            "message": "schema_drift",
+        }
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=raw)
+
+    capture = ThePaperProvider(_client(handler)).collect_hot_list(NOW)
+    assert capture.items == ()
+    assert "schema_warning" in capture.metadata
+    assert "code=9999" in capture.metadata["schema_warning"]

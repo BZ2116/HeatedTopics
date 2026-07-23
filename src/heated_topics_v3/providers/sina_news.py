@@ -33,6 +33,10 @@ _JSONP = re.compile(r"^\s*var\s+\w+\s*=\s*(?P<body>.*?);?\s*$", re.DOTALL)
 
 
 class SinaNewsProvider:
+    platform = "sina_news"
+    weights = SINA_WEIGHTS
+    absolute_floors = SINA_ABSOLUTE_FLOORS
+
     def __init__(self, client: httpx.Client):
         self.client = client
 
@@ -76,13 +80,25 @@ class SinaNewsProvider:
             collected_at, item.url, "success",
         )
 
-    def enrich_metrics(self, item: HotItem, collected_at: str) -> HotItem:
-        total = self._comment_total(item.raw_payload.get("commentid"))
-        if total is None:
-            return item
-        metrics = dict(item.heat.metrics)
-        metrics["comments"] = total
-        return replace(item, heat=replace(item.heat, metrics=metrics))
+    def enrich_metrics(
+        self,
+        items: Sequence[HotItem],
+        collected_at: str,
+    ) -> tuple[HotItem, ...]:
+        if not items:
+            return ()
+        enriched: list[HotItem] = []
+        for item in items:
+            total = self._comment_total(item.raw_payload.get("commentid"))
+            if total is None:
+                enriched.append(item)
+                continue
+            metrics = dict(item.heat.metrics)
+            metrics["comments"] = total
+            enriched.append(
+                replace(item, heat=replace(item.heat, metrics=metrics))
+            )
+        return tuple(enriched)
 
     def _comment_total(self, commentid: object) -> int | None:
         channel, newsid = _split_commentid(commentid)

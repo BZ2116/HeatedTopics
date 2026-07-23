@@ -118,20 +118,57 @@ def test_enrich_metrics_adds_public_comment_total():
     comments = _fixture("sina_news_comments.json")
     seen = []
     client = _client(lambda r: (seen.append(r), httpx.Response(200, text=comments))[1])
-    enriched = SinaNewsProvider(client).enrich_metrics(_hot_item(), NOW)
+    enriched = SinaNewsProvider(client).enrich_metrics([_hot_item()], NOW)
     assert str(seen[0].url).startswith(SINA_COMMENT_URL)
     params = dict(seen[0].url.params)
     assert params["channel"] == "gn"
     assert params["newsid"] == "comos-aaa11111"
-    assert enriched.heat.metrics["comments"] == 4821
-    assert enriched.heat.metrics["top_num"] == 15558
+    assert enriched[0].heat.metrics["comments"] == 4821
+    assert enriched[0].heat.metrics["top_num"] == 15558
 
 
 def test_enrich_metrics_never_invents_zero_on_malformed_response():
     client = _client(lambda r: httpx.Response(200, text="not json"))
-    enriched = SinaNewsProvider(client).enrich_metrics(_hot_item(), NOW)
-    assert "comments" not in enriched.heat.metrics
+    enriched = SinaNewsProvider(client).enrich_metrics([_hot_item()], NOW)
+    assert "comments" not in enriched[0].heat.metrics
 
     client = _client(lambda r: httpx.Response(500, text="boom"))
-    enriched = SinaNewsProvider(client).enrich_metrics(_hot_item(), NOW)
-    assert "comments" not in enriched.heat.metrics
+    enriched = SinaNewsProvider(client).enrich_metrics([_hot_item()], NOW)
+    assert "comments" not in enriched[0].heat.metrics
+
+
+def test_enrich_metrics_returns_tuple_of_n_items_for_sequence_input(fixtures):
+    comments = _fixture("sina_news_comments.json")
+    client = _client(lambda r: httpx.Response(200, text=comments))
+    items = SinaNewsProvider.parse_hot_list(fixtures["hot"], NOW)
+    enriched = SinaNewsProvider(client).enrich_metrics(items, NOW)
+    assert isinstance(enriched, tuple)
+    assert len(enriched) == len(items)
+    assert {item.item_id for item in enriched} == {item.item_id for item in items}
+
+
+def test_enrich_metrics_preserves_item_when_comment_call_fails():
+    seen: list[str] = []
+    items = (
+        HotItem(
+            item_id="sina_news_a",
+            platform="sina_news",
+            title="无 commentid 的标题",
+            url="https://news.sina.com.cn/a",
+            rank=1,
+            heat=HeatMetrics(10, "10", "top_num", {"top_num": 10}),
+            summary="示例摘要",
+            publication_time=None,
+            collected_at=NOW,
+            raw_payload={"commentid": ""},
+        ),
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(500, text="boom")
+
+    enriched = SinaNewsProvider(_client(handler)).enrich_metrics(items, NOW)
+    assert enriched == items
+    assert "comments" not in enriched[0].heat.metrics
+    assert seen == []

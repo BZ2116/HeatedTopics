@@ -1,5 +1,5 @@
 """Contracts shared by platform providers."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Mapping, Protocol, Sequence
 
@@ -15,6 +15,7 @@ class ProviderCapture:
     raw_text: str
     raw_suffix: str
     items: tuple[HotItem, ...]
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
 
 NEWS_PLATFORMS: tuple[str, ...] = ("sina_news", "thepaper", "netease_news")
