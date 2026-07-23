@@ -10,8 +10,14 @@ from typing import Any, Mapping
 from .contracts import RecommendationBundle, RecommendationItem
 
 
-PLATFORM_ORDER = ("toutiao", "juejin")
-PLATFORM_LABELS = {"toutiao": "头条", "juejin": "掘金"}
+PLATFORM_ORDER = ("sina_news", "thepaper", "netease_news", "toutiao", "juejin")
+PLATFORM_LABELS = {
+    "sina_news": "新浪新闻",
+    "thepaper": "澎湃新闻",
+    "netease_news": "网易新闻",
+    "toutiao": "头条",
+    "juejin": "掘金",
+}
 
 
 def _safe(value: Any) -> Any:

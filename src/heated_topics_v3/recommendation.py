@@ -9,18 +9,20 @@ from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Protocol
+from typing import Mapping, Protocol
 
-from .clock import business_date, is_before_daily_cutoff
+from .clock import business_date, is_before_daily_cutoff, SHANGHAI
 from .contracts import (
     HotItem,
     ItemDetail,
+    QualifiedArticle,
     RecommendationBundle,
     RecommendationItem,
     UserProfile,
 )
+from .discovery import discover_platform_articles
 from .matching import build_v1_recommendations
-from .providers.common import ProviderCapture
+from .providers.common import NewsProvider, ProviderCapture
 from .reporting import (
     render_markdown,
     render_topic_txt,
@@ -77,9 +79,14 @@ def _release_claim_lock(handle) -> None:
 
 @contextmanager
 def _filesystem_generation_claim(
-    repository: FileRepository, user_id: str, day: str
+    repository: FileRepository,
+    user_id: str,
+    day: str,
+    *,
+    parent: Path | None = None,
 ):
-    parent = repository.user_dir(user_id)
+    if parent is None:
+        parent = repository.user_dir(user_id)
     parent.mkdir(parents=True, exist_ok=True)
     lock_path = parent / f"{day}.lock"
     result_path = parent / day / "result.json"
@@ -272,3 +279,128 @@ def generate_v1_user_result(
             )
             winner = repository.load_user_bundle(profile.user_id, day)
             return bundle if winner == bundle else _as_existing(winner or bundle)
+
+
+NEWS_DISPLAY_ORDER = ("sina_news", "thepaper", "netease_news")
+
+
+def _news_evidence(article: QualifiedArticle) -> dict:
+    return {
+        "source_kind": article.heat_evidence.source_kind,
+        "platform_rank": article.heat_evidence.platform_rank,
+        "native_hot_value": article.heat_evidence.native_hot_value,
+        "metrics": dict(article.heat_evidence.metrics),
+        "threshold_metrics": dict(article.heat_evidence.threshold_metrics),
+        "qualified_by": tuple(article.heat_evidence.qualified_by),
+        "platform_heat_score": article.platform_heat_score,
+        "snapshot_date": article.hot_item.raw_payload.get("snapshot_date", ""),
+        "is_stale": article.hot_item.raw_payload.get("is_stale", False),
+    }
+
+
+def _article_to_recommendation(article: QualifiedArticle) -> RecommendationItem:
+    return RecommendationItem(
+        hot_item_id=article.hot_item.item_id,
+        platform=article.hot_item.platform,
+        title=article.hot_item.title,
+        heat_level=1,
+        fact_status="unverified",
+        publication_time=article.hot_item.publication_time,
+        collected_at=article.hot_item.collected_at,
+        detail=article.detail.content,
+        content_status=article.detail.content_status,
+        is_personalized=True,
+        evidence=_news_evidence(article),
+        source_url=article.hot_item.url,
+    )
+
+
+def _news_query_metadata(
+    articles_by_platform: Mapping[str, tuple[QualifiedArticle, ...]],
+) -> dict[str, object]:
+    return {
+        "platforms": {
+            platform: {"count": len(articles_by_platform.get(platform, ()))}
+            for platform in NEWS_DISPLAY_ORDER
+        }
+    }
+
+
+def generate_news_user_result(
+    profile: UserProfile,
+    now: datetime,
+    repository: FileRepository,
+    providers: Mapping[str, NewsProvider],
+) -> RecommendationBundle:
+    """Generate or reuse the user's atomic three-platform news artifact bundle.
+
+    Reuses the same locking/atomicity pattern as ``generate_v1_user_result``
+    but persists under ``news_user_results`` and only emits qualified
+    ``full_text`` items sourced from the bounded discovery orchestrator.
+    """
+    generated_at = now.isoformat()
+    if is_before_daily_cutoff(now):
+        latest = repository.load_latest_news_user_bundle(profile.user_id)
+        if latest is not None:
+            return _as_existing(latest)
+        return _empty_bundle(
+            "not_ready", profile, business_date(now).isoformat(), generated_at
+        )
+
+    day = business_date(now).isoformat()
+    existing = repository.load_news_user_bundle(profile.user_id, day)
+    if existing is not None:
+        return _as_existing(existing)
+
+    with _generation_lock(profile.user_id, day):
+        existing = repository.load_news_user_bundle(profile.user_id, day)
+        if existing is not None:
+            return _as_existing(existing)
+        with _filesystem_generation_claim(
+            repository,
+            profile.user_id,
+            day,
+            parent=repository.news_user_dir(profile.user_id),
+        ) as claimed:
+            if not claimed:
+                winner = repository.load_news_user_bundle(profile.user_id, day)
+                return _as_existing(winner) if winner else _empty_bundle(
+                    "failed", profile, day, generated_at
+                )
+
+            articles_by_platform: dict[str, tuple[QualifiedArticle, ...]] = {}
+            for platform in NEWS_DISPLAY_ORDER:
+                provider = providers.get(platform)
+                if provider is None:
+                    articles_by_platform[platform] = ()
+                    continue
+                articles_by_platform[platform] = discover_platform_articles(
+                    profile,
+                    day,
+                    generated_at,
+                    repository,
+                    provider,
+                )
+
+            recommendations = tuple(
+                _article_to_recommendation(article)
+                for platform in NEWS_DISPLAY_ORDER
+                for article in articles_by_platform.get(platform, ())
+            )
+            status = "generated" if recommendations else "no_result"
+            bundle = RecommendationBundle(
+                status=status,
+                user_id=profile.user_id,
+                business_date=day,
+                generated_at=generated_at,
+                recommendations=recommendations,
+                potential_topics=(),
+                general_fallback=(),
+                query_metadata=_news_query_metadata(articles_by_platform),
+            )
+            repository.write_news_user_result_atomic(
+                profile.user_id,
+                day,
+                lambda directory: _write_artifacts(directory, bundle),
+            )
+            return bundle

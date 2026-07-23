@@ -12,11 +12,15 @@ from typing import Sequence
 import httpx
 
 from .clock import SHANGHAI
-from .collection import collect_v1_daily
+from .collection import collect_news_daily, collect_v1_daily
 from .profiles import load_profile
+from .providers.common import NEWS_PLATFORMS, NewsProvider
 from .providers.juejin import JuejinProvider
+from .providers.netease_news import NeteaseNewsProvider
+from .providers.sina_news import SinaNewsProvider
+from .providers.thepaper import ThePaperProvider
 from .providers.toutiao import ToutiaoProvider
-from .recommendation import generate_v1_user_result
+from .recommendation import generate_news_user_result, generate_v1_user_result
 from .storage import FileRepository
 
 
@@ -39,6 +43,13 @@ def _parser() -> argparse.ArgumentParser:
     generate = commands.add_parser("generate-v1")
     generate.add_argument("--data-root", type=Path, required=True)
     generate.add_argument("--profile", type=Path, required=True)
+
+    collect_news = commands.add_parser("collect-news")
+    collect_news.add_argument("--data-root", type=Path, required=True)
+
+    generate_news = commands.add_parser("generate-news")
+    generate_news.add_argument("--data-root", type=Path, required=True)
+    generate_news.add_argument("--profile", type=Path, required=True)
     return parser
 
 
@@ -126,6 +137,77 @@ def _generate(data_root: Path, profile_path: Path) -> tuple[int, dict[str, objec
     }
 
 
+def _news_providers(client: httpx.Client) -> dict[str, NewsProvider]:
+    return {
+        "sina_news": SinaNewsProvider(client),
+        "thepaper": ThePaperProvider(client),
+        "netease_news": NeteaseNewsProvider(client),
+    }
+
+
+def _collect_news(data_root: Path) -> tuple[int, dict[str, object]]:
+    started = time.monotonic()
+    now = datetime.now(SHANGHAI)
+    repository = FileRepository(data_root)
+    with _client() as client:
+        snapshot = collect_news_daily(
+            now,
+            repository,
+            _news_providers(client),
+        )
+    statuses = tuple(status.status for status in snapshot.platform_statuses)
+    if statuses and all(status == "failed" for status in statuses):
+        overall = "failed"
+        exit_code = 1
+    elif any(status != "success" for status in statuses):
+        overall = "partial"
+        exit_code = 0
+    else:
+        overall = "success"
+        exit_code = 0
+    return exit_code, {
+        "status": overall,
+        "command": "collect-news",
+        "business_date": snapshot.business_date,
+        "data_root": str(data_root.resolve()),
+        "platforms": list(NEWS_PLATFORMS),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+    }
+
+
+def _generate_news(
+    data_root: Path, profile_path: Path
+) -> tuple[int, dict[str, object]]:
+    started = time.monotonic()
+    now = datetime.now(SHANGHAI)
+    repository = FileRepository(data_root)
+    profile = load_profile(profile_path)
+    with _client() as client:
+        bundle = generate_news_user_result(
+            profile,
+            now,
+            repository,
+            _news_providers(client),
+        )
+    successful = bundle.status in {"generated", "no_result", "existing"}
+    return (0 if successful else 1), {
+        "status": bundle.status,
+        "command": "generate-news",
+        "user_id": bundle.user_id,
+        "business_date": bundle.business_date,
+        "recommendation_count": len(bundle.recommendations),
+        "result_dir": str(
+            (
+                data_root
+                / "news_user_results"
+                / bundle.user_id
+                / bundle.business_date
+            ).resolve()
+        ),
+        "elapsed_seconds": round(time.monotonic() - started, 3),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one V1 command and emit exactly one machine-readable JSON status."""
     try:
@@ -139,8 +221,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "collect-v1":
             exit_code, payload = _collect(arguments.data_root)
-        else:
+        elif arguments.command == "generate-v1":
             exit_code, payload = _generate(arguments.data_root, arguments.profile)
+        elif arguments.command == "collect-news":
+            exit_code, payload = _collect_news(arguments.data_root)
+        else:
+            exit_code, payload = _generate_news(arguments.data_root, arguments.profile)
     except Exception as error:
         _emit(
             {

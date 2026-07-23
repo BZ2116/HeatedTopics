@@ -52,3 +52,60 @@ data/
 
 Toutiao is displayed before Juejin. V1 does not include a scheduler, frontend,
 LLM ranking, or any other platform.
+
+## Cached News Workflow
+
+In addition to the V1 two-platform workflow, this branch ships an anonymous
+three-platform cached news pipeline (Sina News, The Paper, NetEase News). The
+news workflow never sends a Cookie, an Authorization header, an API key, or any
+`.env` value.
+
+```powershell
+uv run heated-topics collect-news --data-root data
+uv run heated-topics generate-news --data-root data --profile config/profiles/tech_ai_creator.json
+```
+
+The news workflow produces a distinct `news_user_results/` tree and never writes
+into the V1 `user_results/` tree, so V1 and news results can coexist on the same
+business date.
+
+### Data layout for the news workflow
+
+```text
+data/
+|-- daily_hot_lists/<date>/
+|   |-- raw/<platform>.<suffix>      # captured once per day per platform
+|   |-- normalized/<platform>.json   # validated official-board records
+|   |-- eligible/<platform>.json     # only full_text + verified heat evidence
+|   |-- rejected/<platform>.json     # reasons for each rejected record
+|   |-- details/<platform>_<item_id>.txt
+|   `-- collection_status.json
+|-- active_snapshots/<platform>.json # atomic eligible pointer per platform
+|-- search_cache/<date>/<platform>/<sha256(keyword)>/
+|   `-- status.json                  # success/empty/failed cache per keyword
+`-- news_user_results/<user_id>/<business-date>/
+    |-- report.md
+    |-- result.json
+    `-- topics/<platform>_<sequence>.txt
+```
+
+### Result limits and guarantees
+
+* Each of `sina_news`, `thepaper`, and `netease_news` returns at most
+  `MAX_RESULTS = 20` articles per user request.
+* Formal results are constructed only from `QualifiedArticle` records whose
+  detail `content_status` is `full_text` and whose heat evidence contains a
+  non-empty `qualified_by` set; `summary` and `title_only` records never become
+  formal recommendations.
+* Search is skipped when a platform already has at least `MIN_RESULTS = 5`
+  matched cached records; otherwise the search runs in pages of
+  `SEARCH_PAGE_SIZE = 15` and stops at most `MAX_SEARCH_CANDIDATES = 60` unique
+  candidates or `MAX_RESULTS = 20` qualified records.
+* The active eligible snapshot is only reused when it is at most 48 hours old,
+  otherwise the cached board is treated as missing.
+
+### Deferred
+
+Tencent News is intentionally deferred for this batch because no confirmed
+anonymous keyword search endpoint is currently available. The remaining three
+platforms form the supported Demo surface for this branch.
