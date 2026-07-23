@@ -595,3 +595,45 @@ def make_bilibili_fetcher(
             return resp.read().decode("utf-8", errors="replace")
 
     return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
+
+
+JUEJIN_DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def make_juejin_fetcher(
+    *,
+    timeout: int = 20,
+    log_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
+) -> Callable[[str, int, dict | None], str]:
+    """GET/POST 二合一 fetcher。body 非空 → POST application/json。"""
+
+    def _fetcher(url: str, timeout_seconds: int = timeout, body: dict | None = None) -> str:
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(url, data=data)
+        req.add_header("User-Agent", JUEJIN_DESKTOP_UA)
+        req.add_header("Accept", "application/json, text/html, */*")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+        req.add_header("Referer", "https://juejin.cn")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    def _with_retry_3arg(url: str, timeout_seconds: int = timeout, body: dict | None = None) -> str:
+        policy = retry_policy or BaiduRetryPolicy()
+        attempt = 0
+        while True:
+            try:
+                return _fetcher(url, timeout_seconds, body)
+            except BaseException as exc:
+                from heated_topics_v3.baidu_retry import is_retryable
+                attempt += 1
+                if attempt >= policy.max_attempts or not is_retryable(exc):
+                    raise
+                time.sleep(min(policy.base_delay * 2 ** (attempt - 1), policy.max_delay))
+
+    return _with_retry_3arg

@@ -93,3 +93,49 @@ def test_make_bilibili_fetcher_sets_bilibili_referer(monkeypatch):
     headers = {k.lower(): v for k, v in captured["headers"].items()}
     assert headers["referer"] == "https://www.bilibili.com"
     assert "bilibili" not in headers.get("user-agent", "").lower() or headers["user-agent"]
+
+
+def test_make_juejin_fetcher_posts_json_body(monkeypatch):
+    import urllib.request
+    from heated_topics_v3.fetcher_factory import make_juejin_fetcher
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"err_no":0}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["data"] = req.data
+        captured["headers"] = {k.lower(): v for k, v in req.header_items()}
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fetcher = make_juejin_fetcher(log_path=None)
+    body = fetcher("https://api.juejin.cn/search_api/v1/search", 10, {"key_word": "AI"})
+    assert body == '{"err_no":0}'
+    assert b'"key_word"' in captured["data"]
+    assert captured["headers"]["content-type"] == "application/json"
+    assert captured["headers"]["referer"] == "https://juejin.cn"
+
+
+def test_make_juejin_fetcher_get_when_no_body(monkeypatch):
+    import urllib.request
+    from heated_topics_v3.fetcher_factory import make_juejin_fetcher
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"err_no":0}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["data"] = req.data
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fetcher = make_juejin_fetcher(log_path=None)
+    fetcher("https://api.juejin.cn/content_api/v1/content/article_rank", 10, None)
+    assert captured["data"] is None
