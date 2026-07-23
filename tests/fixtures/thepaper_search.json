@@ -1,0 +1,50 @@
+{
+  "data": {
+    "list": [
+      {
+        "contId": "3100001",
+        "name": "人工智能产业示例报道一",
+        "interactionNum": 45,
+        "praiseTimes": 320,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例报道，关注人工智能技术在产业端的最新进展。",
+        "pubTimeLong": 1721712600000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3100001"
+      },
+      {
+        "contId": "3100002",
+        "name": "人工智能领域示例访谈",
+        "interactionNum": 60,
+        "praiseTimes": 410,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例访谈记录，围绕人工智能政策与伦理展开讨论。",
+        "pubTimeLong": 1721709000000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3100002"
+      },
+      {
+        "contId": "3100003",
+        "name": "示例外链转载",
+        "interactionNum": 12,
+        "praiseTimes": 60,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例外链转载，不属于澎湃原站点内容。",
+        "pubTimeLong": 1721705400000,
+        "url": "https://example.com/external/3100003"
+      },
+      {
+        "contId": "3100004",
+        "name": "示例付费人工智能课程",
+        "interactionNum": 25,
+        "praiseTimes": 90,
+        "contType": 0,
+        "paywalled": true,
+        "summary": "示例付费课程，需要订阅才能查看。",
+        "pubTimeLong": 1721701800000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3100004"
+      }
+    ]
+  }
+}
