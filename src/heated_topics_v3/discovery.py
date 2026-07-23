@@ -72,7 +72,7 @@ def discover_platform_articles(
     matched = _match_articles(profile, cached)
 
     if len(matched) >= MIN_RESULTS:
-        return rank_platform_articles(matched, provider.weights)[:MAX_RESULTS]
+        return _rank_with_provider(provider, matched)[:MAX_RESULTS]
 
     if not _has_active_search_window(collected_at, datetime.now(tz=SHANGHAI_TZ)):
         snapshot = repository.resolve_eligible_snapshot(
@@ -94,7 +94,7 @@ def discover_platform_articles(
                 list(cache.articles),
                 provider=provider,
             )
-            return rank_platform_articles(cached_pool, provider.weights)[:MAX_RESULTS]
+            return _rank_with_provider(provider, cached_pool)[:MAX_RESULTS]
         if cache.status == "failed":
             if _negative_cache_active(cache, collected_at):
                 return _rank_cached_only(matched, provider)
@@ -124,11 +124,57 @@ def discover_platform_articles(
     return search_outcome
 
 
+def _provider_search(
+    provider: NewsProvider,
+    keyword: str,
+    page: int,
+    page_size: int,
+    collected_at: str,
+    official: Sequence[QualifiedArticle],
+) -> ProviderCapture:
+    contextual = getattr(provider, "search_with_context", None)
+    if callable(contextual):
+        return contextual(keyword, page, page_size, collected_at, tuple(official))
+    return provider.search(keyword, page, page_size, collected_at)
+
+
+def _provider_search_evidence(
+    provider: NewsProvider,
+    item: HotItem,
+    floors: Mapping[str, float],
+) -> HeatEvidence | None:
+    builder = getattr(provider, "build_search_evidence", None)
+    if callable(builder):
+        return builder(item, floors)
+    metrics = dict(item.heat.metrics)
+    qualified_by = qualifies_public_metrics(metrics, floors)
+    if not metrics or not qualified_by:
+        return None
+    return HeatEvidence(
+        source_kind="public_engagement",
+        platform_rank=None,
+        native_hot_value=None,
+        metrics=metrics,
+        threshold_metrics=dict(floors),
+        qualified_by=tuple(qualified_by),
+    )
+
+
+def _rank_with_provider(
+    provider: NewsProvider,
+    articles: Sequence[QualifiedArticle],
+) -> tuple[QualifiedArticle, ...]:
+    ranker = getattr(provider, "rank_articles", None)
+    if callable(ranker):
+        return tuple(ranker(tuple(articles)))
+    return rank_platform_articles(tuple(articles), provider.weights)
+
+
 def _rank_cached_only(
     matched: Sequence[QualifiedArticle],
     provider: NewsProvider,
 ) -> tuple[QualifiedArticle, ...]:
-    return rank_platform_articles(matched, provider.weights)[:MAX_RESULTS]
+    return _rank_with_provider(provider, matched)[:MAX_RESULTS]
 
 
 def _rank_snapshot(
@@ -137,7 +183,7 @@ def _rank_snapshot(
     *,
     snapshot_date: str,
 ) -> tuple[QualifiedArticle, ...]:
-    ranked = rank_platform_articles(matched, provider.weights)[:MAX_RESULTS]
+    ranked = _rank_with_provider(provider, matched)[:MAX_RESULTS]
     return tuple(
         replace(
             article,
@@ -218,8 +264,13 @@ def _run_search_discovery(
         and len(qualified_search) < MAX_RESULTS
         and unique_candidates < MAX_SEARCH_CANDIDATES
     ):
-        capture = provider.search(
-            profile.primary_keyword, page, SEARCH_PAGE_SIZE, collected_at
+        capture = _provider_search(
+            provider,
+            profile.primary_keyword,
+            page,
+            SEARCH_PAGE_SIZE,
+            collected_at,
+            seeded_matched,
         )
         page += 1
         if not capture.items:
@@ -262,26 +313,36 @@ def _run_search_discovery(
                 )
                 continue
             detail = _safe_fetch_detail(provider, item, collected_at)
-            metrics = dict(item.heat.metrics)
-            if not metrics:
-                rejected_candidates.append(
-                    {
-                        "item_id": item.item_id,
-                        "source_url": item.url,
-                        "reasons": ["rejected:no_metric"],
-                    }
+            evidence = _provider_search_evidence(provider, item, floors)
+            if evidence is None:
+                metrics = dict(item.heat.metrics)
+                if not metrics:
+                    rejected_candidates.append(
+                        {
+                            "item_id": item.item_id,
+                            "source_url": item.url,
+                            "reasons": ["rejected:no_metric"],
+                        }
+                    )
+                    continue
+                public_qualified = qualifies_public_metrics(metrics, floors)
+                if not public_qualified:
+                    rejected_candidates.append(
+                        {
+                            "item_id": item.item_id,
+                            "source_url": item.url,
+                            "reasons": ["rejected:below_floor"],
+                        }
+                    )
+                    continue
+                evidence = HeatEvidence(
+                    source_kind="public_engagement",
+                    platform_rank=None,
+                    native_hot_value=None,
+                    metrics=metrics,
+                    threshold_metrics=dict(floors),
+                    qualified_by=tuple(public_qualified),
                 )
-                continue
-            public_qualified = qualifies_public_metrics(metrics, floors)
-            if not public_qualified:
-                rejected_candidates.append(
-                    {
-                        "item_id": item.item_id,
-                        "source_url": item.url,
-                        "reasons": ["rejected:below_floor"],
-                    }
-                )
-                continue
 
             content = detail.content if detail else ""
             parser = ""
@@ -308,14 +369,7 @@ def _run_search_discovery(
                 QualifiedArticle(
                     hot_item=item,
                     detail=detail,
-                    heat_evidence=HeatEvidence(
-                        source_kind="public_engagement",
-                        platform_rank=None,
-                        native_hot_value=None,
-                        metrics=metrics,
-                        threshold_metrics=dict(floors),
-                        qualified_by=tuple(public_qualified),
-                    ),
+                    heat_evidence=evidence,
                     content_validation=ContentValidation(
                         status=validation.status,
                         parser=validation.parser,
@@ -398,7 +452,7 @@ def _merge(
         merged[key] = _merge_articles(merged[key], article)
 
     pool = list(merged.values())
-    return rank_platform_articles(pool, provider.weights)[:MAX_RESULTS]
+    return _rank_with_provider(provider, pool)[:MAX_RESULTS]
 
 
 def _merge_articles(

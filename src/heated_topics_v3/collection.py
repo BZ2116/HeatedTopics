@@ -324,6 +324,8 @@ def _collect_news_platform(
 
     eligible: list[QualifiedArticle] = []
     rejected: list[dict[str, Any]] = []
+    builder = getattr(provider, "build_board_evidence", None)
+    ranker = getattr(provider, "rank_articles", None)
     for item in enriched:
         detail = detail_lookup.get(item.item_id)
         if detail is None:
@@ -339,8 +341,18 @@ def _collect_news_platform(
         repository.save_stable_detail(
             business_date, platform, item.item_id, detail.content
         )
-        evidence = _build_official_evidence(item, floors)
-        if not qualifies_public_metrics(dict(item.heat.metrics), floors) and (
+        evidence = (
+            builder(item, floors)
+            if callable(builder)
+            else _build_official_evidence(item, floors)
+        )
+        if callable(builder):
+            if evidence is None:
+                rejected.append(
+                    _rejected_payload(item, detail, ("rejected:no_board_evidence",))
+                )
+                continue
+        elif not qualifies_public_metrics(dict(item.heat.metrics), floors) and (
             item.heat.value is None and not item.heat.metrics
         ):
             reasons = (detail.fetch_status,) if detail.fetch_status else ("rejected:no_metric",)
@@ -371,7 +383,12 @@ def _collect_news_platform(
         )
         eligible.append(qualified)
 
-    repository.save_eligible(business_date, platform, tuple(eligible))
+    if callable(ranker):
+        ordered = tuple(ranker(tuple(eligible)))
+    else:
+        ordered = tuple(eligible)
+
+    repository.save_eligible(business_date, platform, ordered)
     repository.save_rejected(business_date, platform, tuple(rejected))
     return enriched
 

@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from heated_topics_v3.collection import collect_news_daily
 from heated_topics_v3.contracts import (
     ContentValidation,
+    HeatEvidence,
     HeatMetrics,
     HotItem,
     ItemDetail,
@@ -447,3 +448,40 @@ def test_collection_runs_with_three_workers_per_platform(tmp_path):
 
     assert provider.max_active_details <= 3
     assert provider.max_active_details >= 2
+
+
+class RankOnlyBoardProvider(FakeNewsProvider):
+    """Provider that supplies empty metrics but exposes official rank-only board evidence."""
+
+    def build_board_evidence(self, item, floors):
+        return HeatEvidence(
+            source_kind="official_hot_board",
+            platform_rank=item.rank,
+            native_hot_value=None,
+            metrics={},
+            threshold_metrics=dict(floors),
+            qualified_by=("official_hot_board",),
+        )
+
+
+def test_collection_uses_build_board_evidence_for_rank_only_items(tmp_path):
+    repository = FileRepository(tmp_path)
+    rank_only = _item(
+        platform="sina_news",
+        item_id="sina_news_rank_only",
+        rank=2,
+        metrics={},
+    )
+    provider = RankOnlyBoardProvider(platform="sina_news", items=(rank_only,))
+    provider.absolute_floors = {}
+
+    collect_news_daily(NOW, repository, {"sina_news": provider})
+
+    day = repository.daily_dir(BUSINESS_DATE)
+    eligible = repository.load_eligible(BUSINESS_DATE, "sina_news")
+    assert [item.hot_item.item_id for item in eligible] == ["sina_news_rank_only"]
+    assert eligible[0].heat_evidence.source_kind == "official_hot_board"
+    assert eligible[0].heat_evidence.platform_rank == 2
+    rejected_path = day / "rejected" / "sina_news.json"
+    if rejected_path.exists():
+        assert json.loads(rejected_path.read_text("utf-8")) == []

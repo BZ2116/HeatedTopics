@@ -3,7 +3,12 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Mapping, Protocol, Sequence
 
-from heated_topics_v3.contracts import HotItem, ItemDetail
+from heated_topics_v3.contracts import (
+    HeatEvidence,
+    HotItem,
+    ItemDetail,
+    QualifiedArticle,
+)
 
 
 class ProviderContractError(ValueError):
@@ -41,6 +46,35 @@ class NewsProvider(Protocol):
     def enrich_metrics(
         self, items: Sequence[HotItem], collected_at: str
     ) -> tuple[HotItem, ...]: ...
+
+
+class ContextualSearchProvider(Protocol):
+    def search_with_context(
+        self,
+        keyword: str,
+        page: int,
+        page_size: int,
+        collected_at: str,
+        official_articles: Sequence[QualifiedArticle],
+    ) -> ProviderCapture: ...
+
+
+class BoardEvidenceProvider(Protocol):
+    def build_board_evidence(
+        self, item: HotItem, floors: Mapping[str, float]
+    ) -> HeatEvidence | None: ...
+
+
+class SearchEvidenceProvider(Protocol):
+    def build_search_evidence(
+        self, item: HotItem, floors: Mapping[str, float]
+    ) -> HeatEvidence | None: ...
+
+
+class ArticleRankingProvider(Protocol):
+    def rank_articles(
+        self, articles: Sequence[QualifiedArticle]
+    ) -> tuple[QualifiedArticle, ...]: ...
 
 
 def number_or_none(value: object) -> int | None:

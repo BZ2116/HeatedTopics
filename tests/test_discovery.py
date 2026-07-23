@@ -321,6 +321,55 @@ class FakeProvider:
         return tuple(enriched)
 
 
+class HookProvider(FakeProvider):
+    """Test double that exercises the optional capability hooks."""
+
+    def __init__(self, pages=()):
+        super().__init__(
+            platform="rank_only",
+            weights={},
+            absolute_floors={},
+            pages=pages,
+        )
+        self.context_calls: list[tuple[str, int, int, tuple[str, ...]]] = []
+
+    def search_with_context(
+        self,
+        keyword: str,
+        page: int,
+        page_size: int,
+        collected_at: str,
+        official_articles: Sequence["QualifiedArticle"],
+    ) -> ProviderCapture:
+        self.context_calls.append(
+            (
+                keyword,
+                page,
+                page_size,
+                tuple(article.hot_item.item_id for article in official_articles),
+            )
+        )
+        return super().search(keyword, page, page_size, collected_at)
+
+    def build_search_evidence(
+        self,
+        item: HotItem,
+        floors: Mapping[str, float],
+    ) -> HeatEvidence:
+        return HeatEvidence(
+            source_kind="official_hot_board",
+            platform_rank=item.rank,
+            native_hot_value=None,
+            metrics={},
+            threshold_metrics={},
+            qualified_by=("official_hot_board",),
+        )
+
+    def rank_articles(
+        self, articles: Sequence[QualifiedArticle]
+    ) -> tuple[QualifiedArticle, ...]:
+        return tuple(reversed(tuple(articles)))
+
 @pytest.fixture
 def repository(tmp_path) -> FileRepository:
     return FileRepository(tmp_path)
@@ -749,3 +798,65 @@ def test_stale_snapshot_reachable_when_search_window_expired(repository):
         for article in result
     )
     assert provider.search_calls == []
+
+
+def test_optional_context_evidence_and_rank_hooks_are_used(repository):
+    seeded = _seed_eligible(repository, "rank_only", count=1)
+    search_item = _make_hot_item(
+        platform="rank_only",
+        item_id="rank_only_archive_1",
+        rank=2,
+        title=f"{KEYWORD} 归档推荐",
+        summary=KEYWORD,
+        metrics={},
+    )
+    provider = HookProvider(pages=((search_item,),))
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    )
+
+    assert provider.context_calls
+    assert provider.context_calls[0][3] == (seeded[0].hot_item.item_id,)
+    assert any(
+        article.hot_item.item_id == "rank_only_archive_1" for article in result
+    )
+    assert all(
+        article.heat_evidence.source_kind == "official_hot_board"
+        for article in result
+    )
+
+
+def test_optional_rank_hook_is_applied_to_cached_matches(repository):
+    first = _make_hot_item(
+        platform="rank_only",
+        item_id="rank_only_cached_a",
+        rank=1,
+        title=f"{KEYWORD} A",
+        summary=KEYWORD,
+        metrics={"comments": 5.0},
+    )
+    second = _make_hot_item(
+        platform="rank_only",
+        item_id="rank_only_cached_b",
+        rank=2,
+        title=f"{KEYWORD} B",
+        summary=KEYWORD,
+        metrics={"comments": 50.0},
+    )
+    cached = (
+        _build_article(first, metrics={"comments": 5.0}),
+        _build_article(second, metrics={"comments": 50.0}),
+    )
+    repository.save_eligible(BUSINESS_DATE, "rank_only", cached)
+    repository.publish_active_snapshot("rank_only", BUSINESS_DATE)
+    provider = HookProvider(pages=())
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    )
+
+    assert [article.hot_item.item_id for article in result] == [
+        "rank_only_cached_b",
+        "rank_only_cached_a",
+    ]
