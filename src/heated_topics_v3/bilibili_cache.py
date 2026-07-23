@@ -1,6 +1,6 @@
 """Daily single-flight caches for Bilibili search / article fetches.
 
-Mirrors the design of `toutiao_search_cache.py`:
+Mirrors the design of `baidu_cache.py` (which itself mirrors `toutiao_search_cache.py`):
 
 - File-based advisory lock (`<cache>.lock`) for cross-process coordination.
 - atomic write via temp + `Path.replace`.
