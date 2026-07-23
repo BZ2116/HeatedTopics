@@ -104,7 +104,7 @@ fixes + this report update; see §B.4 for contents).
 | `src/heated_topics_v3/providers/sina_news.py` | `enrich_metrics` now `Sequence[HotItem] -> tuple[HotItem, ...]`; added class-level `platform`, `weights`, `absolute_floors`. |
 | `src/heated_topics_v3/providers/thepaper.py` | Added class-level `platform`, `weights`, `absolute_floors`. `collect_hot_list` catches `ProviderContractError`, returns empty `ProviderCapture` with `metadata={"schema_warning": ...}` instead of raising. Parses the live schema with multiple-shape fallback (`data.hotNews`, `data.hotList`, `data.list`). |
 | `src/heated_topics_v3/providers/netease_news.py` | Added class-level `platform`, `weights`, `absolute_floors`. |
-| `src/heated_topics_v3/providers/common.py` | Kept protocol unchanged (the fixes move provider classes toward compliance rather than loosening the protocol). |
+| `src/heated_topics_v3/providers/common.py` | Added `metadata: Mapping[str, str] = field(default_factory=dict)` to `ProviderCapture`; default value keeps every existing call site compatible. Protocol unchanged (the fixes move provider classes toward compliance rather than loosening the protocol). |
 | `tests/providers/test_sina_news.py` | Added test for the new `Sequence[HotItem] -> tuple` contract; asserts empty-tuple passthrough. |
 | `tests/providers/test_thepaper.py` | Added test that `parse_hot_list` is tolerant of alternate `data.hotList` schema without raising. |
 | `tests/providers/test_netease_news.py` | Asserted `platform == "netease_news"`, `weights` and `absolute_floors` shape. |

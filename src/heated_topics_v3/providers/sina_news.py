@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from gne import GeneralNewsExtractor
+from typing import Sequence
 
 from heated_topics_v3.content import extract_container_text, validate_full_text
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
