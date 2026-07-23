@@ -49,6 +49,9 @@ def _main() -> None:
     baidu = subparsers.add_parser("baidu", help="Collect Baidu hot search and match it to a user profile.")
     _add_baidu_args(baidu)
 
+    bilibili = subparsers.add_parser("bilibili", help="Collect Bilibili 专栏 by keyword and match to a profile.")
+    _add_bilibili_args(bilibili)
+
     refresh_kw = subparsers.add_parser("refresh-keywords", help="Delete keyword cache for one or all users, forcing LLM re-extraction on next run.")
     _add_refresh_keywords_args(refresh_kw)
 
@@ -120,6 +123,8 @@ def _main() -> None:
                 print(f"{name}: {path}")
     if args.command == "baidu":
         _handle_baidu(args)
+    if args.command == "bilibili":
+        _handle_bilibili(args)
     if args.command == "refresh-keywords":
         _handle_refresh_keywords(args)
     if args.command == "register":
@@ -237,6 +242,44 @@ def _add_baidu_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--force-board-refresh", dest="force_board_refresh", action="store_true")
     parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+
+
+def _add_bilibili_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profile", required=True, type=Path)
+    parser.add_argument("--output-root", "--output-dir", dest="output_root", default=Path("outputs"), type=Path)
+    parser.add_argument("--cache-root", default=Path("cache"), type=Path)
+    parser.add_argument("--fetched-at", default=None)
+    parser.add_argument("--top-n", dest="top_n", default=20, type=int)
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
+    parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
+    parser.add_argument("--bilibili-cookie-path", dest="bilibili_cookie_path", default=Path(".bilibili_cookie"), type=Path)
+    parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+
+
+def _handle_bilibili(args) -> None:
+    from heated_topics_v3.fetcher_factory import make_bilibili_fetcher
+    from heated_topics_v3.pipeline import run_bilibili_pipeline
+
+    fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
+    log_path = Path(__file__).resolve().parent.parent / ".bilibili_fetcher_log.json"
+    cookie = args.bilibili_cookie_path if Path(args.bilibili_cookie_path).exists() else None
+    fetcher = make_bilibili_fetcher(log_path=log_path, cookie_path=cookie)
+    outputs = run_bilibili_pipeline(
+        profile_path=args.profile,
+        output_root=args.output_root,
+        fetched_at=fetched_at,
+        cache_root=args.cache_root,
+        top_n=args.top_n,
+        offline=args.offline,
+        force_search_refresh=args.force_search_refresh,
+        force_article_refresh=args.force_article_refresh,
+        matched_query_ids=matched_query_ids,
+        fetcher=fetcher,
+    )
+    for name, path in outputs.items():
+        print(f"{name}: {path}")
 
 
 def _handle_baidu(args) -> None:
