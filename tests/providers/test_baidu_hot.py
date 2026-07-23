@@ -5,7 +5,14 @@ from pathlib import Path
 import httpx
 import pytest
 
-from heated_topics_v3.contracts import HotItem
+from heated_topics_v3.contracts import (
+    ContentValidation,
+    HeatEvidence,
+    HeatMetrics,
+    HotItem,
+    ItemDetail,
+    QualifiedArticle,
+)
 from heated_topics_v3.providers.common import ProviderCapture, ProviderContractError
 
 FIXTURES = Path(__file__).parents[1] / "fixtures"
@@ -104,3 +111,197 @@ def test_collect_hot_list_returns_provider_capture_with_items():
     assert capture.raw_suffix == ".html"
     assert capture.raw_text == raw
     assert capture.items[0].title == "人工智能手机发布"
+
+
+# --- Task 3: supporting bodies and contextual search ---------------------------
+
+
+def _board_item(title: str, hot_score: int, *, rank: int = 1) -> HotItem:
+    from heated_topics_v3.providers.baidu_hot import _stable_event_id
+
+    item_id = _stable_event_id(title)
+    return HotItem(
+        item_id=item_id,
+        platform="baidu_hot",
+        title=title,
+        url=f"https://top.baidu.com/board?tab=realtime#{item_id}",
+        rank=rank,
+        heat=HeatMetrics(
+            value=hot_score,
+            label=str(hot_score),
+            metric_name="hot_score",
+            metrics={"hot_score": float(hot_score)},
+        ),
+        summary="",
+        publication_time=None,
+        collected_at=NOW,
+        raw_payload={"query": title, "hotScore": str(hot_score)},
+    )
+
+
+def _qualified_baidu_event() -> QualifiedArticle:
+    item = _board_item("人工智能手机发布", 987654, rank=1)
+    evidence = HeatEvidence(
+        source_kind="official_hot_board",
+        platform_rank=1,
+        native_hot_value=987654.0,
+        metrics={"hot_score": 987654.0},
+        threshold_metrics={"hot_score": 1.0},
+        qualified_by=("official_hot_board",),
+    )
+    detail = ItemDetail(
+        item.item_id, "板块正文占位内容。", "full_text", None, NOW, item.url, "success"
+    )
+    validation = ContentValidation("accepted", "article", 100, 4, ())
+    return QualifiedArticle(item, detail, evidence, validation, 987654.0)
+
+
+def _search_article_client() -> httpx.Client:
+    search_html = _fixture("baidu_search.html")
+    article_html = _fixture("baidu_public_article.html")
+    redirect = {
+        "valid": "https://news.example.test/ai-phone",
+        "unrelated": "https://sports.example.test/match",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == "www.baidu.com" and path == "/s":
+            return httpx.Response(200, text=search_html)
+        if host == "www.baidu.com" and path == "/link":
+            target = request.url.params.get("url", "")
+            return httpx.Response(
+                302, headers={"location": redirect.get(target, "https://www.baidu.com/s")}
+            )
+        if host == "news.example.test":
+            return httpx.Response(200, text=article_html)
+        if host == "sports.example.test":
+            return httpx.Response(200, text="<article><p>比赛结果与球队积分排名。</p></article>")
+        return httpx.Response(404, text="not found")
+
+    return _client(handler)
+
+
+def test_fetch_detail_uses_resolved_supporting_article_and_preserves_source():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    provider = BaiduHotProvider(_search_article_client())
+    item = _board_item("人工智能手机发布", 987654)
+
+    detail = provider.fetch_detail(item, NOW)
+
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success"
+    assert detail.source_url == "https://news.example.test/ai-phone"
+    assert "人工智能手机" in detail.content
+
+
+def test_context_search_inherits_parent_event_evidence_without_board_refresh():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    parent = _qualified_baidu_event()
+    provider = BaiduHotProvider(_search_article_client())
+
+    capture = provider.search_with_context("人工智能", 1, 15, NOW, (parent,))
+
+    assert len(capture.items) == 1
+    item = capture.items[0]
+    assert item.rank == parent.hot_item.rank
+    assert item.heat.metrics == parent.hot_item.heat.metrics
+    assert item.raw_payload["parent_event_id"] == parent.hot_item.item_id
+    assert item.raw_payload["parent_event_title"] == parent.hot_item.title
+    assert item.raw_payload["parent_rank"] == parent.hot_item.rank
+    assert item.item_id != parent.hot_item.item_id
+    assert item.item_id.startswith("baidu_hot_")
+
+
+def test_search_with_context_without_official_articles_returns_empty():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    provider = BaiduHotProvider(_search_article_client())
+    capture = provider.search_with_context("人工智能", 1, 15, NOW, ())
+    assert capture.items == ()
+
+
+def test_build_search_evidence_reflects_parent_hot_board_signal():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    parent = _qualified_baidu_event()
+    provider = BaiduHotProvider(_search_article_client())
+    capture = provider.search_with_context("人工智能", 1, 15, NOW, (parent,))
+    item = capture.items[0]
+
+    evidence = provider.build_search_evidence(item, {"hot_score": 1.0})
+
+    assert evidence is not None
+    assert evidence.source_kind == "official_hot_board"
+    assert evidence.platform_rank == parent.hot_item.rank
+    assert evidence.native_hot_value == 987654.0
+    assert evidence.qualified_by == ("official_hot_board",)
+
+
+def test_fetch_detail_rejects_captcha_search_page():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html><body>百度安全验证 wappass.baidu.com</body></html>")
+
+    provider = BaiduHotProvider(_client(handler))
+    detail = provider.fetch_detail(_board_item("人工智能手机发布", 987654), NOW)
+    assert detail.content_status == "rejected"
+
+
+def test_fetch_detail_rejects_short_body():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    search_html = _fixture("baidu_search.html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == "www.baidu.com" and path == "/s":
+            return httpx.Response(200, text=search_html)
+        if host == "www.baidu.com" and path == "/link":
+            return httpx.Response(302, headers={"location": "https://news.example.test/x"})
+        if host == "news.example.test":
+            return httpx.Response(200, text="<article><p>太短的正文。</p></article>")
+        return httpx.Response(404)
+
+    provider = BaiduHotProvider(_client(handler))
+    detail = provider.fetch_detail(_board_item("人工智能手机发布", 987654), NOW)
+    assert detail.content_status == "rejected"
+
+
+def test_fetch_detail_rejects_baidu_aggregation_surface():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    search_html = _fixture("baidu_search.html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == "www.baidu.com" and path == "/s":
+            return httpx.Response(200, text=search_html)
+        if host == "www.baidu.com" and path == "/link":
+            return httpx.Response(302, headers={"location": "https://www.baidu.com/s?wd=aggregate"})
+        return httpx.Response(404)
+
+    provider = BaiduHotProvider(_client(handler))
+    detail = provider.fetch_detail(_board_item("人工智能手机发布", 987654), NOW)
+    assert detail.content_status == "rejected"
+
+
+def test_fetch_detail_handles_redirect_loop():
+    from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
+    search_html = _fixture("baidu_search.html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host, path = request.url.host, request.url.path
+        if host == "www.baidu.com" and path == "/s":
+            return httpx.Response(200, text=search_html)
+        if host == "www.baidu.com" and path == "/link":
+            return httpx.Response(302, headers={"location": "https://www.baidu.com/link?url=loop"})
+        return httpx.Response(404)
+
+    provider = BaiduHotProvider(_client(handler))
+    detail = provider.fetch_detail(_board_item("人工智能手机发布", 987654), NOW)
+    assert detail.content_status == "rejected"
