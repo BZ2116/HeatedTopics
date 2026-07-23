@@ -1,8 +1,9 @@
 """Contracts shared by platform providers."""
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Mapping, Protocol, Sequence
 
-from heated_topics_v3.contracts import HotItem
+from heated_topics_v3.contracts import HotItem, ItemDetail
 
 
 class ProviderContractError(ValueError):
@@ -14,6 +15,31 @@ class ProviderCapture:
     raw_text: str
     raw_suffix: str
     items: tuple[HotItem, ...]
+
+
+NEWS_PLATFORMS: tuple[str, ...] = ("sina_news", "thepaper", "netease_news")
+
+
+class NewsProvider(Protocol):
+    platform: str
+    weights: Mapping[str, float]
+    absolute_floors: Mapping[str, float]
+
+    def collect_hot_list(self, collected_at: str) -> ProviderCapture: ...
+
+    def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail: ...
+
+    def search(
+        self,
+        keyword: str,
+        page: int,
+        page_size: int,
+        collected_at: str,
+    ) -> ProviderCapture: ...
+
+    def enrich_metrics(
+        self, items: Sequence[HotItem], collected_at: str
+    ) -> tuple[HotItem, ...]: ...
 
 
 def number_or_none(value: object) -> int | None:
