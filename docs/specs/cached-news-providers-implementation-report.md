@@ -94,8 +94,8 @@ regression suite stayed green throughout.
 
 ## §B. Post-fix smoke (Task 10 fix commit)
 
-Base: `c975b6f`. Fix commit (single commit covering provider fixes + this
-report update, see §B.4).
+Base: `c975b6f`. Fix commit SHA: `d87ee36` (single commit covering provider
+fixes + this report update; see §B.4 for contents).
 
 ### B.1 Fix scope (uncommitted working copy at report-write time)
 
@@ -176,7 +176,7 @@ with message:
 fix(news): align provider contracts with collect_news_daily and harden thepaper hot list
 ```
 
-The fix commit SHA appears in §B of this report at update time.
+The fix commit SHA is `d87ee36` (single commit; see `git log --oneline c975b6f..d87ee36`).
 
 ### B.5 Validator (Step 3 & 4)
 
