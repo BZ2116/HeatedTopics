@@ -29,6 +29,11 @@ from heated_topics_v3.providers.thepaper import (
     THEPAPER_WEIGHTS,
     ThePaperProvider,
 )
+from heated_topics_v3.providers.zhihu_daily import (
+    ZHIHU_DAILY_ABSOLUTE_FLOORS,
+    ZHIHU_DAILY_WEIGHTS,
+    ZhihuDailyProvider,
+)
 
 
 def _instantiate(cls):
@@ -81,3 +86,12 @@ def test_baidu_hot_provider_attributes_match_spec():
     assert dict(provider.absolute_floors) == BAIDU_ABSOLUTE_FLOORS
     assert provider.weights == {"hot_score": 1.0}
     assert provider.absolute_floors == {"hot_score": 1.0}
+
+
+def test_zhihu_daily_provider_attributes_match_spec():
+    provider = _instantiate(ZhihuDailyProvider)
+    assert provider.platform == "zhihu_daily"
+    assert dict(provider.weights) == ZHIHU_DAILY_WEIGHTS
+    assert dict(provider.absolute_floors) == ZHIHU_DAILY_ABSOLUTE_FLOORS
+    assert provider.weights == {}
+    assert provider.absolute_floors == {}
