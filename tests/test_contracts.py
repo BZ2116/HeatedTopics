@@ -1,19 +1,71 @@
 from typing import get_args
 
+import pytest
+
 from heated_topics_v3.contracts import (
+    ContentValidation,
     ContentStatus,
     DailySnapshot,
     FactStatus,
     GenerationStatus,
+    HeatEvidence,
     HeatLevel,
     HeatMetrics,
     HotItem,
     ItemDetail,
     PlatformCollectionStatus,
+    QualifiedArticle,
     RecommendationBundle,
     RecommendationItem,
     UserProfile,
 )
+
+
+@pytest.fixture
+def hot_item():
+    return HotItem(
+        item_id="baidu_1",
+        platform="baidu",
+        title="事件标题",
+        url="https://example.com/topic",
+        rank=1,
+        heat=HeatMetrics(value=100, label="100", metric_name="hot_index"),
+        summary="事件摘要",
+        publication_time=None,
+        collected_at="2026-07-13T08:00:00+08:00",
+    )
+
+
+@pytest.fixture
+def item_detail():
+    return ItemDetail(
+        item_id="baidu_1",
+        content="完整正文",
+        content_status="full_text",
+        publication_time=None,
+        collected_at="2026-07-13T08:00:00+08:00",
+        source_url="https://example.com/topic",
+        fetch_status="success",
+    )
+
+
+def test_qualified_article_requires_full_text_and_verified_evidence(hot_item, item_detail):
+    evidence = HeatEvidence(
+        source_kind="official_hot_board",
+        platform_rank=1,
+        native_hot_value=100.0,
+        metrics={"views": 100.0},
+        threshold_metrics={},
+        qualified_by=("official_hot_board",),
+    )
+    article = QualifiedArticle(
+        hot_item=hot_item,
+        detail=item_detail,
+        heat_evidence=evidence,
+        content_validation=ContentValidation("accepted", "fixture", 300, 3, ()),
+        platform_heat_score=0.0,
+    )
+    assert article.detail.content_status == "full_text"
 
 
 def test_user_profile_stores_primary_keyword():

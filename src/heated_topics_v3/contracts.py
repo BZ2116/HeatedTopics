@@ -10,6 +10,8 @@ FactStatus = Literal["verified", "unverified", "disputed", "debunked"]
 ContentStatus = Literal["full_text", "summary", "title_only"]
 GenerationStatus = Literal["existing", "generated", "no_result", "not_ready", "failed"]
 CollectionStatus = Literal["success", "partial", "failed"]
+EvidenceSource = Literal["official_hot_board", "public_engagement"]
+QualificationStatus = Literal["accepted", "rejected"]
 
 
 _SAFE_USER_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
@@ -66,6 +68,42 @@ class ItemDetail:
     collected_at: str
     source_url: str
     fetch_status: str
+
+
+@dataclass(frozen=True)
+class HeatEvidence:
+    source_kind: EvidenceSource
+    platform_rank: int | None
+    native_hot_value: float | None
+    metrics: Mapping[str, float] = field(default_factory=dict)
+    threshold_metrics: Mapping[str, float] = field(default_factory=dict)
+    qualified_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ContentValidation:
+    status: QualificationStatus
+    parser: str
+    character_count: int
+    paragraph_count: int
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class QualifiedArticle:
+    hot_item: HotItem
+    detail: ItemDetail
+    heat_evidence: HeatEvidence
+    content_validation: ContentValidation
+    platform_heat_score: float
+
+    def __post_init__(self) -> None:
+        if self.detail.content_status != "full_text":
+            raise ValueError("qualified article requires full_text")
+        if self.content_validation.status != "accepted":
+            raise ValueError("qualified article requires accepted content")
+        if not self.heat_evidence.qualified_by:
+            raise ValueError("qualified article requires heat evidence")
 
 
 @dataclass(frozen=True)
