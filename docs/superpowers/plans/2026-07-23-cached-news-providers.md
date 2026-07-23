@@ -121,6 +121,21 @@ def test_full_text_rejects_summary_title_and_page_chrome():
     assert "page_chrome" in result.reasons
 
 
+def test_gne_fallback_keeps_stricter_two_hundred_character_floor():
+    content = "\n\n".join(
+        [
+            "第一段介绍事件背景，包含明确的人物、时间和地点，并说明事件起因。",
+            "第二段描述事件进展，引用公开信息并补充相关数据和各方回应。",
+            "第三段交代后续安排、影响范围以及仍需继续确认的信息。",
+        ]
+    )
+    result = validate_full_text(
+        content, "事件标题", "事件摘要", parser="gne"
+    )
+    assert result.status == "rejected"
+    assert "too_short" in result.reasons
+
+
 def test_qualified_article_requires_full_text_and_verified_evidence(hot_item, item_detail):
     evidence = HeatEvidence(
         source_kind="official_hot_board",
@@ -209,7 +224,8 @@ from html.parser import HTMLParser
 from .contracts import ContentValidation
 
 
-MIN_ARTICLE_CHARACTERS = 200
+MIN_NATIVE_ARTICLE_CHARACTERS = 80
+MIN_FALLBACK_ARTICLE_CHARACTERS = 200
 _CHROME = (
     "登录", "发表评论", "推荐阅读", "相关阅读", "返回首页",
     "打开客户端", "扫码下载", "版权声明",
@@ -268,7 +284,12 @@ def validate_full_text(
     reasons: list[str] = []
     if compact in {re.sub(r"\s+", "", title), re.sub(r"\s+", "", summary)}:
         reasons.append("title_or_summary")
-    if len(compact) < MIN_ARTICLE_CHARACTERS:
+    minimum_characters = (
+        MIN_FALLBACK_ARTICLE_CHARACTERS
+        if parser == "gne"
+        else MIN_NATIVE_ARTICLE_CHARACTERS
+    )
+    if len(compact) < minimum_characters:
         reasons.append("too_short")
     sentence_count = len(re.findall(r"[。！？!?]", cleaned))
     if len(paragraphs) < 2 and sentence_count < 3:
