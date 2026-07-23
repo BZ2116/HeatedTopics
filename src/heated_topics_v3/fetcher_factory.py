@@ -31,6 +31,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from heated_topics_v3.baidu_retry import BaiduRetryPolicy, with_retry
+
 
 UA_POOL = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -459,6 +461,7 @@ def make_baidu_fetcher(
     *,
     timeout: int = 15,
     log_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
 ) -> Callable[[str, int], str]:
     """Return a synchronous fetcher for Baidu board / search / article URLs.
 
@@ -492,4 +495,67 @@ def make_baidu_fetcher(
         except urllib.error.URLError as exc:
             raise
 
-    return _fetcher
+    return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
+
+
+def _parse_cookie_header(header: str) -> dict[str, str]:
+    """Parse a Cookie: header string into a dict for curl_cffi."""
+    out: dict[str, str] = {}
+    for part in header.split("; "):
+        if "=" not in part:
+            continue
+        name, value = part.split("=", 1)
+        out[name.strip()] = value.strip()
+    return out
+
+
+def make_baidu_article_fetcher(
+    *,
+    cookie_path: Path | str,
+    log_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
+    timeout: int = 20,
+) -> Callable[[str, int], str]:
+    """Return a fetcher for baijiahao article pages.
+
+    baijiahao's anti-bot shell returns the full article body (with
+    ``window.jsonData`` embedded) only when the request carries a valid Baidu
+    cookie AND a Chrome TLS fingerprint. Plain urllib fails the TLS check;
+    this factory wraps curl_cffi with ``impersonate="chrome120"``.
+
+    Args:
+        cookie_path: Path to a Cookie: header file written by
+            ``scripts/harvest_baidu_cookie.py``.
+        log_path: Optional JSON log path (per-call diagnostics).
+        retry_policy: Retry policy for transient errors.
+        timeout: Default per-request timeout in seconds.
+
+    Returns:
+        Callable accepting ``(url, timeout_seconds)`` and returning response
+        text. Pipeline passes this as the ``article_fetch`` callable.
+    """
+    from curl_cffi import requests as cffi_requests
+
+    cookie_header = Path(cookie_path).read_text(encoding="utf-8").strip()
+    cookie_dict = _parse_cookie_header(cookie_header)
+
+    def _fetcher(url: str, timeout_seconds: int = timeout) -> str:
+        headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "User-Agent": BAIDU_MOBILE_UA,
+        }
+        referer = _referer_for(url)
+        if referer is not None:
+            headers["Referer"] = referer
+        resp = cffi_requests.get(
+            url,
+            impersonate="chrome120",
+            cookies=cookie_dict,
+            timeout=timeout_seconds,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        return resp.text
+
+    return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
