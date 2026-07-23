@@ -10,6 +10,7 @@ from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
 
 JUEJIN_HOT_RANK_URL = "https://api.juejin.cn/content_api/v1/content/article_rank?category_id=1&type=hot"
 JUEJIN_ARTICLE_DETAIL_URL = "https://api.juejin.cn/content_api/v1/article/detail"
+JUEJIN_SEARCH_URL = "https://api.juejin.cn/search_api/v1/search"
 
 
 def fetch_juejin_hot_items(
@@ -91,6 +92,66 @@ def parse_juejin_rank_response(
         )
         items.append(item)
     return items
+
+
+def fetch_juejin_search_items(
+    keyword: str,
+    fetched_at: str,
+    fetcher: Callable[[str, int, dict | None], str] | None = None,
+    timeout_seconds: int = 20,
+) -> list[HotItem]:
+    fetch = fetcher or _fetch_text_with_optional_json_body
+    body = {"id_type": 2, "cursor": "0", "limit": 20, "search_type": 0,
+            "sort_type": 0, "key_word": keyword}
+    return parse_juejin_search_response(
+        fetch(JUEJIN_SEARCH_URL, timeout_seconds, body), fetched_at=fetched_at)
+
+
+def parse_juejin_search_response(response_text: str, fetched_at: str) -> list[HotItem]:
+    payload = json.loads(response_text)
+    if payload.get("err_no") not in (0, None):
+        return []
+    items: list[HotItem] = []
+    for row in payload.get("data", []):
+        model = _dict(_dict(row).get("result_model"))
+        info = _dict(model.get("article_info"))
+        article_id = str(model.get("article_id") or info.get("article_id") or "").strip()
+        title = str(info.get("title", "")).strip()
+        if not article_id or not title:
+            continue
+        items.append(HotItem(
+            item_id=f"juejin_{article_id}", platform="juejin", item_type="article",
+            title=title, url=f"https://juejin.cn/post/{article_id}", rank=None,
+            heat=HeatMetrics(value=None, label="", metric_name="search_recall", metrics={
+                "views": _int_or_zero(info.get("view_count")),
+                "likes": _int_or_zero(info.get("digg_count")),
+                "collects": _int_or_zero(info.get("collect_count")),
+                "comments": _int_or_zero(info.get("comment_count")),
+            }),
+            summary=str(info.get("brief_content", "")).strip(), category="",
+            matched_query_ids=(), fetched_at=fetched_at, fetch_status="success",
+            raw_payload={"content": {"content_id": article_id},
+                         "source_kind": "juejin_search_recall",
+                         "source_path": "B"},  # 对齐 Toutiao：搜索结果统一标 B
+        ))
+    return items
+
+
+def merge_juejin_items(rank_items: list[HotItem], search_items: list[HotItem]) -> list[HotItem]:
+    """rank + search 合并，按 article_id 去重，rank 命中优先保留。
+
+    对齐 Toutiao Path A/B 行为：
+    - 输出顺序：rank_items 在前（保留各自顺序），search_items 中未在 rank 命中的追加在后。
+    - 标签保留：rank 命中的条目保留其 raw_payload["source_path"]（=A）；
+      search 独有条目保留 source_path=B。
+    """
+    seen: dict[str, HotItem] = {}
+    for item in list(rank_items) + list(search_items):
+        aid = _article_id_from_item(item) or f"_anon_{id(item)}"
+        if aid in seen:
+            continue
+        seen[aid] = item
+    return list(seen.values())
 
 
 def parse_juejin_detail_response(response_text: str, item: HotItem) -> ItemDetail:
