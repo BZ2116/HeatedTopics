@@ -9,6 +9,11 @@ from __future__ import annotations
 
 import httpx
 
+from heated_topics_v3.providers.baidu_hot import (
+    BAIDU_ABSOLUTE_FLOORS,
+    BAIDU_WEIGHTS,
+    BaiduHotProvider,
+)
 from heated_topics_v3.providers.netease_news import (
     NETEASE_ABSOLUTE_FLOORS,
     NETEASE_WEIGHTS,
@@ -67,3 +72,12 @@ def test_netease_news_provider_attributes_match_spec():
     }
     assert provider.absolute_floors == {"comments": 10.0}
     assert abs(sum(provider.weights.values()) - 1.0) < 1e-9
+
+
+def test_baidu_hot_provider_attributes_match_spec():
+    provider = _instantiate(BaiduHotProvider)
+    assert provider.platform == "baidu_hot"
+    assert dict(provider.weights) == BAIDU_WEIGHTS
+    assert dict(provider.absolute_floors) == BAIDU_ABSOLUTE_FLOORS
+    assert provider.weights == {"hot_score": 1.0}
+    assert provider.absolute_floors == {"hot_score": 1.0}
