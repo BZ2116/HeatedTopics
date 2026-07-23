@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Sequence
 from unicodedata import normalize
 from urllib.parse import unquote, urlsplit
 
@@ -74,17 +74,13 @@ def discover_platform_articles(
     if len(matched) >= MIN_RESULTS:
         return rank_platform_articles(matched, provider.weights)[:MAX_RESULTS]
 
-    if not _has_active_search_window(collected_at):
+    if not _has_active_search_window(collected_at, datetime.now(tz=SHANGHAI_TZ)):
         snapshot = repository.resolve_eligible_snapshot(
             provider.platform, collected_at, max_age_hours=48
         )
         if snapshot is not None:
             snapshot_date, snapshot_articles = snapshot
             snapshot_matched = _match_articles(profile, snapshot_articles)
-            if len(snapshot_matched) >= MIN_RESULTS:
-                return _rank_snapshot(
-                    snapshot_matched, provider, snapshot_date=snapshot_date
-                )
             if len(snapshot_matched) >= MIN_RESULTS:
                 return _rank_snapshot(
                     snapshot_matched, provider, snapshot_date=snapshot_date
@@ -158,11 +154,19 @@ def _rank_snapshot(
     )
 
 
-def _has_active_search_window(collected_at: str) -> bool:
+def _has_active_search_window(collected_at: str, now: datetime) -> bool:
+    """Return True when the provider search window is still open for ``collected_at``.
+
+    The search window is open only when ``collected_at`` falls on the same
+    Shanghai calendar day as ``now``. Anything older (yesterday or earlier)
+    means the daily collection has rolled past and the caller must fall back to
+    the most recent eligible snapshot instead of issuing new provider searches.
+    """
+
     parsed = _parse_collected_at(collected_at)
     if parsed is None:
         return False
-    return True
+    return parsed.date() >= now.astimezone(SHANGHAI_TZ).date()
 
 
 def _load_cached_eligible(
@@ -238,9 +242,25 @@ def _run_search_discovery(
             stop_reason = stop_reason or "duplicate_only"
             break
 
-        for item in list(candidate_pool.values())[-(page_new_candidates):]:
+        page_items = list(candidate_pool.values())[-(page_new_candidates):]
+        enriched_items = list(provider.enrich_metrics(page_items, collected_at))
+        for enriched, original in zip(enriched_items, page_items):
+            if enriched is not original:
+                candidate_pool[original.item_id] = enriched
+        page_items = enriched_items
+
+        for item in page_items:
             if len(qualified_search) >= MAX_RESULTS:
                 break
+            if not matches_primary_keyword(profile, item, None):
+                rejected_candidates.append(
+                    {
+                        "item_id": item.item_id,
+                        "source_url": item.url,
+                        "reasons": ["rejected:keyword_prefilter"],
+                    }
+                )
+                continue
             detail = _safe_fetch_detail(provider, item, collected_at)
             metrics = dict(item.heat.metrics)
             if not metrics:
@@ -328,23 +348,6 @@ def _run_search_discovery(
         collected_at=collected_at,
     )
     return _merge(seeded_matched, qualified_search, provider=provider)
-
-
-def _score_and_filter_candidates(
-    items: Iterable[HotItem],
-    profile: UserProfile,
-    floors: Mapping[str, float],
-) -> list[HotItem]:
-    matched: list[HotItem] = []
-    for item in items:
-        if matches_primary_keyword(profile, item, None):
-            matched.append(item)
-    if not matched and floors:
-        qualified_metric = next(iter(floors))
-        for item in items:
-            if float(item.heat.metrics.get(qualified_metric, 0.0)) >= float(floors[qualified_metric]):
-                matched.append(item)
-    return matched
 
 
 def _safe_fetch_detail(

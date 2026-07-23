@@ -249,6 +249,7 @@ class FakeProvider:
         self._enrich = dict(enrich_metrics or {})
         self.search_calls: list[tuple[str, int, int, str]] = []
         self.search_call_count = 0
+        self.detail_calls: set[str] = set()
         self._search_error = search_error
         self._detail_mode = detail_mode
 
@@ -256,6 +257,7 @@ class FakeProvider:
         return ProviderCapture(json.dumps({"platform": self.platform}), ".json", ())
 
     def fetch_detail(self, item: HotItem, collected_at: str) -> ItemDetail:
+        self.detail_calls.add(item.item_id)
         payload = self._detail_payloads.get(item.item_id)
         if payload is not None:
             return payload
@@ -631,4 +633,119 @@ def test_search_cache_negative_retry_after_is_respected(repository):
     )
 
     assert result == ()
+    assert provider.search_calls == []
+
+
+def test_search_keyword_prefilter_skips_fetch_detail_for_irrelevant_items(repository):
+    relevant = _make_hot_item(
+        platform="thepaper",
+        item_id="thepaper_relevant",
+        rank=1,
+        title=f"{KEYWORD} 报道",
+        summary=f"{KEYWORD} 摘要",
+        metrics={"interaction_num": 30.0, "praise_times": 25.0},
+    )
+    irrelevant = _make_hot_item(
+        platform="thepaper",
+        item_id="thepaper_irrelevant",
+        rank=2,
+        title="完全无关新闻标题",
+        summary="某领域动态",
+        metrics={"interaction_num": 30.0, "praise_times": 25.0},
+    )
+    provider = FakeProvider(
+        platform="thepaper",
+        weights={"interaction_num": 0.6, "praise_times": 0.4},
+        absolute_floors={"interaction_num": 1.0, "praise_times": 10.0},
+        pages=((relevant, irrelevant),),
+    )
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    )
+
+    assert any(article.hot_item.item_id == "thepaper_relevant" for article in result)
+    assert all(
+        article.hot_item.item_id != "thepaper_irrelevant" for article in result
+    )
+    assert "thepaper_irrelevant" not in provider.detail_calls
+    assert "thepaper_relevant" in provider.detail_calls
+
+
+def test_search_candidates_require_enrich_metrics_to_qualify(tmp_path):
+    repo_no_enrich = FileRepository(tmp_path / "no_enrich")
+    repo_with_enrich = FileRepository(tmp_path / "with_enrich")
+    matched = _make_hot_item(
+        platform="thepaper",
+        item_id="thepaper_search_enrich",
+        rank=1,
+        title=f"{KEYWORD} 候选",
+        summary=f"{KEYWORD} 摘要",
+        metrics={"interaction_num": 0.0, "praise_times": 0.0},
+    )
+    provider_no_enrich = FakeProvider(
+        platform="thepaper",
+        weights={"interaction_num": 0.6, "praise_times": 0.4},
+        absolute_floors={"interaction_num": 10.0, "praise_times": 20.0},
+        pages=((matched,),),
+    )
+
+    result_without_enrich = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repo_no_enrich, provider_no_enrich
+    )
+    assert all(
+        article.hot_item.item_id != "thepaper_search_enrich"
+        for article in result_without_enrich
+    )
+
+    provider_with_enrich = FakeProvider(
+        platform="thepaper",
+        weights={"interaction_num": 0.6, "praise_times": 0.4},
+        absolute_floors={"interaction_num": 10.0, "praise_times": 20.0},
+        pages=((matched,),),
+        enrich_metrics={"interaction_num": 50.0, "praise_times": 40.0},
+    )
+
+    result_with_enrich = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repo_with_enrich, provider_with_enrich
+    )
+    assert any(
+        article.hot_item.item_id == "thepaper_search_enrich"
+        for article in result_with_enrich
+    )
+
+
+def test_stale_snapshot_reachable_when_search_window_expired(repository):
+    yesterday = "2026-07-22"
+    yesterday_noon = datetime(2026, 7, 22, 12, 0, tzinfo=SHANGHAI).isoformat()
+    stale_articles = tuple(
+        _build_article(
+            _make_hot_item(
+                platform="sina_news",
+                item_id=f"sina_stale_{index + 1}",
+                rank=index + 1,
+                title=f"{KEYWORD} 旧标题 {index + 1}",
+                summary=f"{KEYWORD} 摘要",
+                metrics={"top_num": 200.0, "comments": 25.0},
+            ),
+            metrics={"top_num": 200.0, "comments": 25.0},
+            source="official_hot_board",
+        )
+        for index in range(6)
+    )
+    repository.save_eligible(yesterday, "sina_news", stale_articles)
+    repository.publish_active_snapshot("sina_news", yesterday)
+
+    provider = FakeProvider(platform="sina_news")
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, yesterday_noon, repository, provider
+    )
+
+    assert len(result) >= 1
+    assert all(
+        article.hot_item.raw_payload.get("is_stale") is True
+        and article.hot_item.raw_payload.get("snapshot_date") == yesterday
+        for article in result
+    )
     assert provider.search_calls == []
