@@ -47,7 +47,16 @@ def main(root_text: str) -> int:
             if row.get("content_status") != "full_text" or not row.get("detail"):
                 violations.append(f"content:{path}:{row.get('hot_item_id')}")
             evidence = row.get("evidence", {})
-            if not evidence.get("qualified_by") or not evidence.get("metrics"):
+            qualified_by = tuple(evidence.get("qualified_by") or ())
+            metrics = dict(evidence.get("metrics") or {})
+            if not qualified_by:
+                violations.append(f"evidence:{path}:{row.get('hot_item_id')}")
+            elif evidence.get("source_kind") == "official_hot_board":
+                rank = evidence.get("platform_rank") or 0
+                native = evidence.get("native_hot_value") or 0
+                if rank <= 0 and native <= 0 and not any(v > 0 for v in metrics.values()):
+                    violations.append(f"evidence:{path}:{row.get('hot_item_id')}")
+            elif not any(v > 0 for v in metrics.values()):
                 violations.append(f"evidence:{path}:{row.get('hot_item_id')}")
             by_platform[str(row.get("platform"))].append(
                 float(evidence.get("platform_heat_score", 0.0))

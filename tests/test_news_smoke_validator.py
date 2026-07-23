@@ -30,6 +30,59 @@ def _run(root: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def test_clean_zhihu_rank_only_result_passes(tmp_path: Path) -> None:
+    payload = {
+        "recommendations": [
+            {
+                "hot_item_id": "zhihu_daily_1001",
+                "platform": "zhihu_daily",
+                "content_status": "full_text",
+                "detail": "accepted body",
+                "source_url": "https://daily.zhihu.com/story/1001",
+                "evidence": {
+                    "source_kind": "official_hot_board",
+                    "platform_rank": 1,
+                    "native_hot_value": None,
+                    "metrics": {},
+                    "threshold_metrics": {},
+                    "qualified_by": ["official_hot_board"],
+                    "platform_heat_score": 0.0,
+                },
+            }
+        ]
+    }
+    (tmp_path / "result.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout) == {"status": "success", "violations": []}
+
+
+def test_public_engagement_with_empty_metrics_still_fails(tmp_path: Path) -> None:
+    payload = {
+        "recommendations": [
+            {
+                "hot_item_id": "bad-1",
+                "platform": "sina_news",
+                "content_status": "full_text",
+                "detail": "body",
+                "evidence": {
+                    "source_kind": "public_engagement",
+                    "platform_rank": None,
+                    "native_hot_value": None,
+                    "metrics": {},
+                    "qualified_by": [],
+                    "platform_heat_score": 0.0,
+                },
+            }
+        ]
+    }
+    (tmp_path / "result.json").write_text(json.dumps(payload), encoding="utf-8")
+    result = _run(tmp_path)
+    assert result.returncode == 1, result.stdout + result.stderr
+    violations = json.loads(result.stdout)["violations"]
+    assert any(v.startswith("evidence:") for v in violations)
+
+
 def test_clean_tree_returns_success(tmp_path: Path) -> None:
     (tmp_path / "empty.json").write_text("[]", encoding="utf-8")
     result = _run(tmp_path)
