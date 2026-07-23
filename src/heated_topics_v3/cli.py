@@ -15,6 +15,7 @@ from heated_topics_v3.llm_keywords import KEYWORD_EXTRACTION_SYSTEM, extract_per
 from heated_topics_v3.pipeline import (
     run_baidu_pipeline,
     run_juejin_pipeline,
+    run_juejin_pipeline_v2,
     run_toutiao_pipeline,
     run_toutiao_pipeline_v2,
 )
@@ -41,7 +42,7 @@ def _main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     juejin = subparsers.add_parser("juejin", help="Collect Juejin hot list and match it to a user profile.")
-    _add_platform_args(juejin)
+    _add_juejin_args(juejin)
 
     toutiao = subparsers.add_parser("toutiao", help="Collect Toutiao hot list and match it to a user profile.")
     _add_toutiao_args(toutiao)
@@ -63,13 +64,23 @@ def _main() -> None:
     args = parser.parse_args()
     if args.command == "juejin":
         fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
-        outputs = run_juejin_pipeline(
-            profile_path=args.profile,
-            output_root=args.output_root,
-            fetched_at=fetched_at,
-        )
-        for name, path in outputs.items():
-            print(f"{name}: {path}")
+        if getattr(args, "profile_v2", None) is not None:
+            from heated_topics_v3.fetcher_factory import make_juejin_fetcher
+            fetcher = make_juejin_fetcher(log_path=Path(__file__).resolve().parent.parent / ".juejin_fetcher_log.json")
+            result = run_juejin_pipeline_v2(
+                profile_path=args.profile_v2, output_root=args.output_root, fetched_at=fetched_at,
+                cache_root=args.cache_root, top_n=args.top_n, offline=args.offline,
+                force_rank_refresh=args.force_rank_refresh, force_search_refresh=args.force_search_refresh,
+                force_article_refresh=args.force_article_refresh,
+                matched_query_ids=tuple(q.strip() for q in args.matched_query_ids if q.strip()),
+                fetcher=fetcher, detail_fetcher=fetcher)
+            for name, path in result.items():
+                print(f"{name}: {path}")
+        else:
+            outputs = run_juejin_pipeline(
+                profile_path=args.profile, output_root=args.output_root, fetched_at=fetched_at)
+            for name, path in outputs.items():
+                print(f"{name}: {path}")
     if args.command == "toutiao":
         fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
         if args.profile_v2 is not None:
@@ -254,6 +265,21 @@ def _add_bilibili_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
     parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
     parser.add_argument("--bilibili-cookie-path", dest="bilibili_cookie_path", default=Path(".bilibili_cookie"), type=Path)
+    parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+
+
+def _add_juejin_args(parser: argparse.ArgumentParser) -> None:
+    profiles = parser.add_mutually_exclusive_group(required=True)
+    profiles.add_argument("--profile", type=Path)
+    profiles.add_argument("--profile-v2", dest="profile_v2", type=Path)
+    parser.add_argument("--output-root", "--output-dir", dest="output_root", default=Path("outputs"), type=Path)
+    parser.add_argument("--fetched-at", default=None)
+    parser.add_argument("--cache-root", default=Path("cache"), type=Path)
+    parser.add_argument("--top-n", dest="top_n", default=20, type=int)
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--force-rank-refresh", dest="force_rank_refresh", action="store_true")
+    parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
+    parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
     parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
 
 
