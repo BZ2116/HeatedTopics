@@ -7,7 +7,7 @@ from typing import Any, Literal, Mapping
 
 HeatLevel = Literal[1, 2, 3]
 FactStatus = Literal["verified", "unverified", "disputed", "debunked"]
-ContentStatus = Literal["full_text", "summary", "title_only"]
+ContentStatus = Literal["full_text", "summary", "title_only", "rejected"]
 GenerationStatus = Literal["existing", "generated", "no_result", "not_ready", "failed"]
 CollectionStatus = Literal["success", "partial", "failed"]
 EvidenceSource = Literal["official_hot_board", "public_engagement"]

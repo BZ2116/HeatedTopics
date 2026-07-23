@@ -165,7 +165,12 @@ def test_item_detail_accepts_each_content_status():
 def test_workflow_status_literals_are_exact():
     assert get_args(HeatLevel) == (1, 2, 3)
     assert get_args(FactStatus) == ("verified", "unverified", "disputed", "debunked")
-    assert get_args(ContentStatus) == ("full_text", "summary", "title_only")
+    assert get_args(ContentStatus) == (
+        "full_text",
+        "summary",
+        "title_only",
+        "rejected",
+    )
     assert get_args(GenerationStatus) == (
         "existing",
         "generated",
