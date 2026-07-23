@@ -27,6 +27,18 @@ from heated_topics_v3.providers.baidu import (
     parse_baidu_search_response,
 )
 from heated_topics_v3.providers.juejin import fetch_juejin_hot_items, fetch_juejin_item_detail
+from heated_topics_v3.juejin_cache import (
+    get_or_fetch_board_with_record as juejin_get_rank,
+    get_or_fetch_search_with_record as juejin_get_search,
+    get_or_fetch_article_with_record as juejin_get_article,
+)
+from heated_topics_v3.providers.juejin import (
+    fetch_juejin_search_items,
+    merge_juejin_items,
+    parse_juejin_rank_response,
+    parse_juejin_search_response,
+)
+from heated_topics_v3.reporting import render_juejin_report_v2
 from heated_topics_v3.providers.toutiao import (
     attach_article_heat_fields,
     build_toutiao_search_phrases,
@@ -461,6 +473,150 @@ def run_juejin_pipeline(
         ),
         report_renderer=render_juejin_report,
     )
+
+
+def run_juejin_pipeline_v2(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    cache_root: Path,
+    fetcher: Callable[[str, int, dict | None], str] | None = None,
+    detail_fetcher: Callable[[str, int, dict | None], str] | None = None,
+    top_n: int = 20,
+    offline: bool = False,
+    force_rank_refresh: bool = False,
+    force_search_refresh: bool = False,
+    force_article_refresh: bool = False,
+    matched_query_ids: tuple[str, ...] = (),
+    min_hot_board_before_search: int = 5,  # 对齐 Toutiao PathFilters.min_hot_board_before_search
+) -> dict[str, Path]:
+    """三段掘金 v2：hot-rank + 关键词搜索合并去重 → 正文。
+
+    对齐 Toutiao Path A/B 模式：
+      - rank 中匹配 persona 的条目 = Path A；关键词搜索 = Path B。
+      - Path A 命中数 ≥ min_hot_board_before_search 或 core_keywords 为空 → 跳过 search。
+      - 按 article_id 去重，rank 命中优先保留 source_path=A；输出顺序 A 在前 → B 在后。
+    """
+    profile = load_user_profile(profile_path)
+    fetch = fetcher
+    detail_fetch = detail_fetcher or fetcher
+    today = utc8_today()
+    cache_root_path = Path(cache_root)
+    stats = BaiduCacheStats()
+    search_items: list[HotItem] = []  # 阈值门控或空 keywords 时保持为空
+
+    # ---- stage 1: hot-rank（date key，映射到 board 统计层）----
+    from heated_topics_v3.providers.juejin import JUEJIN_HOT_RANK_URL
+
+    def live_rank(_date: str) -> dict:
+        return {"response_text": fetch(JUEJIN_HOT_RANK_URL, 20, None)}
+
+    if force_rank_refresh:
+        rank_payload, src = juejin_get_rank(cache_root_path, today, live_rank, force_refresh=True)
+    elif offline:
+        rank_payload, src = juejin_get_rank(cache_root_path, today, live_rank, deadline=time.monotonic())
+    else:
+        rank_payload, src = juejin_get_rank(cache_root_path, today, live_rank)
+    stats.record("board", src, forced=force_rank_refresh)
+    rank_text = str(rank_payload.get("response_text", "")) if isinstance(rank_payload, dict) else ""
+    rank_items = parse_juejin_rank_response(rank_text, fetched_at=fetched_at,
+                                            matched_query_ids=matched_query_ids) if rank_text.strip() else []
+
+    # ---- 对齐 Toutiao：Path A 阈值门控 ----
+    # 先用 persona 查询对 rank_items 做一次匹配，统计 Path A 命中数；
+    # 若 ≥ min_hot_board_before_search → 跳过 search 阶段。
+    queries_for_gate = tuple(build_topic_queries(profile))
+    path_a_items = [
+        item for item in rank_items
+        if match_hot_item_to_queries(item, queries_for_gate, profile.excluded_keywords).is_relevant
+    ]
+    skip_search = (len(path_a_items) >= min_hot_board_before_search) or (not profile.core_keywords)
+
+    if not skip_search:
+        # ---- stage 2: 关键词搜索（word key）----
+        search_items = []
+        for word in profile.core_keywords[:top_n]:
+            def live_search(_w: str = word) -> list[dict]:
+                items = fetch_juejin_search_items(_w, fetched_at=fetched_at, fetcher=fetch)
+                return [{"article_id": it.item_id.replace("juejin_", ""), "title": it.title,
+                         "views": it.heat.metrics.get("views", 0), "likes": it.heat.metrics.get("likes", 0),
+                         "collects": it.heat.metrics.get("collects", 0), "comments": it.heat.metrics.get("comments", 0),
+                         "summary": it.summary} for it in items]
+
+            if force_search_refresh:
+                payload, s = juejin_get_search(cache_root_path, today, word, live_search, force_refresh=True)
+            elif offline:
+                payload, s = juejin_get_search(cache_root_path, today, word, live_search, deadline=time.monotonic())
+            else:
+                payload, s = juejin_get_search(cache_root_path, today, word, live_search)
+            stats.record("search", s, forced=force_search_refresh)
+            if not isinstance(payload, list):
+                continue
+            for entry in payload:
+                if not isinstance(entry, dict):
+                    continue
+                aid = str(entry.get("article_id", "")).strip()
+                title = str(entry.get("title", "")).strip()
+                if not aid or not title:
+                    continue
+                search_items.append(HotItem(
+                    item_id=f"juejin_{aid}", platform="juejin", item_type="article", title=title,
+                    url=f"https://juejin.cn/post/{aid}", rank=None,
+                    heat=HeatMetrics(value=None, label="", metric_name="search_recall", metrics={
+                        "views": int(entry.get("views", 0) or 0), "likes": int(entry.get("likes", 0) or 0),
+                        "collects": int(entry.get("collects", 0) or 0), "comments": int(entry.get("comments", 0) or 0)}),
+                    summary=str(entry.get("summary", "")), category="",
+                    matched_query_ids=matched_query_ids, fetched_at=fetched_at, fetch_status="success",
+                    raw_payload={"content": {"content_id": aid},
+                                 "source_kind": "juejin_search_recall",
+                                 "source_path": "B"}))  # 对齐 Toutiao：search 标 B
+
+    # ---- 合并去重：rank 优先，保留 source_path=A；order: rank-first → search-not-in-rank ----
+    merged = merge_juejin_items(rank_items, search_items if not skip_search else [])
+
+    # ---- matching ----
+    queries = tuple(build_topic_queries(profile))
+    matches = [result for item in merged
+               if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant]
+
+    # ---- stage 3: 正文（id key，复用 fetch_juejin_item_detail）----
+    item_details: list[ItemDetail] = []
+    for match in matches:
+        item = match.item
+        aid = item.item_id.replace("juejin_", "")
+
+        def live_article(_aid: str = aid, _item=item) -> dict:
+            detail = fetch_juejin_item_detail(_item, fetcher=detail_fetch)
+            return {"title": detail.title, "content": detail.content, "author": detail.author,
+                    "published_at": detail.published_at, "extraction_method": detail.extraction_method,
+                    "fetch_status": detail.fetch_status}
+
+        if force_article_refresh:
+            payload, s = juejin_get_article(cache_root_path, today, aid, live_article, force_refresh=True)
+        elif offline:
+            payload, s = juejin_get_article(cache_root_path, today, aid, live_article, deadline=time.monotonic())
+        else:
+            payload, s = juejin_get_article(cache_root_path, today, aid, live_article)
+        stats.record("article", s, forced=force_article_refresh)
+        if not isinstance(payload, dict) or not payload:
+            detail = ItemDetail(item_id=item.item_id, platform="juejin", url=item.url, title=item.title,
+                                author="", content="", published_at="", tags=(),
+                                extraction_method="juejin_detail_api", fetch_status="empty", raw_payload={})
+        else:
+            detail = ItemDetail(item_id=item.item_id, platform="juejin", url=item.url,
+                                title=str(payload.get("title", item.title)), author=str(payload.get("author", "")),
+                                content=str(payload.get("content", "")), published_at=str(payload.get("published_at", "")),
+                                tags=(), extraction_method=str(payload.get("extraction_method", "juejin_detail_api")),
+                                fetch_status=str(payload.get("fetch_status", "success")), raw_payload={})
+        item_details.append(detail)
+
+    details_by_item_id = {d.item_id: d for d in item_details}
+    return _run_platform_pipeline(
+        profile_path=profile_path, output_root=output_root, fetched_at=fetched_at, source_id="juejin",
+        hot_items_fetcher=lambda _f: merged,
+        item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
+        report_renderer=render_juejin_report_v2, cache_stats=stats)
 
 
 def run_toutiao_pipeline(

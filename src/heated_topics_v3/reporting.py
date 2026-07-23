@@ -210,3 +210,20 @@ def _build_summary_prompt(
         "今日 Top 文章:\n" + "\n".join(rows) +
         "\n\n请用 3-5 句中文总结今日热点主题趋势。"
     )
+
+
+def render_juejin_report_v2(
+    profile: UserProfile,
+    matches: list[MatchResult],
+    fetched_at: str,
+    item_details: list[ItemDetail] | None = None,
+    cache_stats: "BaiduCacheStats | None" = None,
+) -> str:
+    body = _render_platform_report("Juejin 热点日报 v2", profile, matches, fetched_at, item_details)
+    if cache_stats is not None:
+        section = _render_cache_stats_section(cache_stats)
+        marker = "## Matched Topics"
+        body = body.replace(marker, section + marker, 1) if marker in body else body.rstrip() + "\n\n" + section + "\n"
+    if not matches:
+        return body.replace("No matched hot topics.", "<h3>本次未抓到任何条目</h3>")
+    return body

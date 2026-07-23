@@ -88,7 +88,7 @@ def parse_juejin_rank_response(
             matched_query_ids=matched_query_ids,
             fetched_at=fetched_at,
             fetch_status="success",
-            raw_payload=row,
+            raw_payload={**row, "source_path": "A"},  # 对齐 Toutiao：rank 命中统一标 A
         )
         items.append(item)
     return items
