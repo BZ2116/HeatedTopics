@@ -91,8 +91,20 @@ data/
 
 ### Result limits and guarantees
 
-* Each of `sina_news`, `thepaper`, and `netease_news` returns at most
-  `MAX_RESULTS = 20` articles per user request.
+* Each of `sina_news`, `thepaper`, `netease_news`, `baidu_hot`, and
+  `zhihu_daily` returns at most `MAX_RESULTS = 20` articles per user request.
+* `baidu_hot` heat is event-level: the parent event carries the `hot_score`
+  while the supporting article body is fetched from the first Baidu search
+  candidate whose resolved URL passes the aggregation-surface filter. The
+  recommendation `source_url` is the supporting article URL, not the Baidu
+  event URL.
+* `zhihu_daily` heat evidence is rank-only official archive data
+  (`platform_rank`, eight-digit `recommendation_date`), with empty metrics.
+  Search is bounded to a seven-day archive scan that caches up to 60 unique
+  type-0 stories per `(keyword, collected_at date)`; later pages slice the
+  cache without new HTTP calls.
+* Both providers are anonymous and cookie-free: no `.env`, Cookie, header, or
+  credential is read, sent, or persisted.
 * Formal results are constructed only from `QualifiedArticle` records whose
   detail `content_status` is `full_text` and whose heat evidence contains a
   non-empty `qualified_by` set; `summary` and `title_only` records never become

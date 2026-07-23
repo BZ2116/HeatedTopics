@@ -281,7 +281,13 @@ def generate_v1_user_result(
             return bundle if winner == bundle else _as_existing(winner or bundle)
 
 
-NEWS_DISPLAY_ORDER = ("sina_news", "thepaper", "netease_news")
+NEWS_DISPLAY_ORDER = (
+    "sina_news",
+    "thepaper",
+    "netease_news",
+    "baidu_hot",
+    "zhihu_daily",
+)
 
 
 def _news_evidence(article: QualifiedArticle) -> dict:
@@ -311,7 +317,7 @@ def _article_to_recommendation(article: QualifiedArticle) -> RecommendationItem:
         content_status=article.detail.content_status,
         is_personalized=True,
         evidence=_news_evidence(article),
-        source_url=article.hot_item.url,
+        source_url=article.detail.source_url or article.hot_item.url,
     )
 
 

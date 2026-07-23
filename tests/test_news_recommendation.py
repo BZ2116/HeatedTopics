@@ -172,26 +172,43 @@ def _build_providers(
 ) -> dict[str, FakeNewsProvider]:
     counts = dict(counts or {})
     providers: dict[str, FakeNewsProvider] = {}
-    for platform in ("sina_news", "thepaper", "netease_news"):
+    for platform in ("sina_news", "thepaper", "netease_news", "baidu_hot", "zhihu_daily"):
         count = counts.get(platform, 3)
-        articles = tuple(
-            _build_article(
-                _make_hot_item(
-                    platform=platform,
-                    item_id=f"{platform}_{index + 1}",
-                    rank=index + 1,
-                    title=f"{KEYWORD} {platform} {index + 1}",
-                    summary=f"{KEYWORD} 摘要",
-                    metrics={"comments": 20.0 + index, "views": 100.0 + index},
-                ),
-                metrics={"comments": 20.0 + index, "views": 100.0 + index},
+        if platform in ("baidu_hot", "zhihu_daily"):
+            metrics_template: dict[str, float] = {"hot_score": 500.0}
+        else:
+            metrics_template = {"comments": 0.0, "views": 0.0}
+        articles = []
+        for index in range(count):
+            metrics = (
+                {"hot_score": 500.0}
+                if platform in ("baidu_hot", "zhihu_daily")
+                else {"comments": 20.0 + index, "views": 100.0 + index}
             )
-            for index in range(count)
-        )
+            articles.append(
+                _build_article(
+                    _make_hot_item(
+                        platform=platform,
+                        item_id=f"{platform}_{index + 1}",
+                        rank=index + 1,
+                        title=f"{KEYWORD} {platform} {index + 1}",
+                        summary=f"{KEYWORD} 摘要",
+                        metrics=metrics,
+                    ),
+                    metrics=metrics,
+                )
+            )
+        articles = tuple(articles)
+        if platform in ("baidu_hot", "zhihu_daily"):
+            weights = {"hot_score": 1.0}
+            floors = {"hot_score": 1.0}
+        else:
+            weights = {"comments": 0.5, "views": 0.5}
+            floors = {"comments": 10.0}
         providers[platform] = FakeNewsProvider(
             platform=platform,
-            weights={"comments": 0.5, "views": 0.5},
-            absolute_floors={"comments": 10.0},
+            weights=weights,
+            absolute_floors=floors,
             eligible=articles,
         )
     return providers
@@ -315,3 +332,50 @@ def test_news_generation_preserves_heat_evidence_metrics(tmp_path):
         assert "qualified_by" in evidence
         assert evidence["source_kind"] == "official_hot_board"
         assert evidence["platform_heat_score"] >= 0.0
+
+def test_news_recommendation_uses_supporting_article_source_url(tmp_path):
+    from heated_topics_v3.recommendation import _article_to_recommendation
+
+    repository = FileRepository(tmp_path)
+    item = _make_hot_item(
+        platform="baidu_hot",
+        item_id="baidu_hot_support",
+        rank=1,
+        title=f"{KEYWORD} 人工智能手机发布",
+        summary="百度热搜事件",
+        metrics={"hot_score": 987654.0},
+    )
+    evidence = HeatEvidence(
+        source_kind="official_hot_board",
+        platform_rank=1,
+        native_hot_value=987654.0,
+        metrics={"hot_score": 987654.0},
+        threshold_metrics={"hot_score": 1.0},
+        qualified_by=("official_hot_board",),
+    )
+    detail = ItemDetail(
+        item.item_id,
+        _LONG_BODY,
+        "full_text",
+        None,
+        BUSINESS_DATE + "T08:01:00+08:00",
+        "https://news.example.test/article",
+        "success",
+    )
+    validation = ContentValidation("accepted", "article", 500, 4, ())
+    article = QualifiedArticle(item, detail, evidence, validation, 0.0)
+    recommendation = _article_to_recommendation(article)
+    assert recommendation.source_url == "https://news.example.test/article"
+    assert recommendation.platform == "baidu_hot"
+
+
+def test_news_recommendation_platforms_constant_lists_all_five():
+    from heated_topics_v3.recommendation import NEWS_DISPLAY_ORDER
+
+    assert NEWS_DISPLAY_ORDER == (
+        "sina_news",
+        "thepaper",
+        "netease_news",
+        "baidu_hot",
+        "zhihu_daily",
+    )

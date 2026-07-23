@@ -224,11 +224,91 @@ def _netease_provider() -> FakeNewsProvider:
     )
 
 
+def _attach_board_evidence(provider: FakeNewsProvider) -> FakeNewsProvider:
+    def build_board_evidence(item: HotItem, floors):
+        if item.rank is None or item.rank <= 0:
+            return None
+        from heated_topics_v3.contracts import HeatEvidence
+
+        native = (
+            float(item.heat.value)
+            if isinstance(item.heat.value, (int, float))
+            else None
+        )
+        return HeatEvidence(
+            source_kind="official_hot_board",
+            platform_rank=item.rank,
+            native_hot_value=native,
+            metrics={k: float(v) for k, v in item.heat.metrics.items()},
+            threshold_metrics=dict(floors),
+            qualified_by=("official_hot_board",),
+        )
+
+    provider.build_board_evidence = build_board_evidence  # type: ignore[attr-defined]
+    return provider
+
+
+def _baidu_provider() -> FakeNewsProvider:
+    full = _item(
+        platform="baidu_hot",
+        item_id="baidu_hot_full",
+        rank=1,
+        metrics={"hot_score": 987654.0},
+    )
+    provider = FakeNewsProvider(
+        platform="baidu_hot",
+        items=(full,),
+        detail_payloads={
+            "baidu_hot_full": ItemDetail(
+                item_id="baidu_hot_full",
+                content=_LONG_BODY,
+                content_status="full_text",
+                publication_time=None,
+                collected_at=COLLECTED_AT,
+                source_url="https://news.example.test/ai-phone",
+                fetch_status="success",
+            )
+        },
+    )
+    provider.weights = {"hot_score": 1.0}
+    provider.absolute_floors = {"hot_score": 1.0}
+    return _attach_board_evidence(provider)
+
+
+def _zhihu_provider() -> FakeNewsProvider:
+    full = _item(
+        platform="zhihu_daily",
+        item_id="zhihu_daily_full",
+        rank=1,
+        metrics={},
+    )
+    provider = FakeNewsProvider(
+        platform="zhihu_daily",
+        items=(full,),
+        detail_payloads={
+            "zhihu_daily_full": ItemDetail(
+                item_id="zhihu_daily_full",
+                content=_LONG_BODY,
+                content_status="full_text",
+                publication_time=None,
+                collected_at=COLLECTED_AT,
+                source_url="https://daily.zhihu.com/story/full",
+                fetch_status="success",
+            )
+        },
+    )
+    provider.weights = {}
+    provider.absolute_floors = {}
+    return _attach_board_evidence(provider)
+
+
 def _build_providers() -> dict[str, FakeNewsProvider]:
     return {
         "sina_news": _sina_provider(),
         "thepaper": _thepaper_provider(),
         "netease_news": _netease_provider(),
+        "baidu_hot": _baidu_provider(),
+        "zhihu_daily": _zhihu_provider(),
     }
 
 
@@ -309,6 +389,8 @@ def test_collection_fetches_each_board_once_and_isolates_platform_failure(tmp_pa
         ("sina_news", "partial"),
         ("thepaper", "failed"),
         ("netease_news", "success"),
+        ("baidu_hot", "success"),
+        ("zhihu_daily", "success"),
     }
 
 
@@ -376,6 +458,8 @@ def test_active_snapshot_published_only_after_eligible_and_rejected_exist(
         ("sina_news", BUSINESS_DATE),
         ("thepaper", BUSINESS_DATE),
         ("netease_news", BUSINESS_DATE),
+        ("baidu_hot", BUSINESS_DATE),
+        ("zhihu_daily", BUSINESS_DATE),
     ]
     snapshot = json.loads(
         (tmp_path / "active_snapshots" / "sina_news.json").read_text("utf-8")
@@ -485,3 +569,28 @@ def test_collection_uses_build_board_evidence_for_rank_only_items(tmp_path):
     rejected_path = day / "rejected" / "sina_news.json"
     if rejected_path.exists():
         assert json.loads(rejected_path.read_text("utf-8")) == []
+
+
+def test_daily_collection_isolates_failing_baidu_but_saves_zhihu(tmp_path):
+    repository = FileRepository(tmp_path)
+    providers = _build_providers()
+    providers["baidu_hot"]._hot_error = RuntimeError("baidu upstream timeout")
+    snapshot = collect_news_daily(NOW, repository, providers)
+    by_platform = {status.platform: status for status in snapshot.platform_statuses}
+    assert by_platform["baidu_hot"].status == "failed"
+    assert by_platform["zhihu_daily"].status == "success"
+    zhihu_eligible = repository.load_eligible(BUSINESS_DATE, "zhihu_daily")
+    assert [item.hot_item.item_id for item in zhihu_eligible] == ["zhihu_daily_full"]
+    assert repository.load_eligible(BUSINESS_DATE, "baidu_hot") == ()
+
+
+def test_news_platforms_constant_lists_all_five():
+    from heated_topics_v3.providers.common import NEWS_PLATFORMS
+
+    assert NEWS_PLATFORMS == (
+        "sina_news",
+        "thepaper",
+        "netease_news",
+        "baidu_hot",
+        "zhihu_daily",
+    )

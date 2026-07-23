@@ -23,7 +23,13 @@ class ProviderCapture:
     metadata: Mapping[str, str] = field(default_factory=dict)
 
 
-NEWS_PLATFORMS: tuple[str, ...] = ("sina_news", "thepaper", "netease_news")
+NEWS_PLATFORMS: tuple[str, ...] = (
+    "sina_news",
+    "thepaper",
+    "netease_news",
+    "baidu_hot",
+    "zhihu_daily",
+)
 
 
 class NewsProvider(Protocol):

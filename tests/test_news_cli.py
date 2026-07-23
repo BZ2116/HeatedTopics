@@ -177,13 +177,21 @@ def test_collect_news_emits_machine_readable_status(monkeypatch, tmp_path, capsy
     payload = _json_output(capsys)
     assert payload["status"] == "success"
     assert payload["command"] == "collect-news"
-    assert payload["platforms"] == ["sina_news", "thepaper", "netease_news"]
+    assert payload["platforms"] == [
+        "sina_news",
+        "thepaper",
+        "netease_news",
+        "baidu_hot",
+        "zhihu_daily",
+    ]
     assert payload["business_date"] == observed["now"].date().isoformat()
     assert payload["data_root"] == str(tmp_path.resolve())
     assert set(observed["providers"]) == {
         "sina_news",
         "thepaper",
         "netease_news",
+        "baidu_hot",
+        "zhihu_daily",
     }
 
 
