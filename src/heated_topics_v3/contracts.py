@@ -79,6 +79,26 @@ class HeatEvidence:
     threshold_metrics: Mapping[str, float] = field(default_factory=dict)
     qualified_by: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if self.source_kind == "official_hot_board":
+            has_source = "official_hot_board" in self.qualified_by
+            has_signal = (
+                self.platform_rank is not None and self.platform_rank > 0
+            ) or (
+                self.native_hot_value is not None and self.native_hot_value > 0
+            )
+            if not has_source or not has_signal:
+                raise ValueError(
+                    "official hot board evidence requires source marker and positive signal"
+                )
+        elif not any(
+            metric in self.metrics and self.metrics[metric] > 0
+            for metric in self.qualified_by
+        ):
+            raise ValueError(
+                "public engagement evidence requires a named positive metric"
+            )
+
 
 @dataclass(frozen=True)
 class ContentValidation:

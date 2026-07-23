@@ -68,6 +68,56 @@ def test_qualified_article_requires_full_text_and_verified_evidence(hot_item, it
     assert article.detail.content_status == "full_text"
 
 
+@pytest.mark.parametrize(
+    ("qualified_by", "platform_rank", "native_hot_value"),
+    [
+        (("rank",), 1, None),
+        (("official_hot_board",), None, None),
+        (("official_hot_board",), 0, 0.0),
+    ],
+)
+def test_official_heat_evidence_requires_source_marker_and_positive_native_signal(
+    qualified_by, platform_rank, native_hot_value
+):
+    with pytest.raises(ValueError, match="official hot board evidence"):
+        HeatEvidence(
+            source_kind="official_hot_board",
+            platform_rank=platform_rank,
+            native_hot_value=native_hot_value,
+            qualified_by=qualified_by,
+        )
+
+
+@pytest.mark.parametrize(
+    ("metrics", "qualified_by"),
+    [
+        ({"views": 100.0}, ("public_engagement",)),
+        ({"views": 0.0}, ("views",)),
+        ({}, ("views",)),
+    ],
+)
+def test_public_heat_evidence_requires_named_positive_metric(metrics, qualified_by):
+    with pytest.raises(ValueError, match="public engagement evidence"):
+        HeatEvidence(
+            source_kind="public_engagement",
+            platform_rank=None,
+            native_hot_value=None,
+            metrics=metrics,
+            qualified_by=qualified_by,
+        )
+
+
+def test_public_heat_evidence_accepts_named_positive_metric():
+    evidence = HeatEvidence(
+        source_kind="public_engagement",
+        platform_rank=None,
+        native_hot_value=None,
+        metrics={"views": 100.0, "comments": 0.0},
+        qualified_by=("views",),
+    )
+    assert evidence.qualified_by == ("views",)
+
+
 def test_user_profile_stores_primary_keyword():
     profile = UserProfile(
         user_id="u1",
