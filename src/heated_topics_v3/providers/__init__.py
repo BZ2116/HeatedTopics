@@ -2,6 +2,7 @@
 
 from .common import ProviderCapture
 from .juejin import JuejinProvider
+from .netease_news import NeteaseNewsProvider
 from .sina_news import SinaNewsProvider
 from .thepaper import ThePaperProvider
 from .toutiao import ToutiaoProvider
@@ -9,6 +10,7 @@ from .toutiao import ToutiaoProvider
 __all__ = [
     "ProviderCapture",
     "JuejinProvider",
+    "NeteaseNewsProvider",
     "SinaNewsProvider",
     "ThePaperProvider",
     "ToutiaoProvider",

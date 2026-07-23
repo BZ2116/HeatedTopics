@@ -1,0 +1,83 @@
+{
+  "code": 0,
+  "message": "success",
+  "data": {
+    "items": [
+      {
+        "contentId": "JC0ABC001",
+        "title": "示例经济数据发布引发关注",
+        "type": "doc",
+        "hotValue": 2478683,
+        "click": 835915,
+        "commentCount": 74959,
+        "votecount": 65567,
+        "threadVote": 1436,
+        "ptcount": 35,
+        "clickRatio": 0.34,
+        "ptime": "2026-07-23 09:30:00",
+        "source": "示例通讯社",
+        "url": "https://www.163.com/dy/article/JC0ABC001.html"
+      },
+      {
+        "contentId": "JC0ABC002",
+        "title": "示例科技新品在展会集中亮相",
+        "type": "doc",
+        "hotValue": 1845120,
+        "click": 612445,
+        "commentCount": 42810,
+        "votecount": 38210,
+        "threadVote": 980,
+        "ptcount": 18,
+        "clickRatio": 0.30,
+        "ptime": "2026-07-23 08:10:00",
+        "source": "示例科技日报",
+        "url": "https://www.163.com/dy/article/JC0ABC002.html"
+      },
+      {
+        "contentId": "JC0ABC003",
+        "title": "示例文化活动周末举办",
+        "type": "doc",
+        "hotValue": 1023540,
+        "click": 401230,
+        "commentCount": 21455,
+        "votecount": 18920,
+        "threadVote": 612,
+        "ptcount": 12,
+        "clickRatio": 0.27,
+        "ptime": "2026-07-22 21:00:00",
+        "source": "示例晚报",
+        "url": "https://www.163.com/dy/article/JC0ABC003.html"
+      },
+      {
+        "contentId": "JC0VID001",
+        "title": "示例视频节目预告",
+        "type": "video",
+        "hotValue": 980000,
+        "click": 350000,
+        "commentCount": 15000,
+        "votecount": 12000,
+        "threadVote": 500,
+        "ptcount": 0,
+        "clickRatio": 0.20,
+        "ptime": "2026-07-22 20:00:00",
+        "source": "示例视频频道",
+        "url": "https://v.163.com/video/JC0VID001.html"
+      },
+      {
+        "contentId": "JC0ABC004",
+        "title": "示例民生服务通知",
+        "type": "doc",
+        "hotValue": 720330,
+        "click": 280110,
+        "commentCount": 15302,
+        "votecount": 12015,
+        "threadVote": 412,
+        "ptcount": 8,
+        "clickRatio": 0.22,
+        "ptime": "2026-07-22 18:00:00",
+        "source": "示例民生日报",
+        "url": "https://www.163.com/dy/article/JC0ABC004.html"
+      }
+    ]
+  }
+}
