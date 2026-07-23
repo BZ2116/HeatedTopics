@@ -69,3 +69,27 @@ def test_referer_for_baidu_hosts():
     assert _referer_for("https://top.baidu.com/api/board") == "https://top.baidu.com/"
     # Unknown hosts return None.
     assert _referer_for("https://example.com/foo") is None
+
+
+def test_make_bilibili_fetcher_sets_bilibili_referer(monkeypatch):
+    import urllib.request
+    from heated_topics_v3.fetcher_factory import make_bilibili_fetcher
+
+    captured = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"code":0}'
+
+    def fake_urlopen(req, timeout=None):
+        captured["headers"] = dict(req.header_items())
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    fetcher = make_bilibili_fetcher(log_path=None)
+    body = fetcher("https://api.bilibili.com/x/web-interface/nav", 10)
+    assert body == '{"code":0}'
+    headers = {k.lower(): v for k, v in captured["headers"].items()}
+    assert headers["referer"] == "https://www.bilibili.com"
+    assert "bilibili" not in headers.get("user-agent", "").lower() or headers["user-agent"]

@@ -559,3 +559,39 @@ def make_baidu_article_fetcher(
         return resp.text
 
     return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
+
+
+BILIBILI_DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def make_bilibili_fetcher(
+    *,
+    timeout: int = 20,
+    log_path: Path | str | None = None,
+    cookie_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
+) -> Callable[[str, int], str]:
+    """GET-only fetcher for Bilibili search-API JSON and read-page HTML.
+
+    桌面 UA + Referer https://www.bilibili.com。可选 buvid3 cookie。WBI 签名
+    不在此层——provider 已签好完整 URL。
+    """
+    cookie_header = ""
+    if cookie_path is not None and Path(cookie_path).exists():
+        cookie_header = Path(cookie_path).read_text(encoding="utf-8").strip()
+
+    def _fetcher(url: str, timeout_seconds: int = timeout) -> str:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", BILIBILI_DESKTOP_UA)
+        req.add_header("Accept", "application/json, text/html, */*")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+        req.add_header("Referer", "https://www.bilibili.com")
+        if cookie_header:
+            req.add_header("Cookie", cookie_header)
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
