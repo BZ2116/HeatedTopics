@@ -1,5 +1,6 @@
 """Strict offline tests for the anonymous Zhihu Daily provider."""
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
@@ -138,3 +139,150 @@ def test_collect_hot_list_raises_on_http_503():
     client = _client(lambda r: httpx.Response(503, text="boom"))
     with pytest.raises(httpx.HTTPStatusError):
         ZhihuDailyProvider(client).collect_hot_list(NOW)
+
+
+# --- Task 5: seven-day archive search -----------------------------------------
+
+
+def _archive_client() -> tuple[httpx.Client, list[int]]:
+    day1 = _fixture("zhihu_daily_before_20260722.json")
+    day2 = _fixture("zhihu_daily_before_20260721.json")
+    counter: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter.append(1)
+        path = request.url.path
+        if path == "/api/4/news/before/20260722":
+            return httpx.Response(200, text=day1)
+        if path == "/api/4/news/before/20260721":
+            return httpx.Response(200, text=day2)
+        if path.startswith("/api/4/news/before/"):
+            return httpx.Response(200, text='{"date": "0", "stories": []}')
+        return httpx.Response(404)
+
+    return _client(handler), counter
+
+
+def test_archive_search_scans_seven_days_once_and_pages_cached_matches():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    client, counter = _archive_client()
+    provider = ZhihuDailyProvider(client)
+
+    first = provider.search("人工智能", 1, 15, NOW)
+    second = provider.search("人工智能", 2, 15, NOW)
+
+    combined = first.items + second.items
+    assert combined
+    assert all("人工智能" in item.title or "人工智能" in item.summary for item in combined)
+    assert len({item.item_id for item in combined}) == len(combined)
+    assert sum(counter) == 7
+
+
+def test_archive_search_caps_unique_items_at_60():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    stories = ",".join(
+        f'{{"id": {i}, "title": "人工智能故事 {i}", "hint": "h", "type": 0, "url": "https://daily.zhihu.com/story/{i}"}}'
+        for i in range(80)
+    )
+    payload = '{"date": "20260722", "stories": [' + stories + "]}"
+    counter: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter.append(1)
+        if request.url.path.startswith("/api/4/news/before/"):
+            return httpx.Response(200, text=payload)
+        return httpx.Response(404)
+
+    provider = ZhihuDailyProvider(_client(handler))
+    capture = provider.search("人工智能", 1, 60, NOW)
+    assert sum(counter) == 7
+    assert len(capture.items) == 60
+
+
+def test_archive_search_does_not_succeed_on_http_or_schema_failure():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    provider = ZhihuDailyProvider(_client(handler))
+    capture = provider.search("人工智能", 1, 15, NOW)
+    assert capture.items == ()
+
+
+def _archive_article(date: str, story_id: int, rank: int):
+    from heated_topics_v3.contracts import ContentValidation, ItemDetail, QualifiedArticle
+
+    item = HotItem(
+        item_id=f"zhihu_daily_{story_id}",
+        platform="zhihu_daily",
+        title="人工智能故事",
+        url=f"https://daily.zhihu.com/story/{story_id}",
+        rank=rank,
+        heat=__import__("heated_topics_v3.contracts", fromlist=["HeatMetrics"]).HeatMetrics(
+            None, "", "rank", {}
+        ),
+        summary="",
+        publication_time=None,
+        collected_at=NOW,
+        raw_payload={
+            "recommendation_date": date,
+            "official_recommendation": True,
+            "story_id": story_id,
+        },
+    )
+    evidence = __import__("heated_topics_v3.contracts", fromlist=["HeatEvidence"]).HeatEvidence(
+        source_kind="official_hot_board",
+        platform_rank=rank,
+        native_hot_value=None,
+        metrics={},
+        threshold_metrics={},
+        qualified_by=("official_hot_board",),
+    )
+    detail = ItemDetail(
+        item.item_id, "正文占位。", "full_text", None, NOW, item.url, "success"
+    )
+    validation = ContentValidation("accepted", "zhihu_dom", 100, 4, ())
+    return QualifiedArticle(item, detail, evidence, validation, 0.0)
+
+
+def test_archive_search_evidence_requires_official_archive_markers():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    provider = ZhihuDailyProvider(_client(lambda r: httpx.Response(404)))
+
+    article = _archive_article("20260722", 2001, 1)
+    evidence = provider.build_search_evidence(article.hot_item, {})
+    assert evidence is not None
+    assert evidence.source_kind == "official_hot_board"
+    assert evidence.platform_rank == 1
+
+    item_no_rank = __import__("dataclasses").replace(article.hot_item, rank=None)
+    assert provider.build_search_evidence(item_no_rank, {}) is None
+
+    item_no_flag = __import__("dataclasses").replace(
+        article.hot_item,
+        raw_payload={**article.hot_item.raw_payload, "official_recommendation": False},
+    )
+    assert provider.build_search_evidence(item_no_flag, {}) is None
+
+    item_no_date = __import__("dataclasses").replace(
+        article.hot_item,
+        raw_payload={k: v for k, v in article.hot_item.raw_payload.items() if k != "recommendation_date"},
+    )
+    assert provider.build_search_evidence(item_no_date, {}) is None
+
+
+def test_rank_articles_orders_newest_date_first_then_rank():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    provider = ZhihuDailyProvider(_client(lambda r: httpx.Response(404)))
+    newest_high_rank = _archive_article("20260722", 2001, 3)
+    older_low_rank = _archive_article("20260721", 2004, 1)
+    ordered = provider.rank_articles([older_low_rank, newest_high_rank])
+    assert [a.hot_item.raw_payload["recommendation_date"] for a in ordered] == [
+        "20260722",
+        "20260721",
+    ]
