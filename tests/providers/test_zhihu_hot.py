@@ -192,3 +192,211 @@ def test_api_parser_fails_closed(raw):
 
     with pytest.raises(ProviderContractError):
         parse_api_hot_list(raw, NOW)
+
+
+import json
+
+
+def _hot_item():
+    from heated_topics_v3.providers.zhihu_hot import parse_api_hot_list
+
+    return parse_api_hot_list(_fixture("zhihu_hot_api.json"), NOW)[0]
+
+
+def test_question_api_builds_full_text_and_metadata():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/answers"):
+            body = _fixture("zhihu_hot_answers.json")
+        else:
+            body = _fixture("zhihu_hot_question.json")
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), "z_c0=local").fetch_detail(
+        _hot_item(), NOW
+    )
+
+    assert detail.content_status == "full_text"
+    assert "问题描述" in detail.content
+    assert "热门回答 1" in detail.content
+    assert "热门回答 2" in detail.content
+    assert detail.metadata["question"] == {
+        "question_id": "2064289475916560021",
+        "follower_count": 1465,
+        "view_count": 1985997,
+        "answer_count": 583,
+    }
+    assert detail.metadata["answers"][0]["author"] == "示例作者甲"
+    assert detail.metadata["answers"][0]["voteup_count"] == 1551
+
+
+def test_question_detail_caps_answers_at_five():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    answers = json.loads(_fixture("zhihu_hot_answers.json"))
+    answers["data"] = answers["data"] * 4
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            json.dumps(answers, ensure_ascii=False)
+            if request.url.path.endswith("/answers")
+            else _fixture("zhihu_hot_question.json")
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), "z_c0=local").fetch_detail(
+        _hot_item(), NOW
+    )
+    assert len(detail.metadata["answers"]) == 5
+
+
+def test_question_api_contract_change_falls_back_to_html():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            _fixture("zhihu_hot_question_page.html")
+            if request.url.path.startswith("/question/")
+            else "{}"
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), "z_c0=local").fetch_detail(
+        _hot_item(), NOW
+    )
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "success:html_fallback"
+    assert len(detail.metadata["answers"]) == 1
+    assert detail.metadata["answers"][0]["favorite_count"] == 276
+    assert detail.metadata["answers"][0]["like_count"] == 27
+
+
+def test_short_answer_is_skipped_but_question_can_still_qualify():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    answers = json.loads(_fixture("zhihu_hot_answers.json"))
+    answers["data"][0]["content"] = "<p>太短。</p>"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            json.dumps(answers, ensure_ascii=False)
+            if request.url.path.endswith("/answers")
+            else _fixture("zhihu_hot_question.json")
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), "z_c0=local").fetch_detail(
+        _hot_item(), NOW
+    )
+    assert all(
+        answer["answer_id"] != "2064295804840547334"
+        for answer in detail.metadata["answers"]
+    )
+
+
+def test_question_without_answers_is_partial_if_description_qualifies():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            '{"data":[],"paging":{"is_end":true}}'
+            if request.url.path.endswith("/answers")
+            else _fixture("zhihu_hot_question.json")
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), "z_c0=local").fetch_detail(
+        _hot_item(), NOW
+    )
+    assert detail.content_status == "full_text"
+    assert detail.fetch_status == "partial:no_answers"
+    assert detail.metadata["answers"] == []
+
+
+def test_detail_metadata_contains_no_cookie():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    cookie = "z_c0=private-cookie-value"
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = (
+            _fixture("zhihu_hot_answers.json")
+            if request.url.path.endswith("/answers")
+            else _fixture("zhihu_hot_question.json")
+        )
+        return httpx.Response(200, text=body, request=request)
+
+    detail = ZhihuHotProvider(_client(handler), cookie).fetch_detail(_hot_item(), NOW)
+    assert cookie not in json.dumps(detail.metadata, ensure_ascii=False)
+    assert cookie not in detail.content
+
+
+def test_zhihu_hot_rank_articles_orders_by_view_count_then_rank_then_hot_score():
+    from dataclasses import replace
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    item_a = parse_api_hot_list(_fixture("zhihu_hot_api.json"), NOW)[0]
+    item_b = parse_api_hot_list(_fixture("zhihu_hot_api.json"), NOW)[1]
+    item_a_view = 10_000_000
+    item_b_view = 1_000_000
+
+    article_a = _make_article(item_a, view_count=item_a_view)
+    article_b = _make_article(item_b, view_count=item_b_view)
+
+    provider = ZhihuHotProvider(_client(lambda r: httpx.Response(200)), "z_c0=local")
+    ordered = provider.rank_articles([article_b, article_a])
+    assert ordered[0].hot_item.item_id == article_a.hot_item.item_id
+
+
+def parse_api_hot_list(raw, collected_at):
+    from heated_topics_v3.providers.zhihu_hot import parse_api_hot_list as _parse
+
+    return _parse(raw, collected_at)
+
+
+def _make_article(hot_item, view_count):
+    from heated_topics_v3.contracts import (
+        ContentValidation,
+        HeatEvidence,
+        ItemDetail,
+        QualifiedArticle,
+    )
+
+    detail = ItemDetail(
+        item_id=hot_item.item_id,
+        content="问题描述\n\n第一段热门回答正文。\n\n第二段热门回答正文。",
+        content_status="full_text",
+        publication_time=None,
+        collected_at=NOW,
+        source_url=hot_item.url,
+        fetch_status="success",
+        metadata={
+            "question": {
+                "question_id": str(hot_item.raw_payload.get("question_id", "")),
+                "follower_count": 100,
+                "view_count": view_count,
+                "answer_count": 1,
+            },
+            "answers": [],
+        },
+    )
+    return QualifiedArticle(
+        hot_item=hot_item,
+        detail=detail,
+        heat_evidence=HeatEvidence(
+            source_kind="official_hot_board",
+            platform_rank=hot_item.rank,
+            native_hot_value=float(hot_item.heat.value or 0),
+            metrics={"hot_score": float(hot_item.heat.value or 0)},
+            threshold_metrics={"hot_score": 1.0},
+            qualified_by=("official_hot_board",),
+        ),
+        content_validation=ContentValidation(
+            status="accepted",
+            parser="zhihu_question",
+            character_count=100,
+            paragraph_count=3,
+            reasons=(),
+        ),
+        platform_heat_score=0.0,
+    )
