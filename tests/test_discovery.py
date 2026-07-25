@@ -370,6 +370,20 @@ class HookProvider(FakeProvider):
     ) -> tuple[QualifiedArticle, ...]:
         return tuple(reversed(tuple(articles)))
 
+
+class NoSearchProvider(FakeProvider):
+    supports_search = False
+
+    def __init__(self):
+        super().__init__(
+            "zhihu_hot",
+            weights={"hot_score": 1.0},
+            absolute_floors={"hot_score": 1.0},
+        )
+
+    def search(self, keyword, page, page_size, collected_at):
+        raise AssertionError("zhihu hot must not call search")
+
 @pytest.fixture
 def repository(tmp_path) -> FileRepository:
     return FileRepository(tmp_path)
@@ -860,3 +874,67 @@ def test_optional_rank_hook_is_applied_to_cached_matches(repository):
         "rank_only_cached_b",
         "rank_only_cached_a",
     ]
+
+
+def test_no_search_provider_returns_current_matches_without_search(tmp_path):
+    repository = FileRepository(tmp_path)
+    provider = NoSearchProvider()
+    article = _build_article(
+        _make_hot_item(
+            platform="zhihu_hot",
+            item_id="zhihu_hot_question_1",
+            rank=1,
+            title=f"{KEYWORD} 热榜问题",
+            metrics={"hot_score": 1000},
+        )
+    )
+    repository.save_eligible(BUSINESS_DATE, "zhihu_hot", (article,))
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    )
+    assert [row.hot_item.item_id for row in result] == ["zhihu_hot_question_1"]
+
+
+def test_no_search_provider_uses_active_snapshot_within_48_hours(tmp_path):
+    repository = FileRepository(tmp_path)
+    provider = NoSearchProvider()
+    previous_date = "2026-07-22"
+    article = _build_article(
+        _make_hot_item(
+            platform="zhihu_hot",
+            item_id="zhihu_hot_question_old",
+            rank=2,
+            title=f"{KEYWORD} 昨日热榜问题",
+            metrics={"hot_score": 900},
+        )
+    )
+    repository.save_eligible(previous_date, "zhihu_hot", (article,))
+    repository.publish_active_snapshot("zhihu_hot", previous_date)
+
+    result = discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    )
+    assert result[0].hot_item.raw_payload["is_stale"] is True
+    assert result[0].hot_item.raw_payload["snapshot_date"] == previous_date
+
+
+def test_no_search_provider_rejects_snapshot_older_than_48_hours(tmp_path):
+    repository = FileRepository(tmp_path)
+    provider = NoSearchProvider()
+    old_date = "2026-07-20"
+    article = _build_article(
+        _make_hot_item(
+            platform="zhihu_hot",
+            item_id="zhihu_hot_question_too_old",
+            rank=1,
+            title=f"{KEYWORD} 过期热榜问题",
+            metrics={"hot_score": 800},
+        )
+    )
+    repository.save_eligible(old_date, "zhihu_hot", (article,))
+    repository.publish_active_snapshot("zhihu_hot", old_date)
+
+    assert discover_platform_articles(
+        PROFILE, BUSINESS_DATE, COLLECTED_AT, repository, provider
+    ) == ()

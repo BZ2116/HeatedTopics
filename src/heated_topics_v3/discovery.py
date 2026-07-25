@@ -74,6 +74,22 @@ def discover_platform_articles(
     if len(matched) >= MIN_RESULTS:
         return _rank_with_provider(provider, matched)[:MAX_RESULTS]
 
+    if not _supports_search(provider):
+        if matched:
+            return _rank_cached_only(matched, provider)
+        snapshot = repository.resolve_eligible_snapshot(
+            provider.platform, collected_at, max_age_hours=48
+        )
+        if snapshot is None:
+            return ()
+        snapshot_date, snapshot_articles = snapshot
+        snapshot_matched = _match_articles(profile, snapshot_articles)
+        return _rank_snapshot(
+            snapshot_matched,
+            provider,
+            snapshot_date=snapshot_date,
+        )
+
     if not _has_active_search_window(collected_at, datetime.now(tz=SHANGHAI_TZ)):
         snapshot = repository.resolve_eligible_snapshot(
             provider.platform, collected_at, max_age_hours=48
@@ -168,6 +184,10 @@ def _rank_with_provider(
     if callable(ranker):
         return tuple(ranker(tuple(articles)))
     return rank_platform_articles(tuple(articles), provider.weights)
+
+
+def _supports_search(provider: NewsProvider) -> bool:
+    return bool(getattr(provider, "supports_search", True))
 
 
 def _rank_cached_only(
