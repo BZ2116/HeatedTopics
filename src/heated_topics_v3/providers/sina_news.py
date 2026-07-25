@@ -318,11 +318,11 @@ def _article_text_from_html(html: str) -> str:
 class _SinaArticleParser(HTMLParser):
     """DOM walker that tracks every matching <div> via a stack of capture frames.
 
-    Each frame owns its own paragraph buffer. Writing to ``self._parts`` always
-    targets the top frame. When a frame's owning <div> closes, its buffer is
-    finalized into ``self._captures``. This naturally produces a list of
-    captured regions ordered by document position; the deepest (last) one that
-    crosses the richness threshold wins.
+    Each frame owns its own paragraph buffer, while ``self._parts`` is a fresh
+    transient list for text gathered between closing tags. When a frame's owning
+    ``<div>`` closes, its buffer is finalized into ``self._captures``. Eligible
+    captures are ranked by total text length, so the richest capture wins rather
+    than the deepest capture or document-order position.
     """
 
     def __init__(self, tokens: tuple[str, ...]) -> None:
@@ -351,11 +351,11 @@ class _SinaArticleParser(HTMLParser):
             if self._class_matches(attrs):
                 # Open a new frame; becomes the active owner of self._parts.
                 self._frames.append({"parts": self._parts, "buffer": [], "matched": True})
-                self._parts = self._frames[-1]["buffer"]
+                self._parts = []
             else:
                 # Non-matching div: push a sentinel frame so we balance closes.
                 self._frames.append({"parts": self._parts, "buffer": [], "matched": False})
-                self._parts = self._frames[-1]["buffer"]
+                self._parts = []
 
     def handle_endtag(self, tag: str) -> None:
         if self._ignored_stack:
@@ -424,8 +424,7 @@ _RICH_THRESHOLD_CHARS = 200
 
 
 def _extract_article_text(html: str) -> str:
-    cleaned = _strip_junk_blocks(html)
-    return _article_text_from_html(cleaned)
+    return _article_text_from_html(html)
 
 
 _JUNK_BLOCK_RE = re.compile(

@@ -235,6 +235,13 @@ def test_parse_sina_article_live_html_returns_real_body():
     assert text, "article text must not be empty"
     # Must contain real body markers from the captured top story.
     assert "欧盟" in text
+    lines = text.splitlines()
+    assert lines[0].count("欧盟") >= 1
+    assert text.count(lines[0]) == 1
+    assert not any(
+        lines[index] and lines[index] == lines[index - 1]
+        for index in range(1, len(lines))
+    )
     assert len(text) >= 200, f"body too short: {len(text)} chars"
     # Nav chrome (the page header) must NOT dominate.
     nav_markers = ("新浪首页", "新浪新闻", "新浪财经", "新浪体育")
