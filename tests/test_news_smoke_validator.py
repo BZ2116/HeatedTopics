@@ -181,5 +181,145 @@ def test_detects_credentials_and_overlap_and_result_violations(tmp_path: Path) -
     assert any(v.startswith("json:") for v in violations)
 
 
+def test_smoke_validator_rejects_more_than_five_zhihu_answers(tmp_path: Path):
+    details = tmp_path / "daily_hot_lists" / "2026-07-25" / "details"
+    details.mkdir(parents=True)
+    (details / "zhihu_hot_zhihu_hot_question_1.json").write_text(
+        json.dumps({
+            "item_id": "zhihu_hot_question_1",
+            "content": "合格问题正文。",
+            "content_status": "full_text",
+            "publication_time": None,
+            "collected_at": "2026-07-25T12:00:00+08:00",
+            "source_url": "https://www.zhihu.com/question/1",
+            "fetch_status": "success",
+            "metadata": {
+                "question": {"question_id": "1", "view_count": 100},
+                "answers": [
+                    {
+                        "answer_id": str(index),
+                        "url": f"https://www.zhihu.com/question/1/answer/{index}",
+                    }
+                    for index in range(6)
+                ],
+            },
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert any(
+        violation.startswith("zhihu-answer-limit:")
+        for violation in json.loads(result.stdout)["violations"]
+    )
+
+
+def test_smoke_validator_accepts_ranked_zhihu_hot_and_daily(tmp_path: Path):
+    eligible = tmp_path / "daily_hot_lists" / "2026-07-25" / "eligible"
+    details = tmp_path / "daily_hot_lists" / "2026-07-25" / "details"
+    eligible.mkdir(parents=True)
+    details.mkdir(parents=True)
+    hot_detail = {
+        "item_id": "zhihu_hot_question_1",
+        "content": "第一段完整问题内容。\n\n第二段完整热门回答内容。",
+        "content_status": "full_text",
+        "publication_time": None,
+        "collected_at": "2026-07-25T12:00:00+08:00",
+        "source_url": "https://www.zhihu.com/question/1",
+        "fetch_status": "success",
+        "metadata": {
+            "question": {"question_id": "1", "view_count": 100},
+            "answers": [{
+                "answer_id": "11",
+                "url": "https://www.zhihu.com/question/1/answer/11",
+            }],
+        },
+    }
+    hot_article = {
+        "hot_item": {
+            "item_id": "zhihu_hot_question_1",
+            "platform": "zhihu_hot",
+            "title": "示例热榜问题",
+            "url": "https://www.zhihu.com/question/1",
+            "rank": 1,
+            "heat": {
+                "value": 1000,
+                "label": "1000 热度",
+                "metric_name": "hot_score",
+                "metrics": {"hot_score": 1000},
+            },
+            "summary": "摘要",
+            "publication_time": None,
+            "collected_at": "2026-07-25T12:00:00+08:00",
+            "raw_payload": {"question_id": "1"},
+        },
+        "detail": hot_detail,
+        "heat_evidence": {
+            "source_kind": "official_hot_board",
+            "platform_rank": 1,
+            "native_hot_value": 1000,
+            "metrics": {"hot_score": 1000},
+            "threshold_metrics": {"hot_score": 1},
+            "qualified_by": ["official_hot_board"],
+        },
+        "content_validation": {
+            "status": "accepted",
+            "parser": "fixture",
+            "character_count": 100,
+            "paragraph_count": 2,
+            "reasons": [],
+        },
+        "platform_heat_score": 1.0,
+    }
+    daily_article = json.loads(json.dumps(hot_article))
+    daily_article["hot_item"].update({
+        "item_id": "zhihu_daily_2",
+        "platform": "zhihu_daily",
+        "url": "https://daily.zhihu.com/story/2",
+        "heat": {"value": None, "label": "", "metric_name": "rank", "metrics": {}},
+        "raw_payload": {
+            "story_id": 2,
+            "recommendation_section": "latest",
+            "recommendation_sections": ["latest"],
+        },
+    })
+    daily_article["detail"].update({
+        "item_id": "zhihu_daily_2",
+        "source_url": "https://daily.zhihu.com/story/2",
+        "metadata": {},
+    })
+    daily_article["heat_evidence"].update({
+        "native_hot_value": None,
+        "metrics": {},
+        "threshold_metrics": {},
+    })
+    (eligible / "zhihu_hot.json").write_text(
+        json.dumps([hot_article], ensure_ascii=False), encoding="utf-8"
+    )
+    (eligible / "zhihu_daily.json").write_text(
+        json.dumps([daily_article], ensure_ascii=False), encoding="utf-8"
+    )
+    (details / "zhihu_hot_zhihu_hot_question_1.json").write_text(
+        json.dumps(hot_detail, ensure_ascii=False), encoding="utf-8"
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_smoke_validator_rejects_cookie_shaped_content(tmp_path: Path):
+    path = tmp_path / "daily_hot_lists" / "2026-07-25" / "eligible" / "zhihu_hot.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '[{"Cookie":"z_c0=123456789abcdef"}]',
+        encoding="utf-8",
+    )
+    result = _run(tmp_path)
+    assert result.returncode == 1
+    assert any(
+        violation.startswith("credential:")
+        for violation in json.loads(result.stdout)["violations"]
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
