@@ -40,19 +40,23 @@ def _latest_item() -> HotItem:
     from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
 
     items = ZhihuDailyProvider.parse_latest(_fixture("zhihu_daily_latest.json"), NOW)
-    return items[0]
+    return next(item for item in items if item.item_id == "zhihu_daily_1001")
 
 
 def test_latest_keeps_type_zero_and_uses_official_rank_only():
     from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
 
     items = ZhihuDailyProvider.parse_latest(_fixture("zhihu_daily_latest.json"), NOW)
-    assert len(items) == 1
-    assert items[0].item_id == "zhihu_daily_1001"
+    assert len(items) == 2
+    assert items[0].item_id == "zhihu_daily_1002"
     assert items[0].rank == 1
     assert items[0].heat.value is None
     assert items[0].heat.metrics == {}
     assert items[0].raw_payload["recommendation_date"] == "20260723"
+    assert items[0].raw_payload["recommendation_section"] == "top"
+    assert items[1].item_id == "zhihu_daily_1001"
+    assert items[1].raw_payload["recommendation_section"] == "top"
+    assert items[1].raw_payload["recommendation_sections"] == ("top", "latest")
 
 
 def test_detail_api_body_is_clean_full_text():
@@ -73,7 +77,7 @@ def test_build_board_evidence_uses_rank_only():
     evidence = provider.build_board_evidence(_latest_item(), {})
     assert evidence is not None
     assert evidence.source_kind == "official_hot_board"
-    assert evidence.platform_rank == 1
+    assert evidence.platform_rank == 2
     assert evidence.native_hot_value is None
     assert evidence.metrics == {}
     assert evidence.qualified_by == ("official_hot_board",)
@@ -85,7 +89,10 @@ def test_collect_hot_list_returns_capture_with_type_zero_items():
     capture = ZhihuDailyProvider(_latest_and_detail_client()).collect_hot_list(NOW)
     assert isinstance(capture, ProviderCapture)
     assert capture.raw_suffix == ".json"
-    assert [item.item_id for item in capture.items] == ["zhihu_daily_1001"]
+    assert [item.item_id for item in capture.items] == [
+        "zhihu_daily_1002",
+        "zhihu_daily_1001",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -94,7 +101,7 @@ def test_collect_hot_list_returns_capture_with_type_zero_items():
         "not json",
         "{}",
         '{"date": "20260723", "stories": []}',
-        '{"date": "20260723", "stories": [{"id": 5, "type": 1, "title": "视频"}]}',
+        '{"date": "20260723", "stories": [{"id": 5, "type": 1, "title": "视频"}], "top_stories": []}',
     ],
 )
 def test_parse_latest_fails_closed(raw):
@@ -286,3 +293,48 @@ def test_rank_articles_orders_newest_date_first_then_rank():
         "20260722",
         "20260721",
     ]
+
+
+def test_latest_includes_top_stories_and_deduplicates_story_ids():
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    items = ZhihuDailyProvider.parse_latest(
+        _fixture("zhihu_daily_latest.json"), NOW
+    )
+    assert [item.item_id for item in items] == [
+        "zhihu_daily_1002",
+        "zhihu_daily_1001",
+    ]
+    duplicate = items[1]
+    assert duplicate.raw_payload["recommendation_section"] == "top"
+    assert duplicate.raw_payload["recommendation_sections"] == ("top", "latest")
+
+
+def test_rank_articles_places_top_before_latest():
+    from dataclasses import replace
+    from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
+    provider = ZhihuDailyProvider(_client(lambda request: httpx.Response(404)))
+    top = _archive_article("20260725", 1002, 2)
+    top = replace(
+        top,
+        hot_item=replace(
+            top.hot_item,
+            raw_payload={
+                **top.hot_item.raw_payload,
+                "recommendation_section": "top",
+            },
+        ),
+    )
+    latest = _archive_article("20260725", 1001, 1)
+    latest = replace(
+        latest,
+        hot_item=replace(
+            latest.hot_item,
+            raw_payload={
+                **latest.hot_item.raw_payload,
+                "recommendation_section": "latest",
+            },
+        ),
+    )
+    assert provider.rank_articles([latest, top])[0].hot_item.item_id == top.hot_item.item_id

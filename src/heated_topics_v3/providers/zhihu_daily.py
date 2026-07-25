@@ -151,6 +151,11 @@ class ZhihuDailyProvider:
             ),
             reverse=True,
         )
+        ordered.sort(
+            key=lambda article: 0
+            if article.hot_item.raw_payload.get("recommendation_section") == "top"
+            else 1,
+        )
         return tuple(ordered)
 
     def _archive_cache(self, today_key: str, keyword: str) -> tuple[HotItem, ...]:
@@ -215,42 +220,64 @@ class ZhihuDailyProvider:
         if not isinstance(payload, dict):
             raise ProviderContractError("zhihu daily payload must be a JSON object")
         recommendation_date = str(payload.get("date") or "").strip()
-        stories = payload.get("stories")
-        if not isinstance(stories, list) or not stories:
-            raise ProviderContractError("zhihu daily stories missing or empty")
-        items: list[HotItem] = []
-        for row in stories:
-            if not isinstance(row, dict):
+        sections = (
+            ("top", payload.get("top_stories")),
+            ("latest", payload.get("stories")),
+        )
+        items_by_id: dict[int, HotItem] = {}
+        section_membership: dict[int, list[str]] = {}
+        for section, rows in sections:
+            if not isinstance(rows, list):
                 continue
-            if int(row.get("type", 0) or 0) != 0:
-                continue
-            story_id = number_or_none(row.get("id"))
-            title = str(row.get("title") or "").strip()
-            url = str(row.get("url") or "").strip()
-            if story_id is None or not title or not url:
-                continue
-            items.append(
-                HotItem(
-                    item_id=f"zhihu_daily_{story_id}",
-                    platform="zhihu_daily",
-                    title=title,
-                    url=url,
-                    rank=len(items) + 1,
-                    heat=HeatMetrics(None, "", "rank", {}),
-                    summary=str(row.get("hint") or "").strip(),
-                    publication_time=None,
-                    collected_at=collected_at,
-                    raw_payload={
-                        "recommendation_date": recommendation_date,
-                        "story_id": story_id,
-                        "hint": row.get("hint"),
-                        "images": row.get("images"),
-                    },
-                )
-            )
-        if not items:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                if int(row.get("type", 0) or 0) != 0:
+                    continue
+                story_id = number_or_none(row.get("id"))
+                title = str(row.get("title") or "").strip()
+                url = str(row.get("url") or "").strip()
+                if story_id is None or not title or not url:
+                    continue
+                section_membership.setdefault(story_id, [])
+                if section not in section_membership[story_id]:
+                    section_membership[story_id].append(section)
+                if (
+                    section == "top"
+                    or story_id not in items_by_id
+                ):
+                    items_by_id[story_id] = HotItem(
+                        item_id=f"zhihu_daily_{story_id}",
+                        platform="zhihu_daily",
+                        title=title,
+                        url=url,
+                        rank=len(items_by_id) + 1,
+                        heat=HeatMetrics(None, "", "rank", {}),
+                        summary=str(row.get("hint") or "").strip(),
+                        publication_time=None,
+                        collected_at=collected_at,
+                        raw_payload={
+                            "recommendation_date": recommendation_date,
+                            "story_id": story_id,
+                            "hint": row.get("hint"),
+                            "images": row.get("images"),
+                        },
+                    )
+        if not items_by_id:
             raise ProviderContractError("zhihu daily stories contained no type=0 entries")
-        return tuple(items)
+        items = tuple(items_by_id.values())
+        for item in items:
+            story_id = number_or_none(item.raw_payload.get("story_id"))
+            if story_id is None:
+                continue
+            membership = tuple(section_membership.get(story_id, ()))
+            top_priority = next(
+                (section for section in ("top", "latest") if section in membership),
+                "latest",
+            )
+            item.raw_payload["recommendation_section"] = top_priority
+            item.raw_payload["recommendation_sections"] = membership
+        return items
 
 
 class _BodyParser(HTMLParser):
