@@ -302,12 +302,41 @@ def _zhihu_provider() -> FakeNewsProvider:
     return _attach_board_evidence(provider)
 
 
+def _zhihu_hot_provider() -> FakeNewsProvider:
+    full = _item(
+        platform="zhihu_hot",
+        item_id="zhihu_hot_full",
+        rank=1,
+        metrics={"hot_score": 5000000.0},
+    )
+    provider = FakeNewsProvider(
+        platform="zhihu_hot",
+        items=(full,),
+        detail_payloads={
+            "zhihu_hot_full": ItemDetail(
+                item_id="zhihu_hot_full",
+                content=_LONG_BODY,
+                content_status="full_text",
+                publication_time=None,
+                collected_at=COLLECTED_AT,
+                source_url="https://www.zhihu.com/question/1",
+                fetch_status="success",
+            )
+        },
+    )
+    provider.weights = {"hot_score": 1.0}
+    provider.absolute_floors = {"hot_score": 1.0}
+    provider.supports_search = False
+    return _attach_board_evidence(provider)
+
+
 def _build_providers() -> dict[str, FakeNewsProvider]:
     return {
         "sina_news": _sina_provider(),
         "thepaper": _thepaper_provider(),
         "netease_news": _netease_provider(),
         "baidu_hot": _baidu_provider(),
+        "zhihu_hot": _zhihu_hot_provider(),
         "zhihu_daily": _zhihu_provider(),
     }
 
@@ -390,6 +419,7 @@ def test_collection_fetches_each_board_once_and_isolates_platform_failure(tmp_pa
         ("thepaper", "failed"),
         ("netease_news", "success"),
         ("baidu_hot", "success"),
+        ("zhihu_hot", "success"),
         ("zhihu_daily", "success"),
     }
 
@@ -459,6 +489,7 @@ def test_active_snapshot_published_only_after_eligible_and_rejected_exist(
         ("thepaper", BUSINESS_DATE),
         ("netease_news", BUSINESS_DATE),
         ("baidu_hot", BUSINESS_DATE),
+        ("zhihu_hot", BUSINESS_DATE),
         ("zhihu_daily", BUSINESS_DATE),
     ]
     snapshot = json.loads(
@@ -584,7 +615,7 @@ def test_daily_collection_isolates_failing_baidu_but_saves_zhihu(tmp_path):
     assert repository.load_eligible(BUSINESS_DATE, "baidu_hot") == ()
 
 
-def test_news_platforms_constant_lists_all_five():
+def test_news_platforms_constant_lists_all_six():
     from heated_topics_v3.providers.common import NEWS_PLATFORMS
 
     assert NEWS_PLATFORMS == (
@@ -592,8 +623,30 @@ def test_news_platforms_constant_lists_all_five():
         "thepaper",
         "netease_news",
         "baidu_hot",
+        "zhihu_hot",
         "zhihu_daily",
     )
+
+
+def test_missing_cookie_only_fails_zhihu_hot_collection(tmp_path):
+    import httpx as _httpx
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    providers = _build_providers()
+    providers["zhihu_hot"] = ZhihuHotProvider(
+        _httpx.Client(
+            transport=_httpx.MockTransport(
+                lambda request: _httpx.Response(500, request=request)
+            )
+        ),
+        "",
+    )
+
+    snapshot = collect_news_daily(NOW, FileRepository(tmp_path), providers)
+    statuses = {row.platform: row for row in snapshot.platform_statuses}
+    assert statuses["zhihu_hot"].status == "failed"
+    assert statuses["zhihu_hot"].error == "auth_missing"
+    assert statuses["zhihu_daily"].status == "success"
 
 
 def test_news_collection_reuses_detail_metadata_sidecar(tmp_path):

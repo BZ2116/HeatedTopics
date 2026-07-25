@@ -46,6 +46,7 @@ NEWS_PLATFORMS: tuple[str, ...] = (
     "thepaper",
     "netease_news",
     "baidu_hot",
+    "zhihu_hot",
     "zhihu_daily",
 )
 

@@ -369,7 +369,7 @@ def test_news_recommendation_uses_supporting_article_source_url(tmp_path):
     assert recommendation.platform == "baidu_hot"
 
 
-def test_news_recommendation_platforms_constant_lists_all_five():
+def test_news_recommendation_platforms_constant_lists_all_six():
     from heated_topics_v3.recommendation import NEWS_DISPLAY_ORDER
 
     assert NEWS_DISPLAY_ORDER == (
@@ -377,5 +377,6 @@ def test_news_recommendation_platforms_constant_lists_all_five():
         "thepaper",
         "netease_news",
         "baidu_hot",
+        "zhihu_hot",
         "zhihu_daily",
     )

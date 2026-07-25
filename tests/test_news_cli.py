@@ -182,6 +182,7 @@ def test_collect_news_emits_machine_readable_status(monkeypatch, tmp_path, capsy
         "thepaper",
         "netease_news",
         "baidu_hot",
+        "zhihu_hot",
         "zhihu_daily",
     ]
     assert payload["business_date"] == observed["now"].date().isoformat()
@@ -191,6 +192,7 @@ def test_collect_news_emits_machine_readable_status(monkeypatch, tmp_path, capsy
         "thepaper",
         "netease_news",
         "baidu_hot",
+        "zhihu_hot",
         "zhihu_daily",
     }
 
@@ -389,3 +391,52 @@ def test_invalid_news_arguments_return_json_failure(tmp_path, capsys):
 
     assert exit_code == 2
     assert _json_output(capsys) == {"status": "failed", "error": "invalid_arguments"}
+
+
+def test_news_provider_mapping_accepts_missing_zhihu_cookie(monkeypatch):
+    from heated_topics_v3 import cli
+
+    monkeypatch.delenv("ZHIHU_COOKIE", raising=False)
+    with cli._client() as client:
+        providers = cli._news_providers(client)
+
+    assert providers["zhihu_hot"].cookie == ""
+    assert "zhihu_daily" in providers
+
+
+def test_check_zhihu_auth_emits_sanitized_valid_status(monkeypatch, capsys):
+    from datetime import datetime
+    from heated_topics_v3 import cli
+
+    monkeypatch.setenv("ZHIHU_COOKIE", "z_c0=private-cookie-value")
+    monkeypatch.setattr(
+        "heated_topics_v3.providers.zhihu_hot.ZhihuHotProvider.check_auth",
+        lambda self: "valid",
+    )
+
+    assert cli.main(["check-zhihu-auth"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "valid"
+    assert payload["command"] == "check-zhihu-auth"
+    assert datetime.fromisoformat(payload["checked_at"]).tzinfo is not None
+    assert "private-cookie-value" not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    ("health", "exit_code"),
+    [("missing", 1), ("expired", 1), ("blocked", 1), ("contract_changed", 1)],
+)
+def test_check_zhihu_auth_failure_exit_codes(monkeypatch, capsys, health, exit_code):
+    from datetime import datetime
+    from heated_topics_v3 import cli
+
+    monkeypatch.setenv("ZHIHU_COOKIE", "z_c0=local")
+    monkeypatch.setattr(
+        "heated_topics_v3.providers.zhihu_hot.ZhihuHotProvider.check_auth",
+        lambda self: health,
+    )
+    assert cli.main(["check-zhihu-auth"]) == exit_code
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == health
+    assert payload["command"] == "check-zhihu-auth"
+    assert datetime.fromisoformat(payload["checked_at"]).tzinfo is not None

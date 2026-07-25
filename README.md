@@ -91,7 +91,7 @@ data/
 
 ### Result limits and guarantees
 
-* Each of `sina_news`, `thepaper`, `netease_news`, `baidu_hot`, and
+* Each of `sina_news`, `thepaper`, `netease_news`, `baidu_hot`, `zhihu_hot`, and
   `zhihu_daily` returns at most `MAX_RESULTS = 20` articles per user request.
 * `baidu_hot` heat is event-level: the parent event carries the `hot_score`
   while the supporting article body is fetched from the first Baidu search
@@ -121,3 +121,24 @@ data/
 Tencent News is intentionally deferred for this batch because no confirmed
 anonymous keyword search endpoint is currently available. The remaining three
 platforms form the supported Demo surface for this branch.
+
+### Zhihu sources
+
+`zhihu_daily` is anonymous. `zhihu_hot` needs a locally maintained
+`ZHIHU_COOKIE` in `.env`.
+
+Check it without writing the Cookie or response body:
+
+```powershell
+uv run heated-topics check-zhihu-auth
+```
+
+Valid output:
+
+```json
+{"status":"valid","command":"check-zhihu-auth","checked_at":"2026-07-25T20:00:00+08:00"}
+```
+
+If the status is `missing` or `expired`, replace only the local `.env` value
+and rerun the check. `collect-news` isolates this failure from every other
+platform.

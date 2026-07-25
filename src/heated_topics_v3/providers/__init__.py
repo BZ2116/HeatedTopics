@@ -8,6 +8,7 @@ from .sina_news import SinaNewsProvider
 from .thepaper import ThePaperProvider
 from .toutiao import ToutiaoProvider
 from .zhihu_daily import ZhihuDailyProvider
+from .zhihu_hot import ZhihuHotProvider
 
 __all__ = [
     "BaiduHotProvider",
@@ -18,4 +19,5 @@ __all__ = [
     "ThePaperProvider",
     "ToutiaoProvider",
     "ZhihuDailyProvider",
+    "ZhihuHotProvider",
 ]

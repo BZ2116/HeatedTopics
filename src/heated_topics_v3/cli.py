@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
 import httpx
+from dotenv import load_dotenv
 
 from .clock import SHANGHAI
 from .collection import collect_news_daily, collect_v1_daily
@@ -22,6 +24,7 @@ from .providers.sina_news import SinaNewsProvider
 from .providers.thepaper import ThePaperProvider
 from .providers.toutiao import ToutiaoProvider
 from .providers.zhihu_daily import ZhihuDailyProvider
+from .providers.zhihu_hot import ZhihuHotProvider
 from .recommendation import generate_news_user_result, generate_v1_user_result
 from .storage import FileRepository
 
@@ -52,6 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     generate_news = commands.add_parser("generate-news")
     generate_news.add_argument("--data-root", type=Path, required=True)
     generate_news.add_argument("--profile", type=Path, required=True)
+
+    commands.add_parser("check-zhihu-auth")
     return parser
 
 
@@ -65,6 +70,11 @@ def _client() -> httpx.Client:
         timeout=httpx.Timeout(20.0),
         headers={"User-Agent": "heatedtopics-v1/0.1 (+anonymous-public-data)"},
     )
+
+
+def _load_zhihu_cookie() -> str:
+    load_dotenv()
+    return os.getenv("ZHIHU_COOKIE", "").strip()
 
 
 def _collect(data_root: Path) -> tuple[int, dict[str, object]]:
@@ -145,6 +155,7 @@ def _news_providers(client: httpx.Client) -> dict[str, NewsProvider]:
         "thepaper": ThePaperProvider(client),
         "netease_news": NeteaseNewsProvider(client),
         "baidu_hot": BaiduHotProvider(client),
+        "zhihu_hot": ZhihuHotProvider(client, _load_zhihu_cookie()),
         "zhihu_daily": ZhihuDailyProvider(client),
     }
 
@@ -212,6 +223,16 @@ def _generate_news(
     }
 
 
+def _check_zhihu_auth() -> tuple[int, dict[str, object]]:
+    with _client() as client:
+        status = ZhihuHotProvider(client, _load_zhihu_cookie()).check_auth()
+    return (0 if status == "valid" else 1), {
+        "status": status,
+        "command": "check-zhihu-auth",
+        "checked_at": datetime.now(SHANGHAI).isoformat(),
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one V1 command and emit exactly one machine-readable JSON status."""
     try:
@@ -229,6 +250,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             exit_code, payload = _generate(arguments.data_root, arguments.profile)
         elif arguments.command == "collect-news":
             exit_code, payload = _collect_news(arguments.data_root)
+        elif arguments.command == "check-zhihu-auth":
+            exit_code, payload = _check_zhihu_auth()
         else:
             exit_code, payload = _generate_news(arguments.data_root, arguments.profile)
     except Exception as error:

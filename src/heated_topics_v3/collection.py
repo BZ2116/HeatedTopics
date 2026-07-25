@@ -19,11 +19,31 @@ from .contracts import (
     QualifiedArticle,
 )
 from .heat import dynamic_floors, qualifies_public_metrics
-from .providers.common import NEWS_PLATFORMS, NewsProvider, ProviderCapture
+from .providers.common import (
+    AuthenticationBlockedError,
+    AuthenticationExpiredError,
+    MissingCredentialError,
+    NEWS_PLATFORMS,
+    NewsProvider,
+    ProviderCapture,
+    ProviderContractError,
+)
 from .storage import FileRepository
 
 
 V1_PLATFORMS = ("toutiao", "juejin")
+
+
+def _news_error_code(error: Exception) -> str:
+    if isinstance(error, MissingCredentialError):
+        return "auth_missing"
+    if isinstance(error, AuthenticationExpiredError):
+        return "auth_expired"
+    if isinstance(error, AuthenticationBlockedError):
+        return "auth_blocked"
+    if isinstance(error, ProviderContractError):
+        return "contract_changed"
+    return type(error).__name__
 
 
 class _V1Provider(Protocol):
@@ -274,7 +294,7 @@ def collect_news_daily(
                     status="failed",
                     collected_at=collected_at,
                     item_count=0,
-                    error=type(error).__name__,
+                    error=_news_error_code(error),
                 )
             )
 
