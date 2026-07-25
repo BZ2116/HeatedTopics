@@ -1,0 +1,43 @@
+{
+  "data": [
+    {
+      "type": "hot_list_feed",
+      "target": {
+        "id": 2064289475916560021,
+        "title_area": {
+          "text": "示例平台因垄断行为被处罚，会带来哪些影响？"
+        },
+        "excerpt_area": {
+          "text": "监管机构公布处罚决定，相关行业规则可能发生变化。"
+        },
+        "metrics_area": {
+          "text": "2114 万热度"
+        },
+        "link": {
+          "url": "https://www.zhihu.com/question/2064289475916560021"
+        }
+      }
+    },
+    {
+      "type": "hot_list_feed",
+      "target": {
+        "id": 2063947146085097774,
+        "title_area": {
+          "text": "如何评价一项新的数学研究成果？"
+        },
+        "excerpt_area": {
+          "text": "研究团队在国际会议上公布了最新成果。"
+        },
+        "metrics_area": {
+          "text": "435 万热度"
+        },
+        "link": {
+          "url": "https://www.zhihu.com/question/2063947146085097774"
+        }
+      }
+    }
+  ],
+  "paging": {
+    "is_end": true
+  }
+}
