@@ -95,3 +95,13 @@ def test_zhihu_daily_provider_attributes_match_spec():
     assert dict(provider.absolute_floors) == ZHIHU_DAILY_ABSOLUTE_FLOORS
     assert provider.weights == {}
     assert provider.absolute_floors == {}
+
+
+def test_zhihu_hot_provider_attributes_match_spec():
+    from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
+    provider = ZhihuHotProvider(httpx.Client(), "")
+    assert provider.platform == "zhihu_hot"
+    assert provider.supports_search is False
+    assert provider.weights == {"hot_score": 1.0}
+    assert provider.absolute_floors == {"hot_score": 1.0}

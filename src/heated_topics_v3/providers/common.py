@@ -15,6 +15,24 @@ class ProviderContractError(ValueError):
     """Raised when a public endpoint response does not match its success contract."""
 
 
+class MissingCredentialError(RuntimeError):
+    def __init__(self, variable_name: str) -> None:
+        super().__init__(variable_name)
+        self.variable_name = variable_name
+
+
+class AuthenticationExpiredError(RuntimeError):
+    def __init__(self, variable_name: str) -> None:
+        super().__init__(variable_name)
+        self.variable_name = variable_name
+
+
+class AuthenticationBlockedError(RuntimeError):
+    def __init__(self, variable_name: str) -> None:
+        super().__init__(variable_name)
+        self.variable_name = variable_name
+
+
 @dataclass(frozen=True)
 class ProviderCapture:
     raw_text: str
