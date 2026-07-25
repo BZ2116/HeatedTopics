@@ -594,3 +594,39 @@ def test_news_platforms_constant_lists_all_five():
         "baidu_hot",
         "zhihu_daily",
     )
+
+
+def test_news_collection_reuses_detail_metadata_sidecar(tmp_path):
+    from heated_topics_v3.contracts import ItemDetail
+    from heated_topics_v3.storage import FileRepository
+
+    repository = FileRepository(tmp_path)
+    item = _item(
+        platform="sina_news",
+        item_id="sina_news_metadata",
+        rank=1,
+        metrics={"comments": 20.0},
+    )
+    detail = ItemDetail(
+        item_id=item.item_id,
+        content=_LONG_BODY,
+        content_status="full_text",
+        publication_time=None,
+        collected_at=COLLECTED_AT,
+        source_url=item.url,
+        fetch_status="success",
+        metadata={"question": {"view_count": 42}},
+    )
+    provider = FakeNewsProvider(
+        "sina_news",
+        (item,),
+        detail_payloads={item.item_id: detail},
+    )
+
+    collect_news_daily(NOW, repository, {"sina_news": provider})
+    provider.detail_calls.clear()
+    collect_news_daily(NOW, repository, {"sina_news": provider})
+
+    eligible = repository.load_eligible(BUSINESS_DATE, "sina_news")
+    assert eligible[0].detail.metadata == {"question": {"view_count": 42}}
+    assert provider.detail_calls == []

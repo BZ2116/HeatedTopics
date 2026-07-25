@@ -68,6 +68,7 @@ class ItemDetail:
     collected_at: str
     source_url: str
     fetch_status: str
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

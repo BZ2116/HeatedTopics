@@ -178,6 +178,28 @@ class FileRepository:
         path.write_text(content, encoding="utf-8")
         return path
 
+    def save_item_detail_metadata(
+        self,
+        business_date: BusinessDate,
+        platform: str,
+        detail: ItemDetail,
+    ) -> Path:
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", detail.item_id)
+        path = self.daily_dir(business_date) / "details" / f"{platform}_{safe_id}.json"
+        return self.write_json(path, detail)
+
+    def load_item_detail_metadata(
+        self,
+        business_date: BusinessDate,
+        platform: str,
+        item_id: str,
+    ) -> ItemDetail | None:
+        safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", item_id)
+        path = self.daily_dir(business_date) / "details" / f"{platform}_{safe_id}.json"
+        if not path.is_file():
+            return None
+        return _item_detail_from_dict(self._read_json(path))
+
     def save_eligible(
         self,
         business_date: BusinessDate,
@@ -466,13 +488,14 @@ def _recommendation_bundle(data: Mapping[str, Any]) -> RecommendationBundle:
 
 def _item_detail_from_dict(data: Mapping[str, Any]) -> ItemDetail:
     return ItemDetail(
-        item_id=data["item_id"],
-        content=data["content"],
+        item_id=str(data["item_id"]),
+        content=str(data["content"]),
         content_status=data["content_status"],
         publication_time=data.get("publication_time"),
-        collected_at=data["collected_at"],
-        source_url=data["source_url"],
-        fetch_status=data["fetch_status"],
+        collected_at=str(data["collected_at"]),
+        source_url=str(data["source_url"]),
+        fetch_status=str(data["fetch_status"]),
+        metadata=dict(data.get("metadata") or {}),
     )
 
 

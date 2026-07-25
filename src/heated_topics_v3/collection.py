@@ -341,6 +341,9 @@ def _collect_news_platform(
         repository.save_stable_detail(
             business_date, platform, item.item_id, detail.content
         )
+        repository.save_item_detail_metadata(
+            business_date, platform, detail
+        )
         evidence = (
             builder(item, floors)
             if callable(builder)
@@ -439,6 +442,12 @@ def _load_cached_news_details(
     details_dir = repository.daily_dir(business_date) / "details"
     for item in items:
         if not item.item_id:
+            continue
+        metadata_detail = repository.load_item_detail_metadata(
+            business_date, platform, item.item_id
+        )
+        if metadata_detail is not None:
+            cached[item.item_id] = metadata_detail
             continue
         safe_id = re.sub(r"[^A-Za-z0-9_-]", "_", item.item_id)
         path = details_dir / f"{platform}_{safe_id}.txt"

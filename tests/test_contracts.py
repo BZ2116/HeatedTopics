@@ -162,6 +162,21 @@ def test_item_detail_accepts_each_content_status():
         assert detail.content_status == status
 
 
+def test_item_detail_metadata_defaults_empty_and_is_immutable_contract():
+    from heated_topics_v3.contracts import ItemDetail
+
+    detail = ItemDetail(
+        item_id="zhihu_hot_question_1",
+        content="第一段完整正文。\n\n第二段完整正文。",
+        content_status="full_text",
+        publication_time=None,
+        collected_at="2026-07-25T08:00:00+08:00",
+        source_url="https://www.zhihu.com/question/1",
+        fetch_status="success",
+    )
+    assert detail.metadata == {}
+
+
 def test_workflow_status_literals_are_exact():
     assert get_args(HeatLevel) == (1, 2, 3)
     assert get_args(FactStatus) == ("verified", "unverified", "disputed", "debunked")

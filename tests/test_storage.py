@@ -453,3 +453,33 @@ def test_stable_detail_uses_safe_item_id(tmp_path):
     )
     assert path == tmp_path / "daily_hot_lists/2026-07-23/details/netease_news_doc_abc_123.txt"
     assert path.read_text("utf-8") == "中文正文"
+
+
+def test_item_detail_metadata_round_trip(tmp_path):
+    from heated_topics_v3.contracts import ItemDetail
+    from heated_topics_v3.storage import FileRepository
+
+    repository = FileRepository(tmp_path)
+    detail = ItemDetail(
+        item_id="zhihu_hot_question_1",
+        content="问题描述。\n\n热门回答正文。",
+        content_status="full_text",
+        publication_time="2026-07-25T10:27:00+08:00",
+        collected_at="2026-07-25T12:00:00+08:00",
+        source_url="https://www.zhihu.com/question/1",
+        fetch_status="success",
+        metadata={
+            "question": {"view_count": 1985997, "answer_count": 583},
+            "answers": [{"answer_id": "11", "author": "示例作者", "voteup_count": 1551}],
+        },
+    )
+
+    path = repository.save_item_detail_metadata(
+        "2026-07-25", "zhihu_hot", detail
+    )
+    loaded = repository.load_item_detail_metadata(
+        "2026-07-25", "zhihu_hot", detail.item_id
+    )
+
+    assert path.name == "zhihu_hot_zhihu_hot_question_1.json"
+    assert loaded == detail
