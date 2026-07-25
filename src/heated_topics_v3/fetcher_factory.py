@@ -648,7 +648,7 @@ NETEASE_NEWS_UA = SINA_NEWS_UA
 
 def _news_referer_for(url: str) -> str:
     host = urllib.parse.urlparse(url).netloc
-    if host.endswith("news.sina.com.cn") or host.endswith("sina.com.cn"):
+    if host.endswith("sina.com.cn"):
         return "https://news.sina.com.cn/"
     if host.endswith("163.com"):
         return "https://www.163.com/"

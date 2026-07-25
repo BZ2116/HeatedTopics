@@ -4,7 +4,8 @@ from pathlib import Path
 
 from heated_topics_v3.baidu_retry import BaiduRetryPolicy
 from heated_topics_v3.fetcher_factory import (
-    BILIBILI_DESKTOP_UA,
+    SINA_NEWS_UA,
+    NETEASE_NEWS_UA,
     make_sina_news_fetcher,
     make_netease_news_fetcher,
 )
@@ -34,7 +35,7 @@ def test_make_sina_news_fetcher_sends_zh_headers_and_returns_body(monkeypatch):
     body = fetcher("https://top.news.sina.com.cn/ws/GetTopDataList.php", 15)
     assert body == "OK"
     assert captured["url"].startswith("https://top.news.sina.com.cn/")
-    assert captured["ua"] == BILIBILI_DESKTOP_UA
+    assert captured["ua"] == SINA_NEWS_UA
     assert captured["lang"] == "zh-CN,zh;q=0.9"
     assert captured["referer"] == "https://news.sina.com.cn/"
 
@@ -57,5 +58,5 @@ def test_make_netease_news_fetcher_sends_zh_headers(monkeypatch):
     body = fetcher("https://gw.m.163.com/nc-main/api/v1/hqc/no-repeat-hot-list", 15)
     assert body == "OK"
     assert captured["url"].startswith("https://gw.m.163.com/")
-    assert captured["ua"] == BILIBILI_DESKTOP_UA
+    assert captured["ua"] == NETEASE_NEWS_UA
     assert captured["referer"] == "https://www.163.com/"
