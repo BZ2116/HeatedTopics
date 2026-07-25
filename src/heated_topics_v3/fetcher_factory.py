@@ -637,3 +637,71 @@ def make_juejin_fetcher(
                 time.sleep(min(policy.base_delay * 2 ** (attempt - 1), policy.max_delay))
 
     return _with_retry_3arg
+
+
+SINA_NEWS_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+NETEASE_NEWS_UA = SINA_NEWS_UA
+
+
+def _news_referer_for(url: str) -> str:
+    host = urllib.parse.urlparse(url).netloc
+    if host.endswith("news.sina.com.cn") or host.endswith("sina.com.cn"):
+        return "https://news.sina.com.cn/"
+    if host.endswith("163.com"):
+        return "https://www.163.com/"
+    return ""
+
+
+def make_sina_news_fetcher(
+    *,
+    timeout: int = 20,
+    log_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
+) -> Callable[[str, int], str]:
+    """GET-only fetcher for Sina News hot list / search / article HTML.
+
+    Plain urllib + desktop Chrome UA + zh-CN Accept-Language + sina Referer.
+    No cookies, no stage ladder. Sina's endpoints respond to plain GET.
+    """
+
+    def _fetcher(url: str, timeout_seconds: int = timeout) -> str:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", SINA_NEWS_UA)
+        req.add_header("Accept", "application/json, text/html, */*")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+        referer = _news_referer_for(url)
+        if referer:
+            req.add_header("Referer", referer)
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
+
+
+def make_netease_news_fetcher(
+    *,
+    timeout: int = 20,
+    log_path: Path | str | None = None,
+    retry_policy: BaiduRetryPolicy | None = None,
+) -> Callable[[str, int], str]:
+    """GET-only fetcher for NetEase News hot list / search / article HTML.
+
+    Plain urllib + desktop Chrome UA + zh-CN Accept-Language + 163 Referer.
+    No cookies, no stage ladder.
+    """
+
+    def _fetcher(url: str, timeout_seconds: int = timeout) -> str:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", NETEASE_NEWS_UA)
+        req.add_header("Accept", "application/json, text/html, */*")
+        req.add_header("Accept-Language", "zh-CN,zh;q=0.9")
+        referer = _news_referer_for(url)
+        if referer:
+            req.add_header("Referer", referer)
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+            return resp.read().decode("utf-8", errors="replace")
+
+    return with_retry(_fetcher, retry_policy or BaiduRetryPolicy())
