@@ -1,6 +1,7 @@
 import json
 import math
 import time
+import urllib.error
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -52,24 +53,13 @@ from heated_topics_v3.providers.toutiao import (
     resolve_toutiao_content_url,
 )
 from heated_topics_v3.reporting import (
+    BaiduCacheStats,
     render_baidu_report,
     render_bilibili_report,
     render_juejin_report,
     render_toutiao_report,
     render_toutiao_report_v2,
 )
-from heated_topics_v3.serialization import to_plain_data
-from heated_topics_v3.toutiao_output import write_toutiao_run
-from heated_topics_v3.toutiao_paths import (
-    PATH_B,
-    Candidate,
-    PathFilters,
-    build_candidates,
-    build_hot_board_candidates,
-    select_search_candidates_by_heat,
-)
-from heated_topics_v3.toutiao_search_cache import get_or_fetch_search_items
-from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
 from heated_topics_v3.bilibili_cache import (
     get_or_fetch_article_with_record as bilibili_get_article,
     get_or_fetch_search_with_record as bilibili_get_search,
@@ -83,6 +73,18 @@ from heated_topics_v3.providers.bilibili import (
     parse_bilibili_search_response,
 )
 from heated_topics_v3.bilibili_wbi import img_sub_from_nav
+from heated_topics_v3.serialization import to_plain_data
+from heated_topics_v3.toutiao_output import write_toutiao_run
+from heated_topics_v3.toutiao_paths import (
+    PATH_B,
+    Candidate,
+    PathFilters,
+    build_candidates,
+    build_hot_board_candidates,
+    select_search_candidates_by_heat,
+)
+from heated_topics_v3.toutiao_search_cache import get_or_fetch_search_items
+from heated_topics_v3.toutiao_scoring import as_sort_key, hybrid_score_v2
 
 def _fetch_text_default(url: str, timeout_seconds: int = 15) -> str:
     """Stand-in fetcher used when callers omit one — never silent, never online.
@@ -106,9 +108,12 @@ def run_baidu_pipeline(
     fetcher: Callable[[str, int], str] | None = None,
     search_fetcher: Callable[[str, int], str] | None = None,
     article_fetcher: Callable[[str, int], str] | None = None,
+    cookie_path: Path | None = None,
     top_n: int = 30,
     offline: bool = False,
     force_board_refresh: bool = False,
+    force_search_refresh: bool = False,
+    force_article_refresh: bool = False,
     matched_query_ids: tuple[str, ...] = (),
 ) -> dict[str, Path]:
     """Three-stage Baidu pipeline: board → per-word search → per-article body."""
@@ -116,27 +121,37 @@ def run_baidu_pipeline(
     board_fetch = fetcher or _fetch_text_default
     search_fetch = search_fetcher or board_fetch
     article_fetch = article_fetcher or board_fetch
+    # When cookie_path is supplied, the baijiahao anti-bot shell blocks
+    # plain urllib — switch the article fetcher to one that combines the
+    # cookie with a Chrome TLS fingerprint. Board/search remain on urllib.
+    if cookie_path is not None and Path(cookie_path).exists():
+        from heated_topics_v3.fetcher_factory import make_baidu_article_fetcher
+        article_fetch = make_baidu_article_fetcher(cookie_path=cookie_path)
 
     today = utc8_today()
     cache_root_path = Path(cache_root)
+    stats = BaiduCacheStats()
 
     # ---- stage 1: board ----
     def live_board(_date: str) -> dict[str, str]:
         return {"response_text": fetch_baidu_board_text(board_fetch)}
 
     if force_board_refresh:
-        board_payload = {"response_text": fetch_baidu_board_text(board_fetch)}
-        # refresh path: ignore cache, just write a fresh snapshot back so a
-        # subsequent non-offline run sees the data.
-        get_or_fetch_board_with_record(cache_root_path, today, lambda d: board_payload)
+        board_payload, src = get_or_fetch_board_with_record(
+            cache_root_path,
+            today,
+            live_board,
+            force_refresh=True,
+        )
     elif offline:
-        board_payload, _src = get_or_fetch_board_with_record(
+        board_payload, src = get_or_fetch_board_with_record(
             cache_root_path, today, live_board, deadline=time.monotonic()
         )
     else:
-        board_payload, _src = get_or_fetch_board_with_record(
+        board_payload, src = get_or_fetch_board_with_record(
             cache_root_path, today, live_board
         )
+    stats.record("board", src, forced=force_board_refresh)
     body = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
     # Offline mode with an empty cache yields an empty board marker (``{}``),
     # leaving ``body`` blank. ``parse_baidu_board_response`` assumes valid JSON,
@@ -168,14 +183,19 @@ def run_baidu_pipeline(
                 for a in articles
             ]
 
-        if offline:
-            ids_payload, _src = get_or_fetch_search_with_record(
+        if force_search_refresh:
+            ids_payload, src = get_or_fetch_search_with_record(
+                cache_root_path, today, word, live_search, force_refresh=True
+            )
+        elif offline:
+            ids_payload, src = get_or_fetch_search_with_record(
                 cache_root_path, today, word, live_search, deadline=time.monotonic()
             )
         else:
-            ids_payload, _src = get_or_fetch_search_with_record(
+            ids_payload, src = get_or_fetch_search_with_record(
                 cache_root_path, today, word, live_search
             )
+        stats.record("search", src, forced=force_search_refresh)
         if not isinstance(ids_payload, list):
             continue
         # Keep at most ONE baijiahao article per hot word — the search page
@@ -198,7 +218,13 @@ def run_baidu_pipeline(
                     item_id=f"baidu_article_{article_id}",
                     platform="baidu",
                     item_type="article",
-                    title=word,
+                    # Match against the actual article title from search
+                    # results, not just the board hot word — the search page
+                    # may surface an article whose subject diverges from the
+                    # query term (e.g. board word "高考改革" → article titled
+                    # "教育部新规：高考改革方案公布"). Fall back to the board
+                    # word when no title was extracted.
+                    title=str(entry.get("title") or word),
                     url=str(entry.get("url", "") or ""),
                     rank=None,
                     heat=HeatMetrics(value=None, label="", metric_name="search_recall", metrics={}),
@@ -209,6 +235,7 @@ def run_baidu_pipeline(
                     fetch_status="success",
                     raw_payload={
                         "source_kind": "baidu_search_recall",
+                        "source_path": "A",
                         "source_word": word,
                         "source_word_url": word_item.url,
                         "article_id": article_id,
@@ -216,13 +243,98 @@ def run_baidu_pipeline(
                 )
             )
 
-    # ---- matching ----
+    # ---- matching (pass 1: board-driven) ----
     queries = tuple(build_topic_queries(profile))
     matches = [
         result
         for item in expanded
         if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
     ]
+
+    # ---- fallback: keyword-driven search when board produced too few matches ----
+    # Mirrors Toutiao's `min_hot_board_before_search` rule (pipeline.py:617):
+    # if board-driven hits fall below the threshold, run profile.core_keywords
+    # as additional search queries. Board items (path A) keep their priority
+    # by being appended to ``expanded`` first; kw items (path B) append after.
+    MIN_HOT_BOARD_BEFORE_SEARCH = 5
+    if len(matches) < MIN_HOT_BOARD_BEFORE_SEARCH and profile.core_keywords:
+        seen_article_ids = {
+            str(item.raw_payload.get("article_id", "")).strip()
+            for item in expanded
+        }
+        for keyword in profile.core_keywords:
+            if not keyword.strip():
+                continue
+
+            def live_search(_w: str = keyword) -> list[dict[str, str]]:
+                html = fetch_baidu_search_text(keyword, search_fetch)
+                articles: list[BaiduSearchArticle] = parse_baidu_search_response(
+                    html, source_word=keyword
+                )
+                return [
+                    {
+                        "article_id": a.article_id,
+                        "title": a.title,
+                        "url": a.url,
+                        "source_word": a.source_word,
+                    }
+                    for a in articles
+                ]
+
+            if force_search_refresh:
+                ids_payload, src = get_or_fetch_search_with_record(
+                    cache_root_path, today, keyword, live_search, force_refresh=True
+                )
+            elif offline:
+                ids_payload, src = get_or_fetch_search_with_record(
+                    cache_root_path, today, keyword, live_search, deadline=time.monotonic()
+                )
+            else:
+                ids_payload, src = get_or_fetch_search_with_record(
+                    cache_root_path, today, keyword, live_search
+                )
+            stats.record("search", src, forced=force_search_refresh)
+            if not isinstance(ids_payload, list):
+                continue
+            for entry in ids_payload:
+                if not isinstance(entry, dict):
+                    continue
+                article_id = str(entry.get("article_id", "")).strip()
+                if not article_id or article_id in seen_article_ids:
+                    continue
+                seen_article_ids.add(article_id)
+                expanded.append(
+                    HotItem(
+                        item_id=f"baidu_article_{article_id}",
+                        platform="baidu",
+                        item_type="article",
+                        title=str(entry.get("title") or keyword),
+                        url=str(entry.get("url", "") or ""),
+                        rank=None,
+                        heat=HeatMetrics(
+                            value=None, label="", metric_name="search_recall", metrics={}
+                        ),
+                        summary="",
+                        category="baijiahao",
+                        matched_query_ids=matched_query_ids,
+                        fetched_at=fetched_at,
+                        fetch_status="success",
+                        raw_payload={
+                            "source_kind": "keyword_search_recall",
+                            "source_path": "B",
+                            "source_word": keyword,
+                            "article_id": article_id,
+                        },
+                    )
+                )
+
+        # Re-match with kw-driven items included (board items retain priority
+        # because they precede kw items in ``expanded``).
+        matches = [
+            result
+            for item in expanded
+            if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
+        ]
 
     # ---- stage 3: per-article body ----
     item_details: list[ItemDetail] = []
@@ -246,14 +358,19 @@ def run_baidu_pipeline(
                 "html_length": len(html),
             }
 
-        if offline:
-            payload, _src = get_or_fetch_article_with_record(
+        if force_article_refresh:
+            payload, src = get_or_fetch_article_with_record(
+                cache_root_path, today, article_id, live_article, force_refresh=True
+            )
+        elif offline:
+            payload, src = get_or_fetch_article_with_record(
                 cache_root_path, today, article_id, live_article, deadline=time.monotonic()
             )
         else:
-            payload, _src = get_or_fetch_article_with_record(
+            payload, src = get_or_fetch_article_with_record(
                 cache_root_path, today, article_id, live_article
             )
+        stats.record("article", src, forced=force_article_refresh)
         if not isinstance(payload, dict) or not payload:
             detail = ItemDetail(
                 item_id=item.item_id,
@@ -295,6 +412,7 @@ def run_baidu_pipeline(
         hot_items_fetcher=lambda _fetched_at: expanded,
         item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
         report_renderer=render_baidu_report,
+        cache_stats=stats,
     )
 
 
@@ -674,6 +792,7 @@ def _run_platform_pipeline(
     hot_items_fetcher,
     item_detail_fetcher,
     report_renderer,
+    cache_stats=None,
 ) -> dict[str, Path]:
     profile = load_user_profile(profile_path)
     queries = tuple(build_topic_queries(profile))
@@ -697,7 +816,7 @@ def _run_platform_pipeline(
 
     _write_json(hot_items_path, hot_item_rows)
     report_path.write_text(
-        report_renderer(profile, matches, fetched_at, item_details),
+        report_renderer(profile, matches, fetched_at, item_details, cache_stats=cache_stats),
         encoding="utf-8",
     )
 
@@ -1164,3 +1283,618 @@ def _rendered_texts(urls, timeout_seconds, fetcher):
     if fetcher is None:
         return {}
     return {url: fetcher(url, timeout_seconds) for url in urls}
+
+
+@dataclass(frozen=True)
+class SinaNewsV2Result:
+    user_id: str
+    date: str
+    run_dir: Path
+    top_n: int
+    candidates_total: int
+    kept_total: int
+    paths: dict[str, int]
+    keyword_source: str  # "core_keywords"
+    keyword_count: int
+    report_path: Path
+    focused_path: Path
+
+
+def _sina_score_item(
+    item: HotItem, persona_keywords: tuple[str, ...]
+) -> "NewsScore":
+    """Wrap ``hybrid_score_v2`` so the shared builder can score Sina items.
+
+    Sina items get ``source_kind="hot_board"`` injected by the pipeline on
+    board rows so ``hybrid_score_v2`` can apply the hot-board log10 base;
+    search items keep their empty ``source_kind`` and use the search offset.
+    """
+    from heated_topics_v3.news_pipeline_paths import NewsScore
+    scored = hybrid_score_v2(item, persona_keywords)
+    return NewsScore(
+        score=scored.score,
+        persona_matched=scored.persona_matched,
+        is_toutiao_hot=scored.is_toutiao_hot,
+    )
+
+
+def _write_news_article_text(path: Path, candidate: "Candidate", detail: ItemDetail) -> None:
+    """Generic article text used by sina/netease v2 (no hot board snapshot)."""
+    raw_payload = candidate.item.raw_payload
+    heat_line = (
+        f"HotValue: {candidate.item.heat.value}"
+        if candidate.is_hot_board
+        else "HotValue: n/a (search result)"
+    )
+    body = "\n".join([
+        f"Title: {detail.title}",
+        f"Keyword: {candidate.matched_keyword or 'n/a'}",
+        f"Source path: {candidate.source_path}",
+        f"Fetched at: {detail.raw_payload.get('fetched_at') or candidate.item.fetched_at}",
+        heat_line,
+        f"is_toutiao_hot: {candidate.is_toutiao_hot}",
+        "",
+        "=" * 60,
+        detail.content,
+        "",
+    ])
+    path.write_text(body, encoding="utf-8")
+
+
+def _fetch_news_article_details(
+    *,
+    kept_candidates: list["Candidate"],
+    cache_root_path: Path,
+    date: str,
+    offline: bool,
+    force_article_refresh: bool,
+    stats: "BaiduCacheStats",
+    fetcher: Callable[[str, int], str],
+    dedup_key_fn: Callable[[HotItem], str],
+    platform: str,
+    parser: Callable[[str, str, str], str],
+    extraction_method: str,
+) -> list[ItemDetail]:
+    """Fetch each kept candidate's article body through the v2 cache layer.
+
+    Returns an ``ItemDetail`` per kept candidate. Failed fetches (HTTPError,
+    URLError, OSError) and parser failures (ValueError, TypeError) collapse
+    to an empty-content row with ``fetch_status="empty"`` — never aborting
+    the run for a single upstream 404.
+    """
+    from heated_topics_v3.news_cache import get_or_fetch_sina_news_article_with_record
+
+    item_details: list[ItemDetail] = []
+    for candidate in kept_candidates:
+        item = candidate.item
+        cache_key = dedup_key_fn(item)
+
+        def live_article(_aid: str = cache_key, _item=item) -> dict:
+            try:
+                html = fetcher(_item.url, 20)
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+                return {"title": _item.title, "content": "",
+                        "extraction_method": extraction_method,
+                        "fetch_status": "empty", "html_length": 0}
+            try:
+                content = parser(html, title=_item.title, summary="")
+            except (ValueError, TypeError):
+                content = ""
+            return {"title": _item.title, "content": content,
+                    "extraction_method": extraction_method,
+                    "fetch_status": "success" if content else "empty",
+                    "html_length": len(html)}
+
+        payload, src = _news_cache_get_article(
+            get_or_fetch_sina_news_article_with_record,
+            cache_root_path, date, cache_key, live_article,
+            offline=offline, force_refresh=force_article_refresh,
+        )
+        stats.record("article", src, forced=force_article_refresh)
+        if not isinstance(payload, dict) or not payload:
+            detail = ItemDetail(item_id=item.item_id, platform=platform, url=item.url,
+                                title=item.title, author="", content="",
+                                published_at="", tags=(),
+                                extraction_method=extraction_method,
+                                fetch_status="empty", raw_payload={"html_length": 0})
+        else:
+            content = str(payload.get("content", ""))
+            detail = ItemDetail(item_id=item.item_id, platform=platform, url=item.url,
+                                title=str(payload.get("title", item.title)),
+                                author="", content=content, published_at="",
+                                tags=(),
+                                extraction_method=str(payload.get("extraction_method", extraction_method)),
+                                fetch_status=str(payload.get("fetch_status",
+                                                              "success" if content else "empty")),
+                                raw_payload={"html_length": int(payload.get("html_length", 0) or 0)})
+        item_details.append(detail)
+    return item_details
+
+
+def run_sina_news_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    cache_root: Path,
+    fetcher: Callable[[str, int], str] | None = None,
+    top_n: int = 10,
+    offline: bool = False,
+    force_board_refresh: bool = False,
+    force_search_refresh: bool = False,
+    force_article_refresh: bool = False,
+    matched_query_ids: tuple[str, ...] = (),
+    path_filters: PathFilters = PathFilters(
+        hot_board_min=1000,
+        article_heat_min=0,
+        min_hot_board_before_search=3,
+        include_is_toutiao_hot_fallback=False,
+    ),
+) -> "SinaNewsV2Result":
+    """Sina News v2 pipeline: hot board → per-keyword search → per-article body.
+
+    Mirrors the Toutiao v2 architecture (shared ``build_news_candidates`` +
+    ``write_news_run``) but with Sina-specific scoring, dedup, and Path A
+    defaults (``hot_board_min=1000`` instead of Toutiao's 1M).
+    """
+    from heated_topics_v3.news_cache import (
+        get_or_fetch_sina_news_board_with_record,
+        get_or_fetch_sina_news_search_with_record,
+    )
+    from heated_topics_v3.news_pipeline_paths import NewsPathContext, build_news_candidates
+    from heated_topics_v3.news_pipeline_output import (
+        NewsOutputContext,
+        write_news_run,
+    )
+    from heated_topics_v3.providers.sina_news import (
+        SINA_HOT_URL, SINA_SEARCH_URL,
+        parse_sina_article_response,
+        parse_sina_hot_response,
+        parse_sina_search_response,
+    )
+    from heated_topics_v3.reporting import render_sina_news_report_v2
+
+    profile = load_user_profile(profile_path)
+    fetch = fetcher or _fetch_text_default
+    today = utc8_today()
+    cache_root_path = Path(cache_root)
+    stats = BaiduCacheStats()
+
+    # ---- stage 1: hot board (Path A) ----
+    def live_board(_date: str) -> dict:
+        return {"response_text": fetch(SINA_HOT_URL, 20)}
+
+    board_payload, src = _news_cache_get(
+        get_or_fetch_sina_news_board_with_record,
+        cache_root_path, today, live_board,
+        offline=offline, force_refresh=force_board_refresh,
+    )
+    stats.record("board", src, forced=force_board_refresh)
+    board_text = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
+    try:
+        raw_board_items = parse_sina_hot_response(
+            board_text, fetched_at=fetched_at) if board_text.strip() else []
+    except ValueError:
+        raw_board_items = []
+
+    # Sina board items do not carry ``source_kind`` — inject it so
+    # ``hybrid_score_v2`` recognizes them as hot-board rows and applies the
+    # log10 base + boost rather than the search offset.
+    board_items: list[HotItem] = []
+    for it in raw_board_items:
+        merged_payload = {**it.raw_payload, "source_kind": "hot_board"}
+        board_items.append(replace(it, raw_payload=merged_payload))
+
+    # ---- keywords — hard cap at 5 ----
+    keywords = [w for w in profile.core_keywords[:5] if w.strip()]
+    extraction = PersonaKeywordExtraction(
+        user_id=profile.profile_id,
+        persona_signature="",
+        generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+        keywords=tuple(ExtractedKeyword(k, "热榜") for k in keywords),
+        source="core_keywords",
+    )
+    persona_keywords = tuple(keywords)
+
+    # ---- stage 2: per-keyword search (Path B) ----
+    raw_search_by_keyword: dict[str, list[HotItem]] = {}
+    article_info_by_key: dict[str, dict] = {}
+    for word in keywords:
+        def live_search(_w: str = word) -> list[dict]:
+            from urllib.parse import urlencode
+            url = f"{SINA_SEARCH_URL}?{urlencode({'q': _w, 'range': 'all'})}"
+            items = parse_sina_search_response(fetch(url, 20), fetched_at=fetched_at)
+            # ``dataid`` carries a channel prefix (e.g. ``comos:``); strip it
+            # to the bare id so Path B is keyed the same as Path A's ``ext4``.
+            return [
+                {"article_id": _sina_bare_id(it.raw_payload) or it.item_id,
+                 "title": it.title, "url": it.url}
+                for it in items
+            ]
+
+        payload, src = _news_cache_get_search(
+            get_or_fetch_sina_news_search_with_record,
+            cache_root_path, today, word, live_search,
+            offline=offline, force_refresh=force_search_refresh,
+        )
+        stats.record("search", src, forced=force_search_refresh)
+        if not isinstance(payload, list):
+            raw_search_by_keyword[word] = []
+            continue
+        items: list[HotItem] = []
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("title", "")).strip()
+            url = str(entry.get("url", "")).strip()
+            article_id = str(entry.get("article_id", "")).strip()
+            if not title or not url or not article_id:
+                continue
+            item = HotItem(
+                item_id=f"sina_news_{article_id}", platform="sina_news",
+                item_type="news", title=title, url=url, rank=None,
+                heat=HeatMetrics(value=None, label="", metric_name="search_rank", metrics={}),
+                summary=title, category="", matched_query_ids=matched_query_ids,
+                fetched_at=fetched_at, fetch_status="success",
+                raw_payload={"source_kind": "sina_news_search_recall",
+                             "article_id": article_id},
+            )
+            items.append(item)
+            # Sina has no per-article heat / is_toutiao_hot — populate with
+            # neutral defaults so Path B's ``article_heat_min`` filter doesn't
+            # drop valid search hits.
+            article_info_by_key[article_id] = {"article_heat": 0, "is_toutiao_hot": False}
+        raw_search_by_keyword[word] = items
+
+    # ---- build candidates via the shared Path A/B/C builder ----
+    ctx = NewsPathContext(
+        identity_key=_sina_news_dedup_key,
+        enrich_with_article_info=lambda item, _info: item,
+        score_item=_sina_score_item,
+    )
+    candidates = build_news_candidates(
+        hot_board=list(board_items),
+        keywords=extraction.keywords,
+        persona_keywords=persona_keywords,
+        search_results_by_keyword=raw_search_by_keyword,
+        article_info_by_key=article_info_by_key,
+        filters=path_filters,
+        ctx=ctx,
+    )
+    candidates = select_search_candidates_by_heat(candidates)
+    candidates.sort(key=lambda c: as_sort_key(hybrid_score_v2(c.item, persona_keywords)))
+
+    kept_candidates = candidates[: max(0, top_n)]
+
+    # ---- stage 3: per-article body ----
+    item_details = _fetch_news_article_details(
+        kept_candidates=kept_candidates,
+        cache_root_path=cache_root_path,
+        date=today,
+        offline=offline,
+        force_article_refresh=force_article_refresh,
+        stats=stats,
+        fetcher=fetch,
+        dedup_key_fn=_sina_news_dedup_key,
+        platform="sina_news",
+        parser=parse_sina_article_response,
+        extraction_method="sina_news_article_page",
+    )
+
+    # ---- report + output ----
+    report_md = render_sina_news_report_v2(
+        profile, extraction, kept_candidates, fetched_at,
+        item_details=item_details, cache_stats=stats,
+    )
+    run_result = write_news_run(
+        user_id=profile.profile_id,
+        date=today,
+        candidates=candidates,
+        top_n=top_n,
+        raw_search_by_keyword=raw_search_by_keyword,
+        raw_article_info_by_key=article_info_by_key,
+        item_details=item_details,
+        report_markdown=report_md,
+        ctx=NewsOutputContext(
+            canonical_url=_canonical_url,
+            write_article_text=_write_news_article_text,
+            fetched_at=fetched_at,
+        ),
+        output_root=output_root,
+    )
+
+    return SinaNewsV2Result(
+        user_id=profile.profile_id,
+        date=today,
+        run_dir=run_result.run_dir,
+        top_n=top_n,
+        candidates_total=run_result.candidates_total,
+        kept_total=run_result.kept_total,
+        paths=run_result.paths,
+        keyword_source=extraction.source,
+        keyword_count=len(extraction.keywords),
+        report_path=run_result.run_dir / "report.md",
+        focused_path=run_result.run_dir / "focused.json",
+    )
+
+
+def run_netease_news_pipeline(
+    profile_path: Path,
+    output_root: Path,
+    fetched_at: str,
+    *,
+    cache_root: Path,
+    fetcher: Callable[[str, int], str] | None = None,
+    top_n: int = 30,
+    offline: bool = False,
+    force_board_refresh: bool = False,
+    force_search_refresh: bool = False,
+    force_article_refresh: bool = False,
+    matched_query_ids: tuple[str, ...] = (),
+) -> dict[str, Path]:
+    """NetEase News pipeline: hot board → per-keyword search → per-article body."""
+    from heated_topics_v3.news_cache import (
+        get_or_fetch_netease_news_article_with_record,
+        get_or_fetch_netease_news_board_with_record,
+        get_or_fetch_netease_news_search_with_record,
+    )
+    from heated_topics_v3.providers.netease_news import (
+        NETEASE_HOT_URL, NETEASE_SEARCH_URL,
+        parse_netease_article_response,
+        parse_netease_hot_response,
+        parse_netease_search_response,
+    )
+    from heated_topics_v3.reporting import render_netease_news_report
+
+    profile = load_user_profile(profile_path)
+    fetch = fetcher or _fetch_text_default
+    today = utc8_today()
+    cache_root_path = Path(cache_root)
+    stats = BaiduCacheStats()
+
+    # ---- stage 1: hot board ----
+    def live_board(_date: str) -> dict:
+        return {"response_text": fetch(NETEASE_HOT_URL, 20)}
+
+    board_payload, src = _news_cache_get(
+        get_or_fetch_netease_news_board_with_record,
+        cache_root_path, today, live_board,
+        offline=offline, force_refresh=force_board_refresh,
+    )
+    stats.record("board", src, forced=force_board_refresh)
+    board_text = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
+    try:
+        board_items = parse_netease_hot_response(
+            board_text, fetched_at=fetched_at) if board_text.strip() else []
+    except ValueError:
+        board_items = []
+
+    # ---- stage 2: per-keyword search (Path B) ----
+    search_items: list[HotItem] = []
+    queries = tuple(build_topic_queries(profile))
+    for word in profile.core_keywords[:top_n]:
+        if not word.strip():
+            continue
+
+        def live_search(_w: str = word) -> list[dict]:
+            from urllib.parse import urlencode
+            # NetEase search endpoint only accepts ``query=<word>`` —
+            # ``keyword`` / ``page`` / ``size`` yield HTTP 400 (verified
+            # by scripts/smoke_news.py and verify_netease_body.py).
+            url = f"{NETEASE_SEARCH_URL}?{urlencode({'query': _w})}"
+            items = parse_netease_search_response(fetch(url, 20), fetched_at=fetched_at)
+            # ``docid`` is already the bare id, matching board's ``contentId``.
+            return [
+                {"article_id": _netease_bare_id(it.raw_payload) or it.item_id,
+                 "title": it.title, "url": it.url}
+                for it in items
+            ]
+
+        payload, src = _news_cache_get_search(
+            get_or_fetch_netease_news_search_with_record,
+            cache_root_path, today, word, live_search,
+            offline=offline, force_refresh=force_search_refresh,
+        )
+        stats.record("search", src, forced=force_search_refresh)
+        if not isinstance(payload, list):
+            continue
+        for entry in payload:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("title", "")).strip()
+            url = str(entry.get("url", "")).strip()
+            article_id = str(entry.get("article_id", "")).strip()
+            if not title or not url or not article_id:
+                continue
+            # ``item_id`` matches Path A's ``netease_news_<bare_id>`` so the
+            # same article produced by both paths shares a stable item_id —
+            # no artificial ``_search_`` prefix to break identity.
+            search_items.append(HotItem(
+                item_id=f"netease_news_{article_id}", platform="netease_news",
+                item_type="news", title=title, url=url, rank=None,
+                heat=HeatMetrics(value=None, label="", metric_name="search_rank", metrics={}),
+                summary=title, category="", matched_query_ids=matched_query_ids,
+                fetched_at=fetched_at, fetch_status="success",
+                raw_payload={"source_kind": "netease_news_search_recall",
+                             "article_id": article_id}))
+
+    # Combine board (Path A) + search (Path B). Path A enters first; any
+    # search item whose stable identity (``contentId``/``docid``) already
+    # appears in board is skipped so the same article is not emitted twice.
+    expanded: list[HotItem] = list(board_items)
+    seen_netease_ids = {_netease_news_dedup_key(it) for it in expanded}
+    for it in search_items:
+        key = _netease_news_dedup_key(it)
+        if key in seen_netease_ids:
+            continue
+        seen_netease_ids.add(key)
+        expanded.append(it)
+
+    matches = [
+        result for item in expanded
+        if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
+    ]
+
+    # ---- stage 3: per-article body ----
+    item_details: list[ItemDetail] = []
+    for match in matches:
+        item = match.item
+        # Use the dedup key (normalized bare id) so Path A and Path B share
+        # the article cache namespace; falling back to the item_id would
+        # split the same article across two cache slots.
+        article_id = _netease_news_dedup_key(item)
+
+        def live_article(_aid: str = article_id, _item=item) -> dict:
+            # NetEase article pages are not guaranteed to exist — the search
+            # endpoint surfaces links whose upstream article has since been
+            # deleted or moved (HTTP 404 is the common case). Without this
+            # guard, a single failed body fetch bubbles through the cache
+            # layer and aborts the whole run, dropping every other matched
+            # article. Convert any network/HTTP error into an empty-content
+            # payload so the rest of the pipeline (cache write, ItemDetail
+            # construction, article_texts/*.txt, report.md) continues
+            # normally and the failed row is reported as fetch_status='empty'.
+            try:
+                html = fetch(_item.url, 20)
+            except (urllib.error.HTTPError, urllib.error.URLError, OSError):
+                return {"title": _item.title, "content": "",
+                        "extraction_method": "netease_news_article_page",
+                        "fetch_status": "empty", "html_length": 0}
+            try:
+                content = parse_netease_article_response(html, title=_item.title, summary="")
+            except (ValueError, TypeError):
+                content = ""
+            return {"title": _item.title, "content": content,
+                    "extraction_method": "netease_news_article_page",
+                    "fetch_status": "success" if content else "empty",
+                    "html_length": len(html)}
+
+        payload, src = _news_cache_get_article(
+            get_or_fetch_netease_news_article_with_record,
+            cache_root_path, today, article_id, live_article,
+            offline=offline, force_refresh=force_article_refresh,
+        )
+        stats.record("article", src, forced=force_article_refresh)
+        if not isinstance(payload, dict) or not payload:
+            detail = ItemDetail(item_id=item.item_id, platform="netease_news", url=item.url,
+                                title=item.title, author="", content="",
+                                published_at="", tags=(),
+                                extraction_method="netease_news_article_page",
+                                fetch_status="empty", raw_payload={"html_length": 0})
+        else:
+            content = str(payload.get("content", ""))
+            detail = ItemDetail(item_id=item.item_id, platform="netease_news", url=item.url,
+                                title=str(payload.get("title", item.title)),
+                                author="", content=content, published_at="",
+                                tags=(),
+                                extraction_method=str(payload.get("extraction_method",
+                                                                  "netease_news_article_page")),
+                                fetch_status=str(payload.get("fetch_status",
+                                                              "success" if content else "empty")),
+                                raw_payload={"html_length": int(payload.get("html_length", 0) or 0)})
+        item_details.append(detail)
+
+    details_by_item_id = {d.item_id: d for d in item_details}
+    return _run_platform_pipeline(
+        profile_path=profile_path, output_root=output_root, fetched_at=fetched_at,
+        source_id="netease_news",
+        hot_items_fetcher=lambda _f: expanded,
+        item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
+        report_renderer=render_netease_news_report,
+        cache_stats=stats,
+    )
+
+
+# ---------------------------------------------------------------------------
+# News cache access helpers
+# ---------------------------------------------------------------------------
+#
+# The news pipelines have no yesterday-fallback and no persistent daily board,
+# so ``offline=True`` on an empty cache would strand the run with nothing to
+# report. Mirror ``run_toutiao_pipeline_v2``'s smart-offline rule: when the
+# platform cache is missing, offline upgrades to a live fetch (still through
+# the injected fetcher, so tests stay deterministic and no real network is hit
+# unless the CLI wires a live fetcher). A ``force_refresh`` request always
+# skips the cache. Otherwise a cached payload is served without refetching.
+
+
+def _sina_bare_id(row: dict) -> str:
+    """Extract the bare Sina article id from a board/search row.
+
+    Hot-list rows expose ``ext4`` (already bare). Search rows expose
+    ``dataid`` which carries a channel prefix like ``comos:`` or
+    ``k:``. The bare id is the part after the last ``:``; when the
+    delimiter is absent we treat the whole string as bare. Returns ""
+    when no usable id is found.
+    """
+    for field in ("ext4", "dataid"):
+        raw = str(row.get(field) or "").strip()
+        if not raw:
+            continue
+        if ":" in raw:
+            bare = raw.rsplit(":", 1)[-1].strip()
+            if bare:
+                return bare
+        else:
+            return raw
+    return ""
+
+
+def _netease_bare_id(row: dict) -> str:
+    """Extract the bare NetEase docid from a board/search row.
+
+    Both ``contentId`` (board) and ``docid`` (search) already carry the
+    bare id; pick whichever is present.
+    """
+    for field in ("contentId", "docid"):
+        raw = str(row.get(field) or "").strip()
+        if raw:
+            return raw
+    return ""
+
+
+def _sina_news_dedup_key(item: HotItem) -> str:
+    """Stable identity key for dedup of Sina Path A / Path B items.
+
+    Prefers ``raw_payload['article_id']`` (set by the live search path).
+    Falls back to extracting the bare id from ``ext4`` / ``dataid`` for
+    board-only items whose parser leaves the raw row untouched.
+    """
+    raw_payload = item.raw_payload or {}
+    explicit = str(raw_payload.get("article_id") or "").strip()
+    if explicit:
+        return explicit
+    bare = _sina_bare_id(raw_payload)
+    if bare:
+        return bare
+    return f"url:{_canonical_url(item.url)}"
+
+
+def _netease_news_dedup_key(item: HotItem) -> str:
+    """Stable identity key for dedup of NetEase Path A / Path B items."""
+    raw_payload = item.raw_payload or {}
+    explicit = str(raw_payload.get("article_id") or "").strip()
+    if explicit:
+        return explicit
+    bare = _netease_bare_id(raw_payload)
+    if bare:
+        return bare
+    return f"url:{_canonical_url(item.url)}"
+
+
+def _news_cache_get(getter, cache_root, date, live, *, offline, force_refresh):
+    if force_refresh:
+        return getter(cache_root, date, live, force_refresh=True)
+    return getter(cache_root, date, live)
+
+
+def _news_cache_get_search(getter, cache_root, date, word, live, *, offline, force_refresh):
+    if force_refresh:
+        return getter(cache_root, date, word, live, force_refresh=True)
+    return getter(cache_root, date, word, live)
+
+
+def _news_cache_get_article(getter, cache_root, date, article_id, live, *, offline, force_refresh):
+    if force_refresh:
+        return getter(cache_root, date, article_id, live, force_refresh=True)
+    return getter(cache_root, date, article_id, live)
