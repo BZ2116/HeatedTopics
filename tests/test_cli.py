@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -185,3 +186,236 @@ def test_toutiao_help_does_not_offer_llm_rerank(monkeypatch, capsys):
 
     assert exc_info.value.code == 0
     assert "--llm-rerank" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# sina-news / netease-news CLI surface
+# ---------------------------------------------------------------------------
+
+
+def _news_parser_defaults(command: str) -> argparse.Namespace:
+    """Build a parser that only knows ``command`` and parse with required args."""
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    p = sub.add_parser(command)
+    cli._add_news_args(p)
+    return parser.parse_args([command, "--profile", "p.json"])
+
+
+def test_sina_news_parser_defaults():
+    args = _news_parser_defaults("sina-news")
+    assert args.profile == Path("p.json")
+    assert args.output_root == Path("outputs")
+    assert args.cache_root == Path("cache")
+    assert args.top_n == 10
+    assert args.fetched_at is None
+    assert args.offline is False
+    assert args.force_board_refresh is False
+    assert args.force_search_refresh is False
+    assert args.force_article_refresh is False
+    assert args.matched_query_ids == []
+
+
+def test_netease_news_parser_defaults():
+    args = _news_parser_defaults("netease-news")
+    assert args.profile == Path("p.json")
+    assert args.output_root == Path("outputs")
+    assert args.cache_root == Path("cache")
+    assert args.top_n == 10
+
+
+def test_news_parser_accepts_all_flags():
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="command")
+    p = sub.add_parser("sina-news")
+    cli._add_news_args(p)
+    args = parser.parse_args([
+        "sina-news", "--profile", "p.json",
+        "--output-root", "out", "--output-dir", "out2",
+        "--cache-root", "cc", "--fetched-at", "2026-07-25T10:00:00+08:00",
+        "--top-n", "7", "--offline",
+        "--force-board-refresh", "--force-search-refresh", "--force-article-refresh",
+        "--matched-query-ids", "q1", "--matched-query-ids", "q2",
+    ])
+    assert args.output_root == Path("out2")  # last one wins, matches baidu/bilibili
+    assert args.cache_root == Path("cc")
+    assert args.fetched_at == "2026-07-25T10:00:00+08:00"
+    assert args.top_n == 7
+    assert args.offline is True
+    assert args.force_board_refresh is True
+    assert args.force_search_refresh is True
+    assert args.force_article_refresh is True
+    assert args.matched_query_ids == ["q1", "q2"]
+
+
+def test_sina_news_dispatch(monkeypatch, capsys):
+    """Verify _main wires the right pipeline / fetcher / kwargs for sina-news."""
+    captured: dict = {}
+    fetcher_options: dict = {}
+
+    from heated_topics_v3.pipeline import SinaNewsV2Result
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return SinaNewsV2Result(
+            user_id="zhao_001",
+            date="2026-07-25",
+            run_dir=Path("outputs/users/zhao_001/2026-07-25/run_120000"),
+            top_n=15,
+            candidates_total=12,
+            kept_total=7,
+            paths={"A": 2, "B": 10},
+            keyword_source="core_keywords",
+            keyword_count=5,
+            report_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/report.md"),
+            focused_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/focused.json"),
+        )
+
+    import heated_topics_v3.fetcher_factory as ff
+    import heated_topics_v3.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_sina_news_pipeline", fake_run)
+    monkeypatch.setattr(
+        ff,
+        "make_sina_news_fetcher",
+        lambda **kwargs: fetcher_options.update(kwargs) or (lambda _url, _timeout: ""),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "heated-topics",
+            "sina-news",
+            "--profile",
+            "p.json",
+            "--output-root",
+            "output",
+            "--fetched-at",
+            "2026-07-25T10:00:00+08:00",
+            "--cache-root",
+            "cache-data",
+            "--top-n",
+            "15",
+            "--offline",
+            "--force-board-refresh",
+            "--force-search-refresh",
+            "--force-article-refresh",
+            "--matched-query-ids",
+            " q1 ",
+            "--matched-query-ids",
+            "",
+            "--matched-query-ids",
+            "q2",
+        ],
+    )
+
+    cli._main()
+
+    assert captured["profile_path"] == Path("p.json")
+    assert captured["output_root"] == Path("output")
+    assert captured["fetched_at"] == "2026-07-25T10:00:00+08:00"
+    assert captured["cache_root"] == Path("cache-data")
+    assert captured["top_n"] == 15
+    assert captured["offline"] is True
+    assert captured["force_board_refresh"] is True
+    assert captured["force_search_refresh"] is True
+    assert captured["force_article_refresh"] is True
+    # matched_query_ids stripped and empties removed
+    assert captured["matched_query_ids"] == ("q1", "q2")
+    assert callable(captured["fetcher"])
+    log_path = fetcher_options["log_path"]
+    assert log_path.name == ".sina_news_fetcher_log.json"
+
+    out = capsys.readouterr().out
+    assert "run_dir:" in out
+    assert "focused:" in out
+    assert "candidates: 7/12" in out
+    assert "paths: " in out
+    assert "keyword_source: core_keywords" in out
+    assert "keyword_count: 5" in out
+
+
+def test_netease_news_dispatch(monkeypatch, capsys):
+    """Verify _main wires the right pipeline / fetcher / kwargs for netease-news."""
+    captured: dict = {}
+    fetcher_options: dict = {}
+
+    from heated_topics_v3.pipeline import NeteaseNewsV2Result
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return NeteaseNewsV2Result(
+            user_id="zhao_001",
+            date="2026-07-25",
+            run_dir=Path("outputs/users/zhao_001/2026-07-25/run_120000"),
+            top_n=30,
+            candidates_total=10,
+            kept_total=5,
+            paths={"A": 2, "B": 8},
+            keyword_source="core_keywords",
+            keyword_count=5,
+            report_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/report.md"),
+            focused_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/focused.json"),
+        )
+
+    import heated_topics_v3.fetcher_factory as ff
+    import heated_topics_v3.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_netease_news_pipeline", fake_run)
+    monkeypatch.setattr(
+        ff,
+        "make_netease_news_fetcher",
+        lambda **kwargs: fetcher_options.update(kwargs) or (lambda _url, _timeout: ""),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["heated-topics", "netease-news", "--profile", "p.json", "--fetched-at", "2026-07-25T10:00:00+08:00"],
+    )
+
+    cli._main()
+
+    assert captured["profile_path"] == Path("p.json")
+    assert captured["fetched_at"] == "2026-07-25T10:00:00+08:00"
+    assert captured["matched_query_ids"] == ()
+    assert callable(captured["fetcher"])
+    log_path = fetcher_options["log_path"]
+    assert log_path.name == ".netease_news_fetcher_log.json"
+
+    out = capsys.readouterr().out
+    assert "run_dir:" in out
+
+
+def test_sina_news_generates_fetched_at_when_missing(monkeypatch, capsys):
+    """When --fetched-at is absent, the handler stamps a local-time ISO string."""
+    captured: dict = {}
+
+    from heated_topics_v3.pipeline import SinaNewsV2Result
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return SinaNewsV2Result(
+            user_id="zhao_001",
+            date="2026-07-25",
+            run_dir=Path("out/run"),
+            top_n=10,
+            candidates_total=0,
+            kept_total=0,
+            paths={},
+            keyword_source="core_keywords",
+            keyword_count=0,
+            report_path=Path("out/run/report.md"),
+            focused_path=Path("out/run/focused.json"),
+        )
+
+    import heated_topics_v3.fetcher_factory as ff
+    import heated_topics_v3.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_sina_news_pipeline", fake_run)
+    monkeypatch.setattr(
+        ff,
+        "make_sina_news_fetcher",
+        lambda **kwargs: (lambda _url, _timeout: ""),
+    )
+    monkeypatch.setattr("sys.argv", ["heated-topics", "sina-news", "--profile", "p.json"])
+
+    cli._main()
+
+    assert captured["fetched_at"]  # non-empty
+    # ISO-ish: contains a T and a timezone offset or Z
+    assert "T" in captured["fetched_at"]

@@ -115,48 +115,6 @@ def render_toutiao_report(
     return _render_platform_report("Toutiao Hot Topics Report", profile, matches, fetched_at, item_details)
 
 
-def render_sina_news_report(
-    profile: UserProfile,
-    matches: list[MatchResult],
-    fetched_at: str,
-    item_details: list[ItemDetail] | None = None,
-    cache_stats: "BaiduCacheStats | None" = None,
-) -> str:
-    body = _render_platform_report("Sina News 热点日报", profile, matches, fetched_at, item_details)
-    if cache_stats is not None:
-        section = _render_cache_stats_section(cache_stats)
-        marker = "## Matched Topics"
-        if marker in body:
-            body = body.replace(marker, section + marker, 1)
-        else:
-            body = body.rstrip() + "\n\n" + section + "\n"
-    if not matches:
-        notice = "<h3>本次未抓到任何条目</h3>"
-        return body.replace("No matched hot topics.", notice)
-    return body
-
-
-def render_netease_news_report(
-    profile: UserProfile,
-    matches: list[MatchResult],
-    fetched_at: str,
-    item_details: list[ItemDetail] | None = None,
-    cache_stats: "BaiduCacheStats | None" = None,
-) -> str:
-    body = _render_platform_report("NetEase News 热点日报", profile, matches, fetched_at, item_details)
-    if cache_stats is not None:
-        section = _render_cache_stats_section(cache_stats)
-        marker = "## Matched Topics"
-        if marker in body:
-            body = body.replace(marker, section + marker, 1)
-        else:
-            body = body.rstrip() + "\n\n" + section + "\n"
-    if not matches:
-        notice = "<h3>本次未抓到任何条目</h3>"
-        return body.replace("No matched hot topics.", notice)
-    return body
-
-
 def _render_platform_report(
     title: str,
     profile: UserProfile,
