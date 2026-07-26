@@ -4,6 +4,7 @@ from __future__ import annotations
 from heated_topics_v3.contracts import ExtractedKeyword, HeatMetrics, HotItem
 from heated_topics_v3.news_pipeline_paths import (
     NewsPathContext,
+    NewsScore,
     build_news_candidates,
 )
 from heated_topics_v3.toutiao_paths import (
@@ -48,12 +49,37 @@ def _info(article_heat: int, is_toutiao_hot: bool = False) -> dict:
     return {"article_heat": article_heat, "is_toutiao_hot": is_toutiao_hot}
 
 
+def _heat_score(item: HotItem, persona_keywords: tuple[str, ...]) -> NewsScore:
+    """Simple heat-based scorer for the platform-agnostic tests.
+
+    Uses ``heat_value`` when present, else falls back to ``article_heat`` from
+    raw_payload. Persona match is a case-insensitive substring against the
+    title; ``is_toutiao_hot`` is read from raw_payload.
+    """
+    payload = item.raw_payload or {}
+    heat = item.heat.value or 0
+    if not heat:
+        try:
+            heat = int(payload.get("article_heat") or 0)
+        except (TypeError, ValueError):
+            heat = 0
+    matched = any(
+        bool(kw) and kw.casefold() in (item.title or "").casefold()
+        for kw in persona_keywords
+    )
+    return NewsScore(
+        score=float(heat),
+        persona_matched=matched,
+        is_toutiao_hot=bool(payload.get("is_toutiao_hot")),
+    )
+
+
 def _ctx() -> NewsPathContext:
     """A trivial context: identity_key=item_id; enrich returns input unchanged."""
     return NewsPathContext(
         identity_key=lambda item: item.item_id,
         enrich_with_article_info=lambda item, info: item,
-        article_info_from_item=lambda item: None,
+        score_item=_heat_score,
     )
 
 

@@ -4,7 +4,7 @@ Each news platform (Toutiao, Sina, NetEase, ...) supplies three callables via
 ``NewsPathContext``:
     - ``identity_key(item)``         — dedup key for the platform
     - ``enrich_with_article_info``   — attach article-info fields to an item
-    - ``article_info_from_item``     — recover stored info from an item
+    - ``score_item(item, persona)``  — (score, persona_matched, is_toutiao_hot) for an item
 
 The shared builder handles Path A (hot board) → B (per-keyword search) → C
 (is_toutiao_hot fallback) merging and dedup by ``identity_key``.
@@ -28,12 +28,19 @@ PATH_C = "C"
 
 
 @dataclass(frozen=True)
+class NewsScore:
+    score: float
+    persona_matched: bool
+    is_toutiao_hot: bool = False
+
+
+@dataclass(frozen=True)
 class NewsPathContext:
     """Platform-specific hooks for the shared Path A/B/C builder."""
 
     identity_key: Callable[[HotItem], str]
     enrich_with_article_info: Callable[[HotItem, dict[str, Any] | None], HotItem]
-    article_info_from_item: Callable[[HotItem], dict[str, Any] | None]
+    score_item: Callable[[HotItem, tuple[str, ...]], NewsScore]
 
 
 def build_news_candidates(
@@ -59,17 +66,18 @@ def build_news_candidates(
         heat_value = item.heat.value or 0
         if heat_value < filters.hot_board_min:
             continue
-        if persona_keywords and not any(_contains_ci(kw, item) for kw in persona_keywords):
+        ns = ctx.score_item(item, persona_keywords)
+        if persona_keywords and not ns.persona_matched:
             continue
         key = ctx.identity_key(item)
         out[key] = _Candidate(
             item=item,
             source_path=PATH_A,
             matched_keyword=item.summary or None,
-            is_toutiao_hot=False,
+            is_toutiao_hot=ns.is_toutiao_hot,
             is_hot_board=True,
-            persona_matched=True,
-            preliminary_score=float(heat_value),
+            persona_matched=ns.persona_matched,
+            preliminary_score=ns.score,
         )
 
     if sum(1 for c in out.values() if c.is_hot_board) >= filters.min_hot_board_before_search:
@@ -85,14 +93,15 @@ def build_news_candidates(
             if article_heat < filters.article_heat_min:
                 continue
             enriched = ctx.enrich_with_article_info(item, info)
+            ns = ctx.score_item(enriched, persona_keywords)
             cand = _Candidate(
                 item=enriched,
                 source_path=PATH_B,
                 matched_keyword=phrase,
                 is_toutiao_hot=bool(info and info.get("is_toutiao_hot")),
                 is_hot_board=False,
-                persona_matched=False,
-                preliminary_score=float(article_heat),
+                persona_matched=ns.persona_matched,
+                preliminary_score=ns.score,
             )
             out[key] = _merge_candidates(out.get(key), cand)
 
@@ -112,14 +121,15 @@ def build_news_candidates(
                 ):
                     continue
                 enriched = ctx.enrich_with_article_info(item, info)
+                ns = ctx.score_item(enriched, persona_keywords)
                 cand = _Candidate(
                     item=enriched,
                     source_path=PATH_C,
                     matched_keyword=phrase,
                     is_toutiao_hot=True,
                     is_hot_board=False,
-                    persona_matched=False,
-                    preliminary_score=float(article_heat),
+                    persona_matched=ns.persona_matched,
+                    preliminary_score=ns.score,
                 )
                 out[key] = _merge_candidates(out.get(key), cand)
 
@@ -143,9 +153,3 @@ def _merge_candidates(a: "Candidate | None", b: "Candidate") -> "Candidate":
         persona_matched=primary.persona_matched or other.persona_matched,
         preliminary_score=primary.preliminary_score,
     )
-
-
-def _contains_ci(keyword: str, item: HotItem) -> bool:
-    """Case-insensitive substring match against title and summary."""
-    kw = keyword.lower()
-    return kw in (item.title or "").lower() or kw in (item.summary or "").lower()

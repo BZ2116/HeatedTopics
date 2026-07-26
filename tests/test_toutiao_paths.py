@@ -445,3 +445,37 @@ def test_build_candidates_gate_threshold_is_configurable():
     titles = [c.item.title for c in candidates]
     assert "AI写作工具霸榜" in titles
     assert "Would be ignored" not in titles
+
+
+def test_build_candidates_path_a_preserves_hybrid_preliminary_score():
+    from heated_topics_v3.toutiao_scoring import hybrid_score_v2
+    hot_board = [_hb("1", 2_000_000, "AI写作工具爆发", rank=1)]
+    candidates = build_candidates(
+        hot_board=hot_board,
+        persona_keywords=("AI写作",),
+        filters=PathFilters(hot_board_min=1_000_000),
+    )
+    c = next(c for c in candidates if c.item.title == "AI写作工具爆发")
+    expected = hybrid_score_v2(c.item, ("AI写作",)).score
+    assert abs(c.preliminary_score - expected) < 1e-6
+    assert c.preliminary_score < 100  # hybrid log-scale, NOT raw 2_000_000
+    assert c.persona_matched is True
+
+
+def test_build_candidates_path_b_preserves_hybrid_score_and_persona():
+    from heated_topics_v3.toutiao_scoring import hybrid_score_v2
+    candidates = build_candidates(
+        hot_board=[],
+        keywords=(ExtractedKeyword("AI写作", "热榜"),),
+        persona_keywords=("AI写作",),
+        search_results_by_keyword={
+            "AI写作": [_search("100", "AI写作利器", article_heat=1500)],
+        },
+        article_info_by_url={"https://www.toutiao.com/group/100/": _info(1500)},
+        filters=PathFilters(article_heat_min=1_000),
+    )
+    c = next(c for c in candidates if c.item.title == "AI写作利器")
+    expected = hybrid_score_v2(c.item, ("AI写作",)).score
+    assert abs(c.preliminary_score - expected) < 1e-6
+    assert c.preliminary_score < 100  # hybrid log-scale, NOT raw 1500
+    assert c.persona_matched is True  # "AI写作" appears in title

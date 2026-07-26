@@ -12,12 +12,13 @@ preliminary score.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from heated_topics_v3.contracts import ExtractedKeyword, HotItem
 from heated_topics_v3.news_pipeline_paths import (
     NewsPathContext,
+    NewsScore,
     build_news_candidates,
 )
 from heated_topics_v3.providers.toutiao import (
@@ -57,6 +58,18 @@ class PathFilters:
     search_pages: int = 1
     per_page: int = 10
     min_hot_board_before_search: int = 5
+
+
+def _toutiao_score_item(
+    item: HotItem, persona_keywords: tuple[str, ...]
+) -> NewsScore:
+    """Wrap ``hybrid_score_v2`` so the shared builder can score Toutiao items."""
+    scored = hybrid_score_v2(item, persona_keywords)
+    return NewsScore(
+        score=scored.score,
+        persona_matched=scored.persona_matched,
+        is_toutiao_hot=scored.is_toutiao_hot,
+    )
 
 
 def build_hot_board_candidates(
@@ -107,6 +120,7 @@ def build_candidates(
       - identity_key: ``_dedup_key_for`` (resolves /search/jump wrappers via
         ``resolve_toutiao_content_url`` + ``extract_toutiao_article_id``)
       - enrich_with_article_info: ``attach_article_heat_fields``
+      - score_item: ``_toutiao_score_item`` (wraps ``hybrid_score_v2``)
     Search gate (Path A short-circuit) is honored by the shared builder.
     """
     search_results_by_keyword = search_results_by_keyword or {}
@@ -128,7 +142,7 @@ def build_candidates(
     ctx = NewsPathContext(
         identity_key=_dedup_key_for,
         enrich_with_article_info=attach_article_heat_fields,
-        article_info_from_item=lambda item: None,
+        score_item=_toutiao_score_item,
     )
     return build_news_candidates(
         hot_board=hot_board,
@@ -138,22 +152,6 @@ def build_candidates(
         article_info_by_key=article_info_by_key,
         filters=filters,
         ctx=ctx,
-    )
-
-
-def _merge_candidates(a: Candidate, b: Candidate) -> Candidate:
-    """Merge two candidates for the same article: keep higher score, union source_path."""
-    paths = sorted(set(a.source_path.split("+") + b.source_path.split("+")))
-    primary = a if a.preliminary_score >= b.preliminary_score else b
-    other = b if primary is a else a
-    return Candidate(
-        item=primary.item,
-        source_path="+".join(paths),
-        matched_keyword=primary.matched_keyword or other.matched_keyword,
-        is_toutiao_hot=primary.is_toutiao_hot or other.is_toutiao_hot,
-        is_hot_board=primary.is_hot_board or other.is_hot_board,
-        persona_matched=primary.persona_matched or other.persona_matched,
-        preliminary_score=primary.preliminary_score,
     )
 
 
@@ -177,16 +175,6 @@ def _dedup_key_for(item: HotItem) -> str:
 def _canonical_url(url: str) -> str:
     # Strip query string; preserve trailing slash so callers can match exactly.
     return url.split("?", maxsplit=1)[0]
-
-
-def _article_heat_from(info: dict[str, Any] | None) -> int:
-    if not info:
-        return 0
-    value = info.get("article_heat")
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 @dataclass(frozen=True)
