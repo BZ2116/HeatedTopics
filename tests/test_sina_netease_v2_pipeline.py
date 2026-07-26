@@ -356,3 +356,50 @@ def test_netease_v2_survives_single_article_404(tmp_path: Path):
     assert any("DOC456" in p.read_text(encoding="utf-8") for p in txt_files), (
         f"DOC456 body must appear in some articles/*.txt, got: {[p.name for p in txt_files]}"
     )
+
+
+# --- CLI integration tests (Task 6): --top-n default 10 + v2 print format ---
+import subprocess
+import sys
+
+
+def _run_cli(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "heated_topics_v3.cli", *args],
+        cwd=str(cwd), capture_output=True, text=True, timeout=60,
+    )
+
+
+def _cli_cwd() -> Path:
+    # Project root = two parents up from this test file (tests/ -> project root).
+    return Path(__file__).resolve().parent.parent
+
+
+def _top_n_line(help_text: str) -> str:
+    # argparse renders "--top-n TOP_N" possibly wrapped; grab the line owning it.
+    for line in help_text.splitlines():
+        if "--top-n" in line:
+            return line
+    return ""
+
+
+def test_sina_news_help_shows_top_n_default_10():
+    result = _run_cli(["sina-news", "--help"], _cli_cwd())
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    help_text = result.stdout
+    assert "--top-n" in help_text
+    assert "default: 10" in help_text, (
+        f"expected 'default: 10' in help, got:\n{help_text}"
+    )
+    assert "default: 30" not in help_text, "default must not be 30"
+
+
+def test_netease_news_help_shows_top_n_default_10():
+    result = _run_cli(["netease-news", "--help"], _cli_cwd())
+    assert result.returncode == 0, f"stderr: {result.stderr}"
+    help_text = result.stdout
+    assert "--top-n" in help_text
+    assert "default: 10" in help_text, (
+        f"expected 'default: 10' in help, got:\n{help_text}"
+    )
+    assert "default: 30" not in help_text, "default must not be 30"

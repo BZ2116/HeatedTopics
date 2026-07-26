@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
+from heated_topics_v3.baidu_retry import BaiduRetryPolicy
 from heated_topics_v3.fetcher_factory import make_baidu_fetcher, make_search_fetcher
 from heated_topics_v3.hot_board_cache import utc8_today
 from heated_topics_v3.llm_client import call_llm, load_llm_config
@@ -52,6 +53,12 @@ def _main() -> None:
 
     bilibili = subparsers.add_parser("bilibili", help="Collect Bilibili 专栏 by keyword and match to a profile.")
     _add_bilibili_args(bilibili)
+
+    sina_news = subparsers.add_parser("sina-news", help="Collect Sina News hot list + per-keyword search and match to a profile.")
+    _add_news_args(sina_news)
+
+    netease_news = subparsers.add_parser("netease-news", help="Collect NetEase News hot list + per-keyword search and match to a profile.")
+    _add_news_args(netease_news)
 
     refresh_kw = subparsers.add_parser("refresh-keywords", help="Delete keyword cache for one or all users, forcing LLM re-extraction on next run.")
     _add_refresh_keywords_args(refresh_kw)
@@ -136,6 +143,10 @@ def _main() -> None:
         _handle_baidu(args)
     if args.command == "bilibili":
         _handle_bilibili(args)
+    if args.command == "sina-news":
+        _handle_sina_news(args)
+    if args.command == "netease-news":
+        _handle_netease_news(args)
     if args.command == "refresh-keywords":
         _handle_refresh_keywords(args)
     if args.command == "register":
@@ -252,6 +263,9 @@ def _add_baidu_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--top-n", dest="top_n", default=30, type=int)
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--force-board-refresh", dest="force_board_refresh", action="store_true")
+    parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
+    parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
+    parser.add_argument("--baidu-cookie-path", dest="baidu_cookie_path", default=Path(".baidu_cookie"), type=Path)
     parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
 
 
@@ -265,6 +279,20 @@ def _add_bilibili_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
     parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
     parser.add_argument("--bilibili-cookie-path", dest="bilibili_cookie_path", default=Path(".bilibili_cookie"), type=Path)
+    parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+
+
+def _add_news_args(parser: argparse.ArgumentParser) -> None:
+    """Shared arg set for sina-news / netease-news (identical surface)."""
+    parser.add_argument("--profile", required=True, type=Path)
+    parser.add_argument("--output-root", "--output-dir", dest="output_root", default=Path("outputs"), type=Path)
+    parser.add_argument("--cache-root", default=Path("cache"), type=Path)
+    parser.add_argument("--fetched-at", default=None)
+    parser.add_argument("--top-n", dest="top_n", default=10, type=int, help="Number of candidates to keep (default: 10)")
+    parser.add_argument("--offline", action="store_true")
+    parser.add_argument("--force-board-refresh", dest="force_board_refresh", action="store_true")
+    parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
+    parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
     parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
 
 
@@ -312,7 +340,7 @@ def _handle_baidu(args) -> None:
     fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
     log_path = Path(__file__).resolve().parent.parent / ".baidu_fetcher_log.json"
-    fetcher = make_baidu_fetcher(log_path=log_path)
+    fetcher = make_baidu_fetcher(log_path=log_path, retry_policy=BaiduRetryPolicy())
     outputs = run_baidu_pipeline(
         profile_path=args.profile,
         output_root=args.output_root,
@@ -321,11 +349,74 @@ def _handle_baidu(args) -> None:
         top_n=args.top_n,
         offline=args.offline,
         force_board_refresh=args.force_board_refresh,
+        force_search_refresh=args.force_search_refresh,
+        force_article_refresh=args.force_article_refresh,
         matched_query_ids=matched_query_ids,
+        cookie_path=args.baidu_cookie_path,
         fetcher=fetcher,
     )
     for name, path in outputs.items():
         print(f"{name}: {path}")
+
+
+def _handle_sina_news(args) -> None:
+    """Mirror of ``_handle_bilibili`` for the Sina News pipeline."""
+    from heated_topics_v3.fetcher_factory import make_sina_news_fetcher
+    from heated_topics_v3.pipeline import run_sina_news_pipeline
+
+    fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
+    log_path = Path(__file__).resolve().parent.parent / ".sina_news_fetcher_log.json"
+    fetcher = make_sina_news_fetcher(log_path=log_path, retry_policy=BaiduRetryPolicy())
+    result = run_sina_news_pipeline(
+        profile_path=args.profile,
+        output_root=args.output_root,
+        fetched_at=fetched_at,
+        cache_root=args.cache_root,
+        top_n=args.top_n,
+        offline=args.offline,
+        force_board_refresh=args.force_board_refresh,
+        force_search_refresh=args.force_search_refresh,
+        force_article_refresh=args.force_article_refresh,
+        matched_query_ids=matched_query_ids,
+        fetcher=fetcher,
+    )
+    print(f"run_dir: {result.run_dir}")
+    print(f"focused: {result.focused_path}")
+    print(f"candidates: {result.kept_total}/{result.candidates_total}")
+    print(f"paths: {result.paths}")
+    print(f"keyword_source: {result.keyword_source}")
+    print(f"keyword_count: {result.keyword_count}")
+
+
+def _handle_netease_news(args) -> None:
+    """Mirror of ``_handle_bilibili`` for the NetEase News pipeline."""
+    from heated_topics_v3.fetcher_factory import make_netease_news_fetcher
+    from heated_topics_v3.pipeline import run_netease_news_pipeline
+
+    fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
+    log_path = Path(__file__).resolve().parent.parent / ".netease_news_fetcher_log.json"
+    fetcher = make_netease_news_fetcher(log_path=log_path, retry_policy=BaiduRetryPolicy())
+    result = run_netease_news_pipeline(
+        profile_path=args.profile,
+        output_root=args.output_root,
+        fetched_at=fetched_at,
+        cache_root=args.cache_root,
+        top_n=args.top_n,
+        offline=args.offline,
+        force_board_refresh=args.force_board_refresh,
+        force_search_refresh=args.force_search_refresh,
+        force_article_refresh=args.force_article_refresh,
+        matched_query_ids=matched_query_ids,
+        fetcher=fetcher,
+    )
+    print(f"run_dir: {result.run_dir}")
+    print(f"focused: {result.focused_path}")
+    print(f"candidates: {result.kept_total}/{result.candidates_total}")
+    print(f"paths: {result.paths}")
+    print(f"keyword_source: {result.keyword_source}")
+    print(f"keyword_count: {result.keyword_count}")
 
 
 if __name__ == "__main__":
