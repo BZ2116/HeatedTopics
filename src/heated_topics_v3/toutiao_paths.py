@@ -16,7 +16,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from heated_topics_v3.contracts import ExtractedKeyword, HotItem
+from heated_topics_v3.news_pipeline_paths import (
+    NewsPathContext,
+    build_news_candidates,
+)
 from heated_topics_v3.providers.toutiao import (
+    attach_article_heat_fields,
     extract_toutiao_article_id,
     resolve_toutiao_content_url,
 )
@@ -97,80 +102,43 @@ def build_candidates(
 ) -> list[Candidate]:
     """Construct candidates from paths A/B/C, deduped by article_id, ready for scoring.
 
-    Search gate: if Path A already yields at least `filters.min_hot_board_before_search`
-    candidates, Path B and Path C are skipped entirely.
+    Thin wrapper around the platform-agnostic ``build_news_candidates``. Toutiao
+    contributes:
+      - identity_key: ``_dedup_key_for`` (resolves /search/jump wrappers via
+        ``resolve_toutiao_content_url`` + ``extract_toutiao_article_id``)
+      - enrich_with_article_info: ``attach_article_heat_fields``
+    Search gate (Path A short-circuit) is honored by the shared builder.
     """
     search_results_by_keyword = search_results_by_keyword or {}
     article_info_by_url = article_info_by_url or {}
-    candidates_by_key: dict[str, Candidate] = {
-        _dedup_key_for(c.item): c
-        for c in build_hot_board_candidates(
-            hot_board=hot_board,
-            persona_keywords=persona_keywords,
-            filters=filters,
-        )
-    }
 
-    if sum(1 for c in candidates_by_key.values() if c.is_hot_board) >= filters.min_hot_board_before_search:
-        return list(candidates_by_key.values())
-
-    # Path B — search by extracted keywords (article_heat >= filters.article_heat_min)
-    for extracted in keywords:
-        phrase = extracted.keyword
-        search_items = search_results_by_keyword.get(phrase, [])
-        for item in search_items:
-            lookup_url = _canonical_url(item.url)
-            info = article_info_by_url.get(lookup_url)
-            article_heat = _article_heat_from(info)
-            if article_heat < filters.article_heat_min:
-                continue
-            is_th = bool(info and info.get("is_toutiao_hot"))
-            scored = hybrid_score_v2(item, persona_keywords)
-            candidate = Candidate(
-                item=item,
-                source_path=PATH_B,
-                matched_keyword=phrase,
-                is_toutiao_hot=is_th,
-                is_hot_board=False,
-                persona_matched=scored.persona_matched,
-                preliminary_score=scored.score,
-            )
+    # Translate article_info_by_url (canonical URL -> info) into
+    # article_info_by_key (dedup-key -> info) so the shared builder can look
+    # up info using the same identity_key it uses for dedup.
+    article_info_by_key: dict[str, dict[str, Any]] = {}
+    for items in search_results_by_keyword.values():
+        for item in items:
             key = _dedup_key_for(item)
-            existing = candidates_by_key.get(key)
-            if existing is None:
-                candidates_by_key[key] = candidate
-            else:
-                candidates_by_key[key] = _merge_candidates(existing, candidate)
+            if key in article_info_by_key:
+                continue
+            info = article_info_by_url.get(_canonical_url(item.url))
+            if info:
+                article_info_by_key[key] = info
 
-    # Path C — is_toutiao_hot fallback (article_heat < 500)
-    if filters.include_is_toutiao_hot_fallback:
-        for phrase, search_items in search_results_by_keyword.items():
-            for item in search_items:
-                lookup_url = _canonical_url(item.url)
-                info = article_info_by_url.get(lookup_url)
-                if not info or not info.get("is_toutiao_hot"):
-                    continue
-                article_heat = _article_heat_from(info)
-                if not (filters.is_toutiao_hot_min_article_heat <= article_heat <= filters.is_toutiao_hot_max_article_heat):
-                    continue
-                scored = hybrid_score_v2(item, persona_keywords)
-                candidate = Candidate(
-                    item=item,
-                    source_path=PATH_C,
-                    matched_keyword=phrase,
-                    is_toutiao_hot=True,
-                    is_hot_board=False,
-                    persona_matched=scored.persona_matched,
-                    preliminary_score=scored.score,
-                )
-                key = _dedup_key_for(item)
-                existing = candidates_by_key.get(key)
-                if existing is None:
-                    candidates_by_key[key] = candidate
-                else:
-                    candidates_by_key[key] = _merge_candidates(existing, candidate)
-
-    return list(candidates_by_key.values())
+    ctx = NewsPathContext(
+        identity_key=_dedup_key_for,
+        enrich_with_article_info=attach_article_heat_fields,
+        article_info_from_item=lambda item: None,
+    )
+    return build_news_candidates(
+        hot_board=hot_board,
+        keywords=keywords,
+        persona_keywords=persona_keywords,
+        search_results_by_keyword=search_results_by_keyword,
+        article_info_by_key=article_info_by_key,
+        filters=filters,
+        ctx=ctx,
+    )
 
 
 def _merge_candidates(a: Candidate, b: Candidate) -> Candidate:
