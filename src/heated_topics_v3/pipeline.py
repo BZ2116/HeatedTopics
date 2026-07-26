@@ -1354,6 +1354,7 @@ def _fetch_news_article_details(
     platform: str,
     parser: Callable[[str, str, str], str],
     extraction_method: str,
+    article_getter: Callable,
 ) -> list[ItemDetail]:
     """Fetch each kept candidate's article body through the v2 cache layer.
 
@@ -1362,8 +1363,6 @@ def _fetch_news_article_details(
     to an empty-content row with ``fetch_status="empty"`` — never aborting
     the run for a single upstream 404.
     """
-    from heated_topics_v3.news_cache import get_or_fetch_sina_news_article_with_record
-
     item_details: list[ItemDetail] = []
     for candidate in kept_candidates:
         item = candidate.item
@@ -1386,7 +1385,7 @@ def _fetch_news_article_details(
                     "html_length": len(html)}
 
         payload, src = _news_cache_get_article(
-            get_or_fetch_sina_news_article_with_record,
+            article_getter,
             cache_root_path, date, cache_key, live_article,
             offline=offline, force_refresh=force_article_refresh,
         )
@@ -1438,6 +1437,7 @@ def run_sina_news_pipeline(
     defaults (``hot_board_min=1000`` instead of Toutiao's 1M).
     """
     from heated_topics_v3.news_cache import (
+        get_or_fetch_sina_news_article_with_record,
         get_or_fetch_sina_news_board_with_record,
         get_or_fetch_sina_news_search_with_record,
     )
@@ -1579,6 +1579,7 @@ def run_sina_news_pipeline(
         platform="sina_news",
         parser=parse_sina_article_response,
         extraction_method="sina_news_article_page",
+        article_getter=get_or_fetch_sina_news_article_with_record,
     )
 
     # ---- report + output ----
@@ -1618,6 +1619,34 @@ def run_sina_news_pipeline(
     )
 
 
+@dataclass(frozen=True)
+class NeteaseNewsV2Result:
+    user_id: str
+    date: str
+    run_dir: Path
+    top_n: int
+    candidates_total: int
+    kept_total: int
+    paths: dict[str, int]
+    keyword_source: str  # "core_keywords"
+    keyword_count: int
+    report_path: Path
+    focused_path: Path
+
+
+def _netease_score_item(
+    item: HotItem, persona_keywords: tuple[str, ...]
+) -> "NewsScore":
+    """Wrap ``hybrid_score_v2`` for shared NetEase candidate scoring."""
+    from heated_topics_v3.news_pipeline_paths import NewsScore
+    scored = hybrid_score_v2(item, persona_keywords)
+    return NewsScore(
+        score=scored.score,
+        persona_matched=scored.persona_matched,
+        is_toutiao_hot=scored.is_toutiao_hot,
+    )
+
+
 def run_netease_news_pipeline(
     profile_path: Path,
     output_root: Path,
@@ -1625,26 +1654,35 @@ def run_netease_news_pipeline(
     *,
     cache_root: Path,
     fetcher: Callable[[str, int], str] | None = None,
-    top_n: int = 30,
+    top_n: int = 10,
     offline: bool = False,
     force_board_refresh: bool = False,
     force_search_refresh: bool = False,
     force_article_refresh: bool = False,
     matched_query_ids: tuple[str, ...] = (),
-) -> dict[str, Path]:
-    """NetEase News pipeline: hot board → per-keyword search → per-article body."""
+    path_filters: PathFilters = PathFilters(
+        hot_board_min=1000,
+        article_heat_min=0,
+        min_hot_board_before_search=3,
+        include_is_toutiao_hot_fallback=False,
+    ),
+) -> "NeteaseNewsV2Result":
+    """NetEase News v2 pipeline: board + search candidates → article bodies."""
     from heated_topics_v3.news_cache import (
         get_or_fetch_netease_news_article_with_record,
         get_or_fetch_netease_news_board_with_record,
         get_or_fetch_netease_news_search_with_record,
     )
+    from heated_topics_v3.news_pipeline_output import NewsOutputContext, write_news_run
+    from heated_topics_v3.news_pipeline_paths import NewsPathContext, build_news_candidates
     from heated_topics_v3.providers.netease_news import (
-        NETEASE_HOT_URL, NETEASE_SEARCH_URL,
+        NETEASE_HOT_URL,
+        NETEASE_SEARCH_URL,
         parse_netease_article_response,
         parse_netease_hot_response,
         parse_netease_search_response,
     )
-    from heated_topics_v3.reporting import render_netease_news_report
+    from heated_topics_v3.reporting import render_netease_news_report_v2
 
     profile = load_user_profile(profile_path)
     fetch = fetcher or _fetch_text_default
@@ -1652,7 +1690,6 @@ def run_netease_news_pipeline(
     cache_root_path = Path(cache_root)
     stats = BaiduCacheStats()
 
-    # ---- stage 1: hot board ----
     def live_board(_date: str) -> dict:
         return {"response_text": fetch(NETEASE_HOT_URL, 20)}
 
@@ -1664,30 +1701,36 @@ def run_netease_news_pipeline(
     stats.record("board", src, forced=force_board_refresh)
     board_text = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
     try:
-        board_items = parse_netease_hot_response(
+        raw_board_items = parse_netease_hot_response(
             board_text, fetched_at=fetched_at) if board_text.strip() else []
     except ValueError:
-        board_items = []
+        raw_board_items = []
+    board_items = [
+        replace(item, raw_payload={**item.raw_payload, "source_kind": "hot_board"})
+        for item in raw_board_items
+    ]
 
-    # ---- stage 2: per-keyword search (Path B) ----
-    search_items: list[HotItem] = []
-    queries = tuple(build_topic_queries(profile))
-    for word in profile.core_keywords[:top_n]:
-        if not word.strip():
-            continue
+    keywords = [word for word in profile.core_keywords[:5] if word.strip()]
+    extraction = PersonaKeywordExtraction(
+        user_id=profile.profile_id,
+        persona_signature="",
+        generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+        keywords=tuple(ExtractedKeyword(keyword, "热榜") for keyword in keywords),
+        source="core_keywords",
+    )
+    persona_keywords = tuple(keywords)
 
+    raw_search_by_keyword: dict[str, list[HotItem]] = {}
+    article_info_by_key: dict[str, dict] = {}
+    for word in keywords:
         def live_search(_w: str = word) -> list[dict]:
             from urllib.parse import urlencode
-            # NetEase search endpoint only accepts ``query=<word>`` —
-            # ``keyword`` / ``page`` / ``size`` yield HTTP 400 (verified
-            # by scripts/smoke_news.py and verify_netease_body.py).
             url = f"{NETEASE_SEARCH_URL}?{urlencode({'query': _w})}"
             items = parse_netease_search_response(fetch(url, 20), fetched_at=fetched_at)
-            # ``docid`` is already the bare id, matching board's ``contentId``.
             return [
-                {"article_id": _netease_bare_id(it.raw_payload) or it.item_id,
-                 "title": it.title, "url": it.url}
-                for it in items
+                {"article_id": _netease_bare_id(item.raw_payload) or item.item_id,
+                 "title": item.title, "url": item.url}
+                for item in items
             ]
 
         payload, src = _news_cache_get_search(
@@ -1697,7 +1740,9 @@ def run_netease_news_pipeline(
         )
         stats.record("search", src, forced=force_search_refresh)
         if not isinstance(payload, list):
+            raw_search_by_keyword[word] = []
             continue
+        items: list[HotItem] = []
         for entry in payload:
             if not isinstance(entry, dict):
                 continue
@@ -1706,102 +1751,89 @@ def run_netease_news_pipeline(
             article_id = str(entry.get("article_id", "")).strip()
             if not title or not url or not article_id:
                 continue
-            # ``item_id`` matches Path A's ``netease_news_<bare_id>`` so the
-            # same article produced by both paths shares a stable item_id —
-            # no artificial ``_search_`` prefix to break identity.
-            search_items.append(HotItem(
+            item = HotItem(
                 item_id=f"netease_news_{article_id}", platform="netease_news",
                 item_type="news", title=title, url=url, rank=None,
                 heat=HeatMetrics(value=None, label="", metric_name="search_rank", metrics={}),
                 summary=title, category="", matched_query_ids=matched_query_ids,
                 fetched_at=fetched_at, fetch_status="success",
                 raw_payload={"source_kind": "netease_news_search_recall",
-                             "article_id": article_id}))
+                             "article_id": article_id},
+            )
+            items.append(item)
+            article_info_by_key[_netease_news_dedup_key(item)] = {
+                "article_heat": 0,
+                "is_toutiao_hot": False,
+            }
+        raw_search_by_keyword[word] = items
 
-    # Combine board (Path A) + search (Path B). Path A enters first; any
-    # search item whose stable identity (``contentId``/``docid``) already
-    # appears in board is skipped so the same article is not emitted twice.
-    expanded: list[HotItem] = list(board_items)
-    seen_netease_ids = {_netease_news_dedup_key(it) for it in expanded}
-    for it in search_items:
-        key = _netease_news_dedup_key(it)
-        if key in seen_netease_ids:
-            continue
-        seen_netease_ids.add(key)
-        expanded.append(it)
+    ctx = NewsPathContext(
+        identity_key=_netease_news_dedup_key,
+        enrich_with_article_info=lambda item, _info: item,
+        score_item=_netease_score_item,
+    )
+    candidates = build_news_candidates(
+        hot_board=list(board_items),
+        keywords=extraction.keywords,
+        persona_keywords=persona_keywords,
+        search_results_by_keyword=raw_search_by_keyword,
+        article_info_by_key=article_info_by_key,
+        filters=path_filters,
+        ctx=ctx,
+    )
+    candidates = select_search_candidates_by_heat(candidates)
+    candidates.sort(key=lambda candidate: as_sort_key(
+        hybrid_score_v2(candidate.item, persona_keywords)))
+    kept_candidates = candidates[: max(0, top_n)]
 
-    matches = [
-        result for item in expanded
-        if (result := match_hot_item_to_queries(item, queries, profile.excluded_keywords)).is_relevant
-    ]
+    item_details = _fetch_news_article_details(
+        kept_candidates=kept_candidates,
+        cache_root_path=cache_root_path,
+        date=today,
+        offline=offline,
+        force_article_refresh=force_article_refresh,
+        stats=stats,
+        fetcher=fetch,
+        dedup_key_fn=_netease_news_dedup_key,
+        platform="netease_news",
+        parser=parse_netease_article_response,
+        extraction_method="netease_news_article_page",
+        article_getter=get_or_fetch_netease_news_article_with_record,
+    )
 
-    # ---- stage 3: per-article body ----
-    item_details: list[ItemDetail] = []
-    for match in matches:
-        item = match.item
-        # Use the dedup key (normalized bare id) so Path A and Path B share
-        # the article cache namespace; falling back to the item_id would
-        # split the same article across two cache slots.
-        article_id = _netease_news_dedup_key(item)
+    report_md = render_netease_news_report_v2(
+        profile, extraction, kept_candidates, fetched_at,
+        item_details=item_details, cache_stats=stats,
+    )
+    run_result = write_news_run(
+        user_id=profile.profile_id,
+        date=today,
+        candidates=candidates,
+        top_n=top_n,
+        raw_search_by_keyword=raw_search_by_keyword,
+        raw_article_info_by_key=article_info_by_key,
+        item_details=item_details,
+        report_markdown=report_md,
+        ctx=NewsOutputContext(
+            canonical_url=_canonical_url,
+            write_article_text=_write_news_article_text,
+            fetched_at=fetched_at,
+        ),
+        output_root=output_root,
+    )
 
-        def live_article(_aid: str = article_id, _item=item) -> dict:
-            # NetEase article pages are not guaranteed to exist — the search
-            # endpoint surfaces links whose upstream article has since been
-            # deleted or moved (HTTP 404 is the common case). Without this
-            # guard, a single failed body fetch bubbles through the cache
-            # layer and aborts the whole run, dropping every other matched
-            # article. Convert any network/HTTP error into an empty-content
-            # payload so the rest of the pipeline (cache write, ItemDetail
-            # construction, article_texts/*.txt, report.md) continues
-            # normally and the failed row is reported as fetch_status='empty'.
-            try:
-                html = fetch(_item.url, 20)
-            except (urllib.error.HTTPError, urllib.error.URLError, OSError):
-                return {"title": _item.title, "content": "",
-                        "extraction_method": "netease_news_article_page",
-                        "fetch_status": "empty", "html_length": 0}
-            try:
-                content = parse_netease_article_response(html, title=_item.title, summary="")
-            except (ValueError, TypeError):
-                content = ""
-            return {"title": _item.title, "content": content,
-                    "extraction_method": "netease_news_article_page",
-                    "fetch_status": "success" if content else "empty",
-                    "html_length": len(html)}
-
-        payload, src = _news_cache_get_article(
-            get_or_fetch_netease_news_article_with_record,
-            cache_root_path, today, article_id, live_article,
-            offline=offline, force_refresh=force_article_refresh,
-        )
-        stats.record("article", src, forced=force_article_refresh)
-        if not isinstance(payload, dict) or not payload:
-            detail = ItemDetail(item_id=item.item_id, platform="netease_news", url=item.url,
-                                title=item.title, author="", content="",
-                                published_at="", tags=(),
-                                extraction_method="netease_news_article_page",
-                                fetch_status="empty", raw_payload={"html_length": 0})
-        else:
-            content = str(payload.get("content", ""))
-            detail = ItemDetail(item_id=item.item_id, platform="netease_news", url=item.url,
-                                title=str(payload.get("title", item.title)),
-                                author="", content=content, published_at="",
-                                tags=(),
-                                extraction_method=str(payload.get("extraction_method",
-                                                                  "netease_news_article_page")),
-                                fetch_status=str(payload.get("fetch_status",
-                                                              "success" if content else "empty")),
-                                raw_payload={"html_length": int(payload.get("html_length", 0) or 0)})
-        item_details.append(detail)
-
-    details_by_item_id = {d.item_id: d for d in item_details}
-    return _run_platform_pipeline(
-        profile_path=profile_path, output_root=output_root, fetched_at=fetched_at,
-        source_id="netease_news",
-        hot_items_fetcher=lambda _f: expanded,
-        item_detail_fetcher=lambda it: details_by_item_id.get(it.item_id),
-        report_renderer=render_netease_news_report,
-        cache_stats=stats,
+    return NeteaseNewsV2Result(
+        user_id=profile.profile_id,
+        date=today,
+        run_dir=run_result.run_dir,
+        top_n=top_n,
+        candidates_total=run_result.candidates_total,
+        kept_total=run_result.kept_total,
+        paths=run_result.paths,
+        keyword_source=extraction.source,
+        keyword_count=len(extraction.keywords),
+        report_path=run_result.run_dir / "report.md",
+        focused_path=run_result.run_dir / "focused.json",
     )
 
 
