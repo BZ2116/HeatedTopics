@@ -418,7 +418,6 @@ def test_collection_fetches_each_board_once_and_isolates_platform_failure(tmp_pa
         ("sina_news", "partial"),
         ("thepaper", "failed"),
         ("netease_news", "success"),
-        ("baidu_hot", "success"),
         ("zhihu_hot", "success"),
         ("zhihu_daily", "success"),
     }
@@ -488,7 +487,6 @@ def test_active_snapshot_published_only_after_eligible_and_rejected_exist(
         ("sina_news", BUSINESS_DATE),
         ("thepaper", BUSINESS_DATE),
         ("netease_news", BUSINESS_DATE),
-        ("baidu_hot", BUSINESS_DATE),
         ("zhihu_hot", BUSINESS_DATE),
         ("zhihu_daily", BUSINESS_DATE),
     ]
@@ -602,30 +600,30 @@ def test_collection_uses_build_board_evidence_for_rank_only_items(tmp_path):
         assert json.loads(rejected_path.read_text("utf-8")) == []
 
 
-def test_daily_collection_isolates_failing_baidu_but_saves_zhihu(tmp_path):
+def test_daily_collection_isolates_failing_netease_but_saves_zhihu(tmp_path):
     repository = FileRepository(tmp_path)
     providers = _build_providers()
-    providers["baidu_hot"]._hot_error = RuntimeError("baidu upstream timeout")
+    providers["netease_news"]._hot_error = RuntimeError("netease upstream timeout")
     snapshot = collect_news_daily(NOW, repository, providers)
     by_platform = {status.platform: status for status in snapshot.platform_statuses}
-    assert by_platform["baidu_hot"].status == "failed"
+    assert by_platform["netease_news"].status == "failed"
     assert by_platform["zhihu_daily"].status == "success"
     zhihu_eligible = repository.load_eligible(BUSINESS_DATE, "zhihu_daily")
     assert [item.hot_item.item_id for item in zhihu_eligible] == ["zhihu_daily_full"]
-    assert repository.load_eligible(BUSINESS_DATE, "baidu_hot") == ()
+    assert repository.load_eligible(BUSINESS_DATE, "netease_news") == ()
 
 
-def test_news_platforms_constant_lists_all_six():
+def test_news_platforms_constant_lists_all_five():
     from heated_topics_v3.providers.common import NEWS_PLATFORMS
 
     assert NEWS_PLATFORMS == (
         "sina_news",
         "thepaper",
         "netease_news",
-        "baidu_hot",
         "zhihu_hot",
         "zhihu_daily",
     )
+    assert "baidu_hot" not in NEWS_PLATFORMS
 
 
 def test_missing_cookie_only_fails_zhihu_hot_collection(tmp_path):

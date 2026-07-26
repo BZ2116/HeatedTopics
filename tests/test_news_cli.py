@@ -181,7 +181,6 @@ def test_collect_news_emits_machine_readable_status(monkeypatch, tmp_path, capsy
         "sina_news",
         "thepaper",
         "netease_news",
-        "baidu_hot",
         "zhihu_hot",
         "zhihu_daily",
     ]
@@ -191,7 +190,6 @@ def test_collect_news_emits_machine_readable_status(monkeypatch, tmp_path, capsy
         "sina_news",
         "thepaper",
         "netease_news",
-        "baidu_hot",
         "zhihu_hot",
         "zhihu_daily",
     }

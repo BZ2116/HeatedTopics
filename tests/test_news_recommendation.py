@@ -172,9 +172,9 @@ def _build_providers(
 ) -> dict[str, FakeNewsProvider]:
     counts = dict(counts or {})
     providers: dict[str, FakeNewsProvider] = {}
-    for platform in ("sina_news", "thepaper", "netease_news", "baidu_hot", "zhihu_daily"):
+    for platform in ("sina_news", "thepaper", "netease_news", "zhihu_hot", "zhihu_daily"):
         count = counts.get(platform, 3)
-        if platform in ("baidu_hot", "zhihu_daily"):
+        if platform == "zhihu_daily":
             metrics_template: dict[str, float] = {"hot_score": 500.0}
         else:
             metrics_template = {"comments": 0.0, "views": 0.0}
@@ -182,7 +182,7 @@ def _build_providers(
         for index in range(count):
             metrics = (
                 {"hot_score": 500.0}
-                if platform in ("baidu_hot", "zhihu_daily")
+                if platform == "zhihu_daily"
                 else {"comments": 20.0 + index, "views": 100.0 + index}
             )
             articles.append(
@@ -338,11 +338,11 @@ def test_news_recommendation_uses_supporting_article_source_url(tmp_path):
 
     repository = FileRepository(tmp_path)
     item = _make_hot_item(
-        platform="baidu_hot",
-        item_id="baidu_hot_support",
+        platform="zhihu_hot",
+        item_id="zhihu_hot_support",
         rank=1,
         title=f"{KEYWORD} 人工智能手机发布",
-        summary="百度热搜事件",
+        summary="知乎热榜问题",
         metrics={"hot_score": 987654.0},
     )
     evidence = HeatEvidence(
@@ -366,17 +366,17 @@ def test_news_recommendation_uses_supporting_article_source_url(tmp_path):
     article = QualifiedArticle(item, detail, evidence, validation, 0.0)
     recommendation = _article_to_recommendation(article)
     assert recommendation.source_url == "https://news.example.test/article"
-    assert recommendation.platform == "baidu_hot"
+    assert recommendation.platform == "zhihu_hot"
 
 
-def test_news_recommendation_platforms_constant_lists_all_six():
+def test_news_recommendation_platforms_constant_lists_all_five():
     from heated_topics_v3.recommendation import NEWS_DISPLAY_ORDER
 
     assert NEWS_DISPLAY_ORDER == (
         "sina_news",
         "thepaper",
         "netease_news",
-        "baidu_hot",
         "zhihu_hot",
         "zhihu_daily",
     )
+    assert "baidu_hot" not in NEWS_DISPLAY_ORDER

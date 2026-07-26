@@ -16,7 +16,6 @@ from dotenv import load_dotenv
 from .clock import SHANGHAI
 from .collection import collect_news_daily, collect_v1_daily
 from .profiles import load_profile
-from .providers.baidu_hot import BaiduHotProvider
 from .providers.common import NEWS_PLATFORMS, NewsProvider
 from .providers.juejin import JuejinProvider
 from .providers.netease_news import NeteaseNewsProvider
@@ -154,7 +153,6 @@ def _news_providers(client: httpx.Client) -> dict[str, NewsProvider]:
         "sina_news": SinaNewsProvider(client),
         "thepaper": ThePaperProvider(client),
         "netease_news": NeteaseNewsProvider(client),
-        "baidu_hot": BaiduHotProvider(client),
         "zhihu_hot": ZhihuHotProvider(client, _load_zhihu_cookie()),
         "zhihu_daily": ZhihuDailyProvider(client),
     }

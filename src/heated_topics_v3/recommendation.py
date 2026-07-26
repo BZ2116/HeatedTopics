@@ -285,7 +285,6 @@ NEWS_DISPLAY_ORDER = (
     "sina_news",
     "thepaper",
     "netease_news",
-    "baidu_hot",
     "zhihu_hot",
     "zhihu_daily",
 )
