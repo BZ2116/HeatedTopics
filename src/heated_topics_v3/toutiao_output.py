@@ -1,5 +1,9 @@
 """Per-user Toutiao output writer.
 
+Wraps the platform-agnostic ``write_news_run`` and adds the
+``raw/hot_board.json`` snapshot (symlink from the daily hot-board cache,
+or a copy fallback on Windows).
+
 Layout:
     output_root/users/{user_id}/{date}/
         report.md
@@ -11,19 +15,21 @@ Layout:
         articles/
             01_{slug}.txt
             ...
-            summary.md
 """
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from heated_topics_v3.contracts import HotBoardSnapshot, ItemDetail
 from heated_topics_v3.hot_board_cache import hot_board_cache_path
+from heated_topics_v3.news_pipeline_output import (
+    KeywordSlugFn,
+    NewsOutputContext,
+    write_news_run,
+)
 from heated_topics_v3.providers.toutiao import resolve_toutiao_content_url
 from heated_topics_v3.serialization import to_plain_data
 from heated_topics_v3.toutiao_paths import Candidate
@@ -58,116 +64,40 @@ def write_toutiao_run(
     keyword_slug_fn: "KeywordSlugFn | None" = None,
 ) -> ToutiaoRunResult:
     """Write the per-user per-date run directory and return metadata."""
-    if keyword_slug_fn is None:
-        keyword_slug_fn = _slugify
-
-    base_dir = Path(output_root) / "users" / user_id / date
-    suffix = timestamp_suffix or _now_suffix()
-    run_dir = base_dir / f"run_{suffix}"
-    raw_dir = run_dir / "raw"
-    articles_dir = run_dir / "articles"
-    raw_dir.mkdir(parents=True, exist_ok=True)
-    articles_dir.mkdir(parents=True, exist_ok=True)
-
-    kept_candidates = candidates[: max(0, top_n)]
-
-    _write_focused_json(
-        run_dir / "focused.json",
+    ctx = NewsOutputContext(
+        canonical_url=_canonical_url,
+        write_article_text=_write_article_text,
+        fetched_at=hot_board_snapshot.fetched_at if hot_board_snapshot else "",
+    )
+    result = write_news_run(
         user_id=user_id,
         date=date,
-        candidates=kept_candidates,
-        candidates_total=len(candidates),
-        hot_board_snapshot=hot_board_snapshot,
+        candidates=candidates,
+        top_n=top_n,
+        raw_search_by_keyword=raw_search_by_keyword,
+        raw_article_info_by_key=raw_article_info_by_url,
+        item_details=item_details,
+        report_markdown=report_markdown,
+        ctx=ctx,
+        output_root=output_root,
+        timestamp_suffix=timestamp_suffix,
+        keyword_slug_fn=keyword_slug_fn,
     )
 
     if hot_board_snapshot is not None:
-        _link_or_copy_hot_board(raw_dir, date, hot_board_snapshot, hot_board_cache_root)
-
-    for keyword, items in raw_search_by_keyword.items():
-        slug = keyword_slug_fn(keyword)
-        path = raw_dir / f"search_{slug}.json"
-        path.write_text(
-            json.dumps(to_plain_data(items), ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        _link_or_copy_hot_board(
+            result.run_dir / "raw", date, hot_board_snapshot, hot_board_cache_root,
         )
-
-    (raw_dir / "article_info.json").write_text(
-        json.dumps(
-            {url: dict(info) for url, info in raw_article_info_by_url.items()},
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
-
-    details_by_url = {_canonical_url(d.url): d for d in item_details}
-    for index, candidate in enumerate(kept_candidates, start=1):
-        detail = details_by_url.get(_canonical_url(candidate.item.url))
-        if detail is None:
-            continue
-        slug = _slugify(candidate.item.title)[:80] or f"item_{index}"
-        txt_path = articles_dir / f"{index:02d}_{slug}.txt"
-        _write_article_text(txt_path, candidate, detail)
-
-    (run_dir / "report.md").write_text(report_markdown, encoding="utf-8")
-
-    paths_counts: dict[str, int] = {}
-    for c in candidates:
-        for token in c.source_path.split("+"):
-            paths_counts[token] = paths_counts.get(token, 0) + 1
 
     return ToutiaoRunResult(
-        user_id=user_id,
-        date=date,
-        run_dir=run_dir,
-        top_n=top_n,
-        candidates_total=len(candidates),
-        kept_total=len(kept_candidates),
-        paths=paths_counts,
+        user_id=result.user_id,
+        date=result.date,
+        run_dir=result.run_dir,
+        top_n=result.top_n,
+        candidates_total=result.candidates_total,
+        kept_total=result.kept_total,
+        paths=result.paths,
         hot_board_source="cache",
-    )
-
-
-def _write_focused_json(
-    path: Path,
-    *,
-    user_id: str,
-    date: str,
-    candidates: list[Candidate],
-    candidates_total: int,
-    hot_board_snapshot: HotBoardSnapshot | None,
-) -> None:
-    fetched_at = hot_board_snapshot.fetched_at if hot_board_snapshot else ""
-    rows = []
-    for rank, candidate in enumerate(candidates, start=1):
-        item = candidate.item
-        raw_payload = dict(item.raw_payload)
-        rows.append(
-            {
-                "rank": rank,
-                "title": item.title,
-                "url": item.url,
-                "source_path": candidate.source_path,
-                "matched_keyword": candidate.matched_keyword,
-                "score": round(candidate.preliminary_score, 4),
-                "is_toutiao_hot": candidate.is_toutiao_hot,
-                "hot_value": item.heat.value if candidate.is_hot_board else None,
-                "article_heat": int(raw_payload.get("article_heat") or 0) if not candidate.is_hot_board else None,
-                "persona_matched": candidate.persona_matched,
-                "metric_name": raw_payload.get("metric_name", item.heat.metric_name),
-            }
-        )
-    payload = {
-        "user_id": user_id,
-        "date": date,
-        "fetched_at": fetched_at,
-        "top_n": len(candidates),
-        "candidates_total": candidates_total,
-        "results": rows,
-    }
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
     )
 
 
@@ -239,17 +169,3 @@ def _canonical_url(url: str) -> str:
     """
     resolved = resolve_toutiao_content_url(url)
     return resolved.split("?", maxsplit=1)[0].rstrip("/") or url
-
-
-def _slugify(value: str) -> str:
-    slug = re.sub(r"\W+", "_", value, flags=re.UNICODE).strip("_").lower()
-    return slug or "keyword"
-
-
-def _now_suffix() -> str:
-    return datetime.now(timezone(timedelta(hours=8))).strftime("%Y%m%d_%H%M%S")
-
-
-# Type alias for keyword slug function
-from typing import Callable
-KeywordSlugFn = Callable[[str], str]
