@@ -6,7 +6,7 @@
 
 **Architecture:** V3 providers (juejin / baidu_hot / zhihu_hot / zhihu_daily / toutiao) collect candidates; a new `serve_external_candidates()` method in OpenBiliClaw's `RecommendationEngine` ranks them; a thin HeatedTopics-side integration layer (5 modules under `heated_topics_v3.openbiliclaw_integration`) orchestrates per-user flow with `asyncio.Semaphore(5)` for concurrency. LLM via MiniMax-M2.7 (`openai_compatible`), embedding via Ollama `bge-m3`. Per-user isolation via per-user `data_dir` (Database, MemoryManager) — LLM / embedding services shared.
 
-**Tech Stack:** Python 3.11+, HeatedTopics V3 (pyproject/uv), OpenBiliClaw v0.3.186-mur.1 (path dep from `../../openbiliclaw-sandbox`), httpx, pytest + pytest-asyncio, ruff, MiniMax OpenAI-compatible API, Ollama bge-m3.
+**Tech Stack:** Python 3.11+, HeatedTopics V3 (pyproject/uv), OpenBiliClaw v0.3.186+mur.1 (path dep from `../../openbiliclaw-sandbox`), httpx, pytest + pytest-asyncio, ruff, MiniMax OpenAI-compatible API, Ollama bge-m3.
 
 **Spec:** `docs/superpowers/specs/2026-07-28-openbiliclaw-multi-user-recommender-design.md` (commit `f7b251c`)
 
@@ -20,7 +20,7 @@
 
 ### New files in OpenBiliClaw sandbox (1 modified, 1 metadata)
 - `src/openbiliclaw/recommendation/engine.py` — add `serve_external_candidates()` method
-- `pyproject.toml` — bump version to `0.3.186-mur.1`
+- `pyproject.toml` — bump version to `0.3.186+mur.1`
 
 ### New files in heatedTopics new worktree
 ```
@@ -67,7 +67,7 @@ docs/
 ```
 
 ### Modified files
-- `pyproject.toml` (heatedTopics) — add `openbiliclaw = { path = "../../openbiliclaw-sandbox" }` to dependencies
+- `pyproject.toml` (heatedTopics) — add `openbiliclaw = { path = "E:/code/My/openbiliclaw-sandbox" }` to dependencies (absolute path is required because the two repos live under different roots: `E:/.code/My/heatedTopics/...` vs `E:/code/My/...`; relative `../../openbiliclaw-sandbox` does not resolve)
 
 ---
 
@@ -206,7 +206,7 @@ Open `E:\code\My\openbiliclaw-sandbox\src\openbiliclaw\recommendation\engine.py`
 
 - [ ] **Step 3: Bump pyproject.toml version**
 
-Open `E:\code\My\openbiliclaw-sandbox\pyproject.toml`. Find `version = "0.3.185"`. Change to `version = "0.3.186-mur.1"`.
+Open `E:\code\My\openbiliclaw-sandbox\pyproject.toml`. Find `version = "0.3.185"`. Change to `version = "0.3.186+mur.1"`.
 
 - [ ] **Step 4: Smoke test — verify the new method is importable**
 
@@ -251,16 +251,16 @@ Open the `pyproject.toml`. In the `dependencies = [...]` list, add (alphabetical
 
 But Python path dependencies use `tool.uv.sources` not the inline dict. Find or add a `[tool.uv.sources]` table. If it exists, add:
 ```toml
-openbiliclaw = { path = "../../openbiliclaw-sandbox" }
+openbiliclaw = { path = "E:/code/My/openbiliclaw-sandbox" }
 ```
 
 If `[tool.uv.sources]` doesn't exist, add it after the `[project]` block:
 ```toml
 [tool.uv.sources]
-openbiliclaw = { path = "../../openbiliclaw-sandbox" }
+openbiliclaw = { path = "E:/code/My/openbiliclaw-sandbox" }
 ```
 
-Also ensure `"openbiliclaw"` is in `dependencies` list. The version constraint should be `>=0.3.186-mur.1,<0.4` so uv picks up the local 0.3.186-mur.1.
+Also ensure `"openbiliclaw"` is in `dependencies` list. The version constraint should be `>=0.3.186+mur.1,<0.4` so uv picks up the local 0.3.186+mur.1.
 
 - [ ] **Step 3: Run `uv sync` and verify openbiliclaw installs from path**
 
@@ -269,7 +269,7 @@ Run:
 cd "E:/.code/My/heatedTopics/heatedTopics/.worktrees/openbiliclaw-multi-user-recommender"
 uv sync
 ```
-Expected: `uv sync` succeeds, installs `openbiliclaw 0.3.186-mur.1` from the local path.
+Expected: `uv sync` succeeds, installs `openbiliclaw 0.3.186+mur.1` from the local path.
 
 - [ ] **Step 4: Verify the path-dep import works in this worktree's env**
 
@@ -286,7 +286,7 @@ Run:
 ```bash
 cd "E:/.code/My/heatedTopics/heatedTopics/.worktrees/openbiliclaw-multi-user-recommender"
 git add pyproject.toml uv.lock
-git commit -m "build: add openbiliclaw path dep (0.3.186-mur.1)"
+git commit -m "build: add openbiliclaw path dep (0.3.186+mur.1)"
 ```
 Expected: 1 commit added.
 
@@ -1459,11 +1459,11 @@ def test_full_envelope() -> None:
         users=[user],
         llm_model="MiniMax-M2.7",
         embedding_model="bge-m3",
-        config_version="0.3.186-mur.1",
+        config_version="0.3.186+mur.1",
     )
     assert "generated_at" in env
     assert env["llm_model"] == "MiniMax-M2.7"
-    assert env["config_version"] == "0.3.186-mur.1"
+    assert env["config_version"] == "0.3.186+mur.1"
     assert len(env["users"]) == 1
 ```
 
@@ -2499,7 +2499,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         users=results,
         llm_model="MiniMax-M2.7",
         embedding_model="bge-m3",
-        config_version="0.3.186-mur.1",
+        config_version="0.3.186+mur.1",
     )
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3000,7 +3000,7 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 ```json
 {
   "generated_at": "2026-07-28T12:34:56Z",
-  "config_version": "0.3.186-mur.1",
+  "config_version": "0.3.186+mur.1",
   "llm_model": "MiniMax-M2.7",
   "embedding_model": "bge-m3",
   "users": [
