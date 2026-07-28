@@ -458,3 +458,49 @@ def test_netease_news_help_shows_top_n_default_10():
         f"expected 'default: 10' in help, got:\n{help_text}"
     )
     assert "default: 30" not in help_text, "default must not be 30"
+
+
+# --- Task 3: on_search_committed quota hook ---
+
+
+def test_sina_v2_on_search_committed_fires_once(tmp_path: Path):
+    """When custom_keywords provided, the on_search_committed callback fires exactly once."""
+    counter = {"n": 0}
+    profile = _sina_profile(tmp_path, core_keywords=("A", "B", "C"))
+
+    def fetcher(url: str, timeout_seconds: int = 20) -> str:
+        if url == SINA_HOT_URL:
+            return SINA_HOT_RAW
+        if url.startswith(SINA_SEARCH_URL):
+            return SINA_SEARCH_RAW
+        if "news.sina.com.cn" in url:
+            return SINA_ARTICLE_HTML
+        raise AssertionError(f"unexpected sina URL: {url}")
+
+    run_sina_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", top_n=10, offline=False, fetcher=fetcher,
+        custom_keywords=("A", "B", "C"),
+        on_search_committed=lambda: counter.__setitem__("n", counter["n"] + 1),
+    )
+    assert counter["n"] == 1, (
+        f"on_search_committed must fire exactly once per run, got {counter['n']}"
+    )
+
+
+def test_sina_v2_on_search_committed_not_fired_when_no_keywords(tmp_path: Path):
+    """When core_keywords is empty AND custom_keywords is empty, hook must NOT fire."""
+    counter = {"n": 0}
+    profile = _sina_profile(tmp_path, core_keywords=())
+
+    run_sina_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", top_n=10, offline=False,
+        fetcher=_make_sina_fetcher(),
+        on_search_committed=lambda: counter.__setitem__("n", counter["n"] + 1),
+    )
+    assert counter["n"] == 0, (
+        f"on_search_committed must NOT fire when keywords is empty, got {counter['n']}"
+    )

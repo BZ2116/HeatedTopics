@@ -1612,6 +1612,9 @@ def run_sina_news_pipeline(
         output_root=output_root,
     )
 
+    if on_search_committed is not None and persona_keywords:
+        on_search_committed()
+
     return SinaNewsV2Result(
         user_id=profile.profile_id,
         date=today,
