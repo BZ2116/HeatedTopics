@@ -1,0 +1,9 @@
+{
+  "users": [
+    {
+      "user_id": "u_empty",
+      "display_name": "empty interests",
+      "interests": []
+    }
+  ]
+}

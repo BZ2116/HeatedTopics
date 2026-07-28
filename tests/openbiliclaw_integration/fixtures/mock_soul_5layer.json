@@ -1,0 +1,30 @@
+{
+  "core": {
+    "core_traits": ["好奇心强"],
+    "deep_needs": ["理解底层原理"]
+  },
+  "values_layer": {
+    "values": ["严谨", "开放"],
+    "motivational_drivers": []
+  },
+  "interest": {
+    "likes": [
+      {"domain": "Rust", "weight": 0.9, "specifics": [{"name": "Tokio", "weight": 0.8}]}
+    ],
+    "dislikes": [],
+    "favorite_up_users": []
+  },
+  "role": {
+    "life_stage": "本科大四",
+    "current_phase": "准备研究生方向"
+  },
+  "surface": {
+    "cognitive_style": ["由表及里"],
+    "exploration_openness": 0.6
+  },
+  "personality_portrait": "",
+  "recent_awareness": [],
+  "active_insights": [],
+  "source_platform_mix": {"juejin": 0.5},
+  "version": 2
+}

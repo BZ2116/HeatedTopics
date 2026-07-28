@@ -1,0 +1,8 @@
+{
+  "users": [
+    {
+      "display_name": "no id",
+      "interests": [{"name": "x", "category": "x", "weight": 0.5}]
+    }
+  ]
+}

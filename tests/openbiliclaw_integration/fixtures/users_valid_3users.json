@@ -1,0 +1,72 @@
+{
+  "users": [
+    {
+      "user_id": "u_security",
+      "display_name": "网安研究生",
+      "interests": [
+        {"name": "零信任架构", "category": "网安", "weight": 0.9},
+        {"name": "RAG 注入攻防", "category": "网安", "weight": 0.85},
+        {"name": "Rust 系统编程", "category": "Rust", "weight": 0.7}
+      ],
+      "disliked_topics": ["娱乐八卦", "纯财经快讯"],
+      "style": {"reading_depth": "deep", "tone_preference": "technical"},
+      "context": {"primary_scene": "research", "device": "desktop"},
+      "exploration_openness": 0.6,
+      "favorite_up_users": ["白帽小a"],
+      "source_platform_mix": {"juejin": 0.5, "zhihu": 0.3, "toutiao": 0.2},
+      "core_traits": ["好奇心强", "系统化思考"],
+      "deep_needs": ["理解底层原理"],
+      "values": ["严谨", "开放"],
+      "life_stage": "本科大四",
+      "current_phase": "准备研究生方向",
+      "cognitive_style": ["由表及里"],
+      "recent_awareness": [
+        {"date": "2026-07-20", "observation": "在看 RAG 注入攻防",
+         "trend": "关注 LLM 安全", "emotion_guess": "兴奋"}
+      ],
+      "active_insights": [
+        {"hypothesis": "用户偏好能拆到代码层的文章",
+         "evidence": ["多次点赞带源码的文章"], "confidence": 0.7}
+      ]
+    },
+    {
+      "user_id": "u_rust",
+      "display_name": "Rust 爱好者",
+      "interests": [
+        {"name": "Tokio 异步运行时", "category": "Rust", "weight": 0.95},
+        {"name": "Axum Web 框架", "category": "Rust", "weight": 0.8}
+      ],
+      "disliked_topics": ["纯财经"],
+      "style": {"reading_depth": "deep", "tone_preference": "technical"},
+      "context": {"primary_scene": "coding", "device": "desktop"},
+      "exploration_openness": 0.4,
+      "favorite_up_users": [],
+      "source_platform_mix": {"juejin": 0.7, "zhihu": 0.3},
+      "core_traits": ["完美主义"],
+      "deep_needs": ["写出可读代码"],
+      "values": ["可读性", "性能"],
+      "life_stage": "工作 3 年",
+      "current_phase": "转型 Rust 后端",
+      "cognitive_style": ["自底向上"]
+    },
+    {
+      "user_id": "u_design",
+      "display_name": "设计师",
+      "interests": [
+        {"name": "UI 排版原则", "category": "设计", "weight": 0.9},
+        {"name": "字体设计", "category": "设计", "weight": 0.7}
+      ],
+      "disliked_topics": ["财经八卦"],
+      "style": {"reading_depth": "medium", "tone_preference": "casual"},
+      "context": {"primary_scene": "leisure", "device": "mobile"},
+      "exploration_openness": 0.8,
+      "favorite_up_users": [],
+      "source_platform_mix": {"zhihu": 0.5, "baidu": 0.3, "toutiao": 0.2},
+      "core_traits": ["审美驱动"],
+      "deep_needs": ["美的东西"],
+      "values": ["美", "少"],
+      "life_stage": "自由职业",
+      "current_phase": "接品牌项目"
+    }
+  ]
+}
