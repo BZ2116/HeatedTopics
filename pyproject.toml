@@ -1,14 +1,22 @@
 [project]
 name = "heatedtopics"
 version = "0.1.0"
-requires-python = ">=3.10"
+# Floor raised from 3.10 to 3.11 because openbiliclaw requires-python is >=3.11.
+requires-python = ">=3.11"
 dependencies = [
     "gne>=0.4.3",
+    "openbiliclaw",
     "playwright>=1.59.0",
     "httpx>=0.27.0",
     "python-dotenv>=1.0",
     "tzdata>=2025.2",
 ]
+
+# Local sandbox clone of OpenBiliClaw (v0.3.186+mur.1) providing
+# RecommendationEngine.serve_external_candidates. The clone lives outside the
+# heatedTopics tree, so an absolute path is used here.
+[tool.uv.sources]
+openbiliclaw = { path = "E:/code/My/openbiliclaw-sandbox" }
 
 [project.scripts]
 heated-topics = "heated_topics_v3.cli:main"
