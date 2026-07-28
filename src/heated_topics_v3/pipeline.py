@@ -1294,6 +1294,7 @@ class SinaNewsV2Result:
     candidates_total: int
     kept_total: int
     paths: dict[str, int]
+    hot_board_source: str
     keyword_source: str  # "core_keywords"
     keyword_count: int
     report_path: Path
@@ -1466,12 +1467,12 @@ def run_sina_news_pipeline(
     def live_board(_date: str) -> dict:
         return {"response_text": fetch(SINA_HOT_URL, 20)}
 
-    board_payload, src = _news_cache_get(
+    board_payload, board_src = _news_cache_get(
         get_or_fetch_sina_news_board_with_record,
         cache_root_path, today, live_board,
         offline=offline, force_refresh=force_board_refresh,
     )
-    stats.record("board", src, forced=force_board_refresh)
+    stats.record("board", board_src, forced=force_board_refresh)
     board_text = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
     try:
         raw_board_items = parse_sina_hot_response(
@@ -1619,6 +1620,7 @@ def run_sina_news_pipeline(
         candidates_total=run_result.candidates_total,
         kept_total=run_result.kept_total,
         paths=run_result.paths,
+        hot_board_source=board_src,
         keyword_source=extraction.source,
         keyword_count=len(extraction.keywords),
         report_path=run_result.run_dir / "report.md",

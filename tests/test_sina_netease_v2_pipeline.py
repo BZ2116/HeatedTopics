@@ -225,6 +225,28 @@ def test_sina_v2_survives_single_article_404(tmp_path: Path):
     )
 
 
+_HOT_BOARD_SOURCE_LABELS = {"cache", "cache_after_wait", "fresh", "deadline_exceeded", "lock_timeout"}
+
+
+def test_sina_v2_hot_board_source_in_result(tmp_path: Path):
+    """Result.hot_board_source is one of the cache layer source labels."""
+    profile = _sina_profile(tmp_path)
+    result = run_sina_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", offline=False,
+        fetcher=_make_sina_fetcher(),
+    )
+    assert result.hot_board_source in _HOT_BOARD_SOURCE_LABELS, (
+        f"hot_board_source must be one of {_HOT_BOARD_SOURCE_LABELS}, "
+        f"got {result.hot_board_source!r}"
+    )
+    # First run against a fresh cache_root → "fresh" (no prior data)
+    assert result.hot_board_source == "fresh", (
+        f"first run with no cache must return 'fresh', got {result.hot_board_source!r}"
+    )
+
+
 NETEASE_HOT_RAW = json.dumps({
     "code": 0,
     "data": {"items": [
