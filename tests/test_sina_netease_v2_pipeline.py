@@ -163,6 +163,39 @@ def test_sina_v2_dedups_board_and_search_overlap(tmp_path: Path):
     assert kept["hot_value"] == 9999  # top_num from board
 
 
+def test_sina_v2_custom_keywords_truncate_to_5(tmp_path: Path):
+    """custom_keywords > 5 → fetcher sees only 5 search calls; extraction.source = 'custom'."""
+    seen_keywords: list[str] = []
+    profile = _sina_profile(tmp_path, core_keywords=("SHOULD_NOT_APPEAR",))
+
+    def fetcher(url: str, timeout_seconds: int = 20) -> str:
+        if url.startswith(SINA_SEARCH_URL):
+            qs = parse_qs(urlparse(url).query)
+            seen_keywords.append(qs.get("q", ["?"])[0])
+            return SINA_SEARCH_RAW
+        if url == SINA_HOT_URL:
+            return SINA_HOT_RAW
+        if "news.sina.com.cn" in url:
+            return SINA_ARTICLE_HTML
+        raise AssertionError(f"unexpected sina URL: {url}")
+
+    result = run_sina_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", top_n=10, offline=False, fetcher=fetcher,
+        custom_keywords=("A", "B", "C", "D", "E", "F", "G"),
+    )
+    assert len(seen_keywords) == 5, (
+        f"sina v2 must cap custom_keywords at 5, fetcher saw {len(seen_keywords)}: {seen_keywords}"
+    )
+    assert seen_keywords == ["A", "B", "C", "D", "E"], (
+        f"first 5 custom keywords in order, got {seen_keywords}"
+    )
+    assert "SHOULD_NOT_APPEAR" not in seen_keywords
+    assert result.keyword_source == "custom"
+    assert result.keyword_count == 5
+
+
 def test_sina_v2_survives_single_article_404(tmp_path: Path):
     """Regression: single article 404 must NOT abort the run."""
     profile = _sina_profile(tmp_path, profile_id="sina_404")

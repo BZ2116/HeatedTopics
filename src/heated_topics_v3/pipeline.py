@@ -1423,6 +1423,8 @@ def run_sina_news_pipeline(
     force_search_refresh: bool = False,
     force_article_refresh: bool = False,
     matched_query_ids: tuple[str, ...] = (),
+    custom_keywords: tuple[str, ...] = (),          # ← NEW
+    on_search_committed: Callable[[], None] | None = None,  # ← NEW (used in Task 3)
     path_filters: PathFilters = PathFilters(
         hot_board_min=1000,
         article_heat_min=0,
@@ -1486,14 +1488,24 @@ def run_sina_news_pipeline(
         board_items.append(replace(it, raw_payload=merged_payload))
 
     # ---- keywords — hard cap at 5 ----
-    keywords = [w for w in profile.core_keywords[:5] if w.strip()]
-    extraction = PersonaKeywordExtraction(
-        user_id=profile.profile_id,
-        persona_signature="",
-        generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        keywords=tuple(ExtractedKeyword(k, "热榜") for k in keywords),
-        source="core_keywords",
-    )
+    if custom_keywords:
+        keywords = tuple(k.strip() for k in custom_keywords if k.strip())[:5]
+        extraction = PersonaKeywordExtraction(
+            user_id=profile.profile_id,
+            persona_signature="",
+            generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+            keywords=tuple(ExtractedKeyword(k, "热榜") for k in keywords),
+            source="custom",
+        )
+    else:
+        keywords = [w for w in profile.core_keywords[:5] if w.strip()]
+        extraction = PersonaKeywordExtraction(
+            user_id=profile.profile_id,
+            persona_signature="",
+            generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
+            keywords=tuple(ExtractedKeyword(k, "热榜") for k in keywords),
+            source="core_keywords",
+        )
     persona_keywords = tuple(keywords)
 
     # ---- stage 2: per-keyword search (Path B) ----
