@@ -1612,7 +1612,7 @@ def run_sina_news_pipeline(
         output_root=output_root,
     )
 
-    if on_search_committed is not None and persona_keywords:
+    if on_search_committed is not None and raw_search_by_keyword:
         on_search_committed()
 
     return SinaNewsV2Result(
