@@ -39,5 +39,11 @@ detail/
 # Local secrets
 .env
 
+# Local OpenBiliClaw config copy (config/openbiliclaw.toml.example is the source of truth)
+config/openbiliclaw.toml
+
+# Test coverage output
+.coverage
+
 # Isolated feature worktrees
 .worktrees/

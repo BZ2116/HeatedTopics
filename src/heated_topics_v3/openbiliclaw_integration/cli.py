@@ -57,8 +57,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument(
         "--per-user-timeout",
         type=float,
-        default=60.0,
-        help="Per-user timeout in seconds (default 60)",
+        default=180.0,
+        help="Per-user timeout in seconds (default 180)",
     )
     return p.parse_args(list(argv))
 
@@ -113,6 +113,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             body_preview_chars=args.body_preview_chars,
             per_user_timeout=args.per_user_timeout,
             providers=providers,
+            config_path=Path(args.config),
         )
     except Exception:
         logger.exception("fatal error in run_all_users")

@@ -13,19 +13,54 @@ logger = logging.getLogger(__name__)
 def load_openbiliclaw_config(path: str | Path) -> Any | None:
     """Load an OpenBiliClaw config.toml. Returns None on missing file.
 
-    We use OpenBiliClaw's own config loader; falls back gracefully when
-    not available so unit tests don't need the real config.
+    The loaded config is augmented with chat + embedding defaults before
+    being returned: when ``[llm]`` doesn't already define
+    ``[llm.instances.MiniMax]``, we add a v2 route pointing at the
+    MiniMax ``openai_compatible`` endpoint so that
+    ``build_llm_registry`` always has a chat provider.
     """
     p = Path(path)
     if not p.exists():
         return None
     try:
-        from openbiliclaw.config import load_config  # type: ignore
+        from openbiliclaw.config import LLMInstanceConfig, load_config  # type: ignore
 
-        return load_config(p)
+        config = load_config(p)
     except Exception as exc:
         logger.warning("Failed to load OpenBiliClaw config from %s: %s", p, exc)
         return None
+
+    api_key = os.environ.get("OPENBILICLAW_LLM_API_KEY", "").strip()
+    if api_key and not config.llm.instances:
+        config.llm.instances["minimax"] = LLMInstanceConfig(
+            name="minimax",
+            provider_type="openai_compatible",
+            enabled=True,
+            api_key=api_key,
+            model="MiniMax-M2.7",
+            base_url="https://api.minimaxi.com/v1",
+        )
+        config.llm.default_chain = ["minimax"]
+        config.llm.default_provider = "openai_compatible"
+        config.llm.instance_routing = True
+    # TOML ``api_key_env`` is silently dropped by load_config — the loader
+    # only understands ``api_key``. Fill any empty ``api_key`` from the
+    # canonical env var so users can write ``api_key_env`` in TOML as
+    # documentation without it being a footgun.
+    for inst in config.llm.instances.values():
+        if not inst.api_key.strip() and api_key:
+            inst.api_key = api_key
+    # Normalize instance keys + default_chain to lowercase. The registry
+    # lowercases the chain and looks up instances case-sensitively, so a
+    # mixed-case key like ``MiniMax`` is silently dropped.
+    config.llm.instances = {
+        k.lower(): v for k, v in config.llm.instances.items()
+    }
+    config.llm.default_chain = [str(x).strip().lower() for x in config.llm.default_chain]
+    if not config.llm.embedding.provider.strip():
+        config.llm.embedding.provider = "ollama"
+        config.llm.embedding.model = "bge-m3"
+    return config
 
 
 def verify_patch() -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from heated_topics_v3.contracts import HotItem, ItemDetail
 from heated_topics_v3.openbiliclaw_integration import (
     candidate_adapter,
     output,
+    runtime,
     user_profile,
 )
 
@@ -191,18 +193,13 @@ def fetch_candidates(
     return out
 
 
-def _build_shared_runtime(shared_data_dir: Path | None = None) -> dict[str, Any]:
-    """Construct shared LLM + embedding services. Called once at process start.
-
-    ``shared_data_dir`` is the location used for the shared MemoryManager that
-    LLMService requires. Defaults to ``./.openbiliclaw_shared`` under cwd.
-
-    Embedding service is left as ``None`` for now (degraded mode): the
-    engine still works with lexical MMR / cold-start fallbacks. Production
-    wiring will set it from config in a later phase.
-    """
-    from openbiliclaw.config import Config
-    from openbiliclaw.llm.registry import build_llm_registry
+def _build_shared_runtime(
+    shared_data_dir: Path | None = None,
+    config_path: Path | None = None,
+) -> dict[str, Any]:
+    """Construct shared LLM and embedding services once per process."""
+    from openbiliclaw.config import Config, LLMProviderConfig
+    from openbiliclaw.llm.registry import build_embedding_service, build_llm_registry
     from openbiliclaw.llm.service import LLMService
     from openbiliclaw.memory.manager import MemoryManager
     from openbiliclaw.storage.database import Database
@@ -211,15 +208,33 @@ def _build_shared_runtime(shared_data_dir: Path | None = None) -> dict[str, Any]
     base_dir.mkdir(parents=True, exist_ok=True)
     db_path = base_dir / "shared.db"
     database = Database(db_path)
+    database.initialize()
     memory_manager = MemoryManager(base_dir, database=database)
 
-    config = Config()
+    config = None
+    if config_path is not None:
+        config = runtime.load_openbiliclaw_config(config_path)
+    if config is None:
+        config = Config()
+        config.llm.default_provider = "openai_compatible"
+        config.llm.openai_compatible = LLMProviderConfig(
+            api_key=os.environ["OPENBILICLAW_LLM_API_KEY"],
+            model="MiniMax-M2.7",
+            base_url="https://api.minimaxi.com/v1",
+        )
+        config.llm.embedding.provider = "ollama"
+        config.llm.embedding.model = "bge-m3"
+    elif not config.llm.embedding.provider.strip():
+        config.llm.embedding.provider = "ollama"
+        config.llm.embedding.model = "bge-m3"
+
     registry = build_llm_registry(config)
     llm_service = LLMService(registry=registry, memory=memory_manager)
+    embedding_service = build_embedding_service(config, registry)
 
     return {
         "llm": llm_service,
-        "embedding": None,  # wired by config in production; tests inject
+        "embedding": embedding_service,
         "_memory_manager": memory_manager,
         "_database": database,
     }
@@ -248,6 +263,7 @@ def build_recommender(
     user_db_path = data_dir / "openbiliclaw.db"
     user_db_path.parent.mkdir(parents=True, exist_ok=True)
     database = Database(user_db_path)
+    database.initialize()
 
     memory_manager = MemoryManager(data_dir, database=database)
 
@@ -255,7 +271,6 @@ def build_recommender(
         llm=shared_runtime["llm"],
         database=database,
         embedding_service=shared_runtime.get("embedding"),
-        persist=persist,
     )
     # Stash per-user handles so callers can close them.
     engine._ht_memory_manager = memory_manager  # type: ignore[attr-defined]
@@ -294,16 +309,17 @@ async def _run_one_user_async(
                 articles, platform=providers[0]
             )
     profile = user_profile.build_onion_profile(spec)
+    user_data_dir = user_profile.user_data_dir(data_dir, spec.user_id)
     engine = build_recommender(
         spec,
-        data_dir=data_dir / spec.user_id,
+        data_dir=user_data_dir,
         shared_runtime=shared_runtime,
         persist=True,
     )
     try:
         async with asyncio.timeout(per_user_timeout):
             recommendations = await engine.serve_external_candidates(
-                profile, candidates, limit=limit
+                profile, candidates, limit=limit, persist=False
             )
     except TimeoutError:
         return output.format_user_failure(
@@ -350,7 +366,7 @@ def run_one_user(
     data_dir: Path,
     limit: int = 5,
     body_preview_chars: int = 800,
-    per_user_timeout: float = 60.0,
+    per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
 ) -> dict[str, Any]:
@@ -375,9 +391,10 @@ async def run_all_users(
     max_parallel: int = 5,
     limit: int = 5,
     body_preview_chars: int = 800,
-    per_user_timeout: float = 60.0,
+    per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
+    config_path: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Run recommendation for all users with bounded concurrency.
 
@@ -385,6 +402,11 @@ async def run_all_users(
     the others. Each user gets a separate data_dir under data_dir/users/.
     """
     specs = load_users(users_path)
+    if shared_runtime is None and config_path is not None:
+        shared_runtime = _build_shared_runtime(
+            shared_data_dir=data_dir,
+            config_path=config_path,
+        )
     sem = asyncio.Semaphore(max_parallel)
 
     async def _one(spec: user_profile.UserSpec) -> dict[str, Any]:
