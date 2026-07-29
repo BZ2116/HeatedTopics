@@ -952,7 +952,8 @@ def run_toutiao_pipeline_v2(
 
     Steps:
       1. Load + validate v2 profile.
-      2. Build keywords from profile.core_keywords or custom_keywords.
+      2. Build keywords from profile.core_keywords or custom_keywords,
+         capped at ``keyword_cap`` (default 5).
       3. Read/write daily hot board cache.
       4. Per-keyword search, enrich with mobile article info.
       5. Build candidates via Paths A/B/C and rank by heat.
@@ -978,7 +979,7 @@ def run_toutiao_pipeline_v2(
             source="custom",
         )
     else:
-        # Use profile.core_keywords directly (keywords were pre-generated via refresh-keywords)
+        # Use profile.core_keywords (capped at keyword_cap; pre-generated via refresh-keywords)
         capped = tuple(profile.core_keywords)[:keyword_cap]
         extraction = PersonaKeywordExtraction(
             user_id=profile.user_id,

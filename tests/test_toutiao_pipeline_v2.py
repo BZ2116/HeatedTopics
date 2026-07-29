@@ -354,8 +354,8 @@ def test_toutiao_v2_custom_keywords_cap_at_5(tmp_path: Path):
         custom_keywords=("A", "B", "C", "D", "E", "F", "G"),
     )
 
-    assert len(seen_keywords) <= 5, (
-        f"toutiao v2 custom_keywords must cap at 5, fetcher saw {len(seen_keywords)}: {seen_keywords}"
+    assert seen_keywords == ["A", "B", "C", "D", "E"], (
+        f"fetcher must see exactly first 5 custom keywords in order, got {seen_keywords}"
     )
     assert "SHOULD_NOT_APPEAR" not in seen_keywords
 
