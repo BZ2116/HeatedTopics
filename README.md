@@ -40,7 +40,7 @@ uv run python scripts/harvest_cookies.py
 uv run python -m heated_topics_v3.cli toutiao --help
 ```
 
-跑这条应该看到 `184 passed`（说明环境就绪）：
+跑这条应该看到 `366 passed`（说明环境就绪）：
 
 ```bash
 uv run pytest -q
@@ -217,6 +217,58 @@ Outputs land in `outputs/<profile>/baidu/run_<ts>/` (same shape as `toutiao`/`ju
 | `--force-board-refresh` | 忽略 board 缓存跑新鲜数据 | False |
 | `--matched-query-ids ID` | 透传给 HotItem（可重复） | [] |
 
+### Sina / NetEase 新闻（v2 流程）
+
+`v2` 流水线：热榜 → 关键词搜索 → 正文。与 toutiao v2 同源（`build_news_candidates` + `write_news_run`），CLI 表面也已对齐（`--custom-keyword` / 配额 / `hot_board_source`）。
+
+```powershell
+cd E:\.code\My\heatedTopics-V3
+$env:PYTHONPATH='src'
+uv run python -m heated_topics_v3.cli sina-news `
+  --profile config\profiles\tech_ai_creator.json `
+  --output-root outputs `
+  --cache-root cache `
+  --top-n 10
+
+uv run python -m heated_topics_v3.cli netease-news `
+  --profile config\profiles\tech_ai_creator.json `
+  --output-root outputs `
+  --cache-root cache `
+  --top-n 10
+```
+
+Outputs land in `outputs/users/{profile_id}/{date}/run_{ts}/`（与 toutiao 一致）。
+
+**完整参数一览（sina-news / netease-news 子命令，共用参数）**
+
+| 参数 | 作用 | 默认值 |
+| --- | --- | --- |
+| `--profile PATH` | v1 profile JSON（必填） | - |
+| `--top-n INT` | 最终保留的候选条数 | `10` |
+| `--output-root PATH` / `--output-dir PATH` | 输出根目录（后者覆盖前者） | `outputs` |
+| `--cache-root PATH` | 缓存根目录 | `cache` |
+| `--fetched-at ISO` | 时间戳覆盖 | 当前时间 |
+| `--offline` | 只读缓存；空缓存返回空报告 | False |
+| `--force-board-refresh` | 忽略 board 缓存跑新鲜数据 | False |
+| `--force-search-refresh` | 忽略搜索缓存跑新鲜数据 | False |
+| `--force-article-refresh` | 忽略正文缓存跑新鲜数据 | False |
+| `--matched-query-ids ID` | 透传给 HotItem（可重复） | [] |
+| `--custom-keyword WORD` | 自定义关键词（可重复，替换 profile 里的 core_keywords；最多 5 个，超出截断） | [] |
+| `--state-root PATH` | 配额状态目录 | `state` |
+| `--max-quota-per-day INT` | 每日搜索配额上限 | `3` |
+| `--skip-quota` | 跳过每日配额检查（集成方使用） | False |
+
+成功后打印 7 行：
+```
+run_dir: ...
+focused: ...
+candidates: <kept_total>/<candidates_total>
+paths: {'A': n, 'B': m}
+hot_board_source: fresh | cache | cache_after_wait | deadline_exceeded | lock_timeout
+keyword_source: custom | core_keywords
+keyword_count: N
+```
+
 ### 完整参数一览（toutiao 子命令）
 
 | 参数 | 作用 | 默认值 |
@@ -227,7 +279,7 @@ Outputs land in `outputs/<profile>/baidu/run_<ts>/` (same shape as `toutiao`/`ju
 | `--cache-root PATH` | 缓存根目录 | `cache` |
 | `--force-hot-board-refresh` | 忽略热榜缓存重新抓取 | False |
 | `--offline` | 热榜只读缓存；搜索、热度补充和正文仍可能请求网络 | False |
-| `--custom-keyword WORD` | 自定义关键词（可重复，替换 profile 里的） | [] |
+| `--custom-keyword WORD` | 自定义关键词（可重复，替换 profile 里的；最多 5 个，超出截断） | [] |
 | `--state-root PATH` | 配额状态目录 | `state` |
 | `--max-quota-per-day INT` | 每日搜索配额上限 | `3` |
 | `--skip-quota` | 跳过每日配额检查（集成方使用） | False |
@@ -374,20 +426,24 @@ outputs/users/{user_id}/{YYYY-MM-DD}/run_{YYYYMMDD_HHMMSS}/
 uv run pytest -q
 ```
 
-测试覆盖 toutiao v2 端到端、四路径、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包、anti-bot 降级、`--custom-keyword` 自定义词替换 vs LLM 自动路径，以及 `skip_search` 时不触发配额回调。
+测试覆盖 toutiao v2 端到端、四路径、sina-news / netease-news v2 端到端、每日搜索缓存、single-flight、20 秒搜索预算、jump URL 解包、anti-bot 降级、`--custom-keyword` 自定义词替换 vs LLM 自动路径（toutiao / sina-news / netease-news 三处均覆盖）、`--custom-keyword` 5 上限截断（`core_keywords` 收紧到 5 同理）、`--skip-quota` 旁路与配额超限拦截，以及 `skip_search` 时不触发配额回调。
 
-## 每日配额（上线用法）
+## 每日配额（toutiao / sina-news / netease-news）
 
 ### 每日配额
 
-每个用户每天最多获取热榜 `--max-quota-per-day` 次（默认 3）。第 N+1 次调用时，
-后端在进入流程前拦截，向 stderr 打印 `今日额度已用完` 并以 exit code `2` 退出，
-不产出任何结果目录。
+每个用户每天对每个走搜索分支的平台最多调用 `--max-quota-per-day` 次（默认 3）。第 N+1 次调用时，后端在进入流程前拦截，向 stderr 打印 `今日额度已用完` 并以 exit code `2` 退出，不产出任何结果目录。
+
+配额适用于以下子命令：
+- `toutiao`（v2）
+- `sina-news`
+- `netease-news`
+
+> 注意：三个平台**共用同一个** `state/quota/{user_id}.json` 配额状态文件。一次 `toutiao` 调用 + 一次 `sina-news` 调用 = `count: 2`，即便它们走的是完全不同的搜索接口。如果需要按平台拆分，前端自行做调用次数管理并加 `--skip-quota`。
 
 - 配额状态存于 `state/quota/{user_id}.json`，格式 `{"date": "YYYY-MM-DD", "count": N}`。
 - 跨天自动重置：读取时若 `date` 不是当天，`count` 视为 0。
-- **计数语义**：只有「发起了搜索分支且流程完整走完」才 +1。若热榜命中已足够、
-  直接走 Path A 直出（`skip_search`），不发起搜索，则不消耗配额。
+- **计数语义**：只有「发起了搜索分支且流程完整走完」才 +1。若热榜命中已足够、直接走 Path A 直出（`skip_search`），不发起搜索，则不消耗配额。
 
 ### `--skip-quota`（前端集成必读）
 
