@@ -450,7 +450,7 @@ def test_netease_news_dispatch(monkeypatch, capsys):
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["heated-topics", "netease-news", "--profile", "p.json", "--fetched-at", "2026-07-25T10:00:00+08:00"],
+        ["heated-topics", "netease-news", "--profile", "p.json", "--fetched-at", "2026-07-25T10:00:00+08:00", "--skip-quota"],
     )
 
     cli._main()
@@ -458,12 +458,83 @@ def test_netease_news_dispatch(monkeypatch, capsys):
     assert captured["profile_path"] == Path("p.json")
     assert captured["fetched_at"] == "2026-07-25T10:00:00+08:00"
     assert captured["matched_query_ids"] == ()
+    assert captured["custom_keywords"] == ()
+    # --skip-quota: on_search_committed unwired
+    assert captured["on_search_committed"] is None
     assert callable(captured["fetcher"])
     log_path = fetcher_options["log_path"]
     assert log_path.name == ".netease_news_fetcher_log.json"
 
     out = capsys.readouterr().out
     assert "run_dir:" in out
+    assert "hot_board_source: fresh" in out
+
+
+def test_netease_news_wires_quota_callback_when_not_skipped(monkeypatch, capsys, tmp_path):
+    """When --skip-quota is absent, the handler wires on_search_committed to a callable."""
+    captured: dict = {}
+    fetcher_options: dict = {}
+
+    from heated_topics_v3.pipeline import NeteaseNewsV2Result, load_user_profile
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return NeteaseNewsV2Result(
+            user_id="zhao_001",
+            date="2026-07-25",
+            run_dir=Path("outputs/users/zhao_001/2026-07-25/run_120000"),
+            top_n=10,
+            candidates_total=0,
+            kept_total=0,
+            paths={},
+            hot_board_source="fresh",
+            keyword_source="core_keywords",
+            keyword_count=0,
+            report_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/report.md"),
+            focused_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/focused.json"),
+        )
+
+    profile_path = tmp_path / "zhao_001.json"
+    profile_path.write_text(json.dumps({
+        "profile_id": "zhao_001", "display_name": "zhao",
+        "core_keywords": ["AI"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    import heated_topics_v3.fetcher_factory as ff
+    import heated_topics_v3.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_netease_news_pipeline", fake_run)
+    monkeypatch.setattr(
+        ff,
+        "make_netease_news_fetcher",
+        lambda **kwargs: fetcher_options.update(kwargs) or (lambda _url, _timeout: ""),
+    )
+
+    loaded = load_user_profile(profile_path)
+    assert loaded.profile_id == "zhao_001"
+
+    state_root = tmp_path / "state"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "heated-topics",
+            "netease-news",
+            "--profile",
+            str(profile_path),
+            "--fetched-at",
+            "2026-07-25T10:00:00+08:00",
+            "--state-root",
+            str(state_root),
+        ],
+    )
+
+    cli._main()
+
+    assert callable(captured["on_search_committed"])
+    captured["on_search_committed"]()
+    quota_file = state_root / "quota" / "zhao_001.json"
+    assert quota_file.exists(), (
+        f"quota file should be created when callback fires, missing: {quota_file}"
+    )
 
 
 def test_sina_news_generates_fetched_at_when_missing(monkeypatch, capsys):
