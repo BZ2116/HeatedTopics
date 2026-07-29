@@ -302,6 +302,64 @@ def test_custom_keywords_searched_not_llm_generated(tmp_path: Path):
     assert "AI写作" not in joined
 
 
+def test_toutiao_v2_custom_keywords_cap_at_5(tmp_path: Path):
+    """custom_keywords > 5 -> fetcher sees at most 5 search calls."""
+    seen_keywords: list[str] = []
+    payload = json.loads(json.dumps(V2_PROFILE, ensure_ascii=False))
+    payload["user_id"] = "toutiao_cap_test"
+    payload["core_keywords"] = ["SHOULD_NOT_APPEAR"]
+    profile_path = tmp_path / "profile.json"
+    profile_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    def fetcher(url: str, timeout_seconds: int) -> str:
+        if "hot-event/hot-board" in url:
+            return json.dumps(
+                {
+                    "status": "success",
+                    "data": [
+                        {
+                            "ClusterId": "0",
+                            "Title": "无关低热度新闻",
+                            "Url": "https://www.toutiao.com/group/0/",
+                            "HotValue": 10,
+                            "QueryWord": "无关内容",
+                        }
+                    ],
+                }
+            )
+        if "so.toutiao.com/search/" in url:
+            from urllib.parse import parse_qs, urlparse
+            qs = parse_qs(urlparse(url).query)
+            seen_keywords.append(qs.get("keyword", ["?"])[0])
+            return json.dumps({"keyword": "x", "count": 0, "dom": "<div></div>"})
+        if "www.toutiao.com" in url:
+            return "<html></html>"
+        return ""
+
+    def article_info_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return json.dumps({"data": {"impression_count": 1, "content": "<p>x</p>"}})
+
+    def detail_fetcher(_url: str, _timeout_seconds: int) -> str:
+        return "<html><body><article><p>x</p></article></body></html>"
+
+    run_toutiao_pipeline_v2(
+        profile_path=profile_path,
+        output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        hot_board_cache_root=tmp_path / "cache",
+        fetcher=fetcher,
+        article_info_fetcher=article_info_fetcher,
+        detail_fetcher=detail_fetcher,
+        top_n=10,
+        custom_keywords=("A", "B", "C", "D", "E", "F", "G"),
+    )
+
+    assert len(seen_keywords) <= 5, (
+        f"toutiao v2 custom_keywords must cap at 5, fetcher saw {len(seen_keywords)}: {seen_keywords}"
+    )
+    assert "SHOULD_NOT_APPEAR" not in seen_keywords
+
+
 def test_skip_search_does_not_call_commit_callback(tmp_path: Path):
     """When Path A already meets min_hot_board_before_search (5), the commit callback must not fire."""
     profile_path = _write_profile(tmp_path)

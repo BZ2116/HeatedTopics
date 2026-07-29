@@ -943,6 +943,7 @@ def run_toutiao_pipeline_v2(
     detail_fetcher: Callable[[str, int], str] | None = None,
     rendered_text_fetcher: Callable[[str, int], str] | None = None,
     custom_keywords: tuple[str, ...] = (),
+    keyword_cap: int = 5,
     on_search_committed: Callable[[], None] | None = None,
     search_phase_budget_seconds: float = 20.0,
     _monotonic: Callable[[], float] = time.monotonic,
@@ -968,20 +969,22 @@ def run_toutiao_pipeline_v2(
 
     profile = load_persona_profile(profile_path)
     if custom_keywords:
+        capped = tuple(k.strip() for k in custom_keywords if k.strip())[:keyword_cap]
         extraction = PersonaKeywordExtraction(
             user_id=profile.user_id,
             persona_signature=profile.persona_signature,
             generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in custom_keywords),
+            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in capped),
             source="custom",
         )
     else:
         # Use profile.core_keywords directly (keywords were pre-generated via refresh-keywords)
+        capped = tuple(profile.core_keywords)[:keyword_cap]
         extraction = PersonaKeywordExtraction(
             user_id=profile.user_id,
             persona_signature=profile.persona_signature,
             generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in profile.core_keywords),
+            keywords=tuple(ExtractedKeyword(kw, "热榜") for kw in capped),
             source="core_keywords",
         )
 
