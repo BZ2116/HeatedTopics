@@ -364,7 +364,7 @@ def _handle_baidu(args) -> None:
 
 
 def _handle_sina_news(args) -> None:
-    """Mirror of ``_handle_bilibili`` for the Sina News pipeline."""
+    """V2 news pipeline handler with quota precheck and custom keywords."""
     from heated_topics_v3.fetcher_factory import make_sina_news_fetcher
     from heated_topics_v3.pipeline import run_sina_news_pipeline
 
