@@ -377,7 +377,7 @@ def _handle_sina_news(args) -> None:
     if not args.skip_quota:
         from heated_topics_v3.pipeline import load_user_profile
         profile = load_user_profile(args.profile)
-        user_id = getattr(profile, "profile_id", "") or ""
+        user_id = getattr(profile, "profile_id", None) or ""
         if not user_id:
             print("profile 缺少 profile_id，无法应用配额；请用 --skip-quota", file=sys.stderr)
             raise SystemExit(2)
@@ -387,7 +387,9 @@ def _handle_sina_news(args) -> None:
         except QuotaExceededError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(2) from exc
-        on_search_committed = lambda: commit_quota(args.state_root, user_id, today)
+        def _commit() -> None:
+            commit_quota(args.state_root, user_id, today)
+        on_search_committed = _commit
 
     log_path = Path(__file__).resolve().parent.parent / ".sina_news_fetcher_log.json"
     fetcher = make_sina_news_fetcher(log_path=log_path, retry_policy=BaiduRetryPolicy())

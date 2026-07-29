@@ -340,6 +340,82 @@ def test_sina_news_dispatch(monkeypatch, capsys):
     assert "keyword_count: 5" in out
 
 
+def test_sina_news_wires_quota_callback_when_not_skipped(monkeypatch, capsys, tmp_path):
+    """When --skip-quota is absent, the handler wires on_search_committed to a callable.
+
+    This is the inverse of the skip branch: the handler must load the profile,
+    extract profile_id, and bind a callable that closes over state_root, user_id,
+    and today's date.
+    """
+    captured: dict = {}
+    fetcher_options: dict = {}
+
+    from heated_topics_v3.pipeline import SinaNewsV2Result, load_user_profile
+
+    def fake_run(**kwargs):
+        captured.update(kwargs)
+        return SinaNewsV2Result(
+            user_id="zhao_001",
+            date="2026-07-25",
+            run_dir=Path("outputs/users/zhao_001/2026-07-25/run_120000"),
+            top_n=10,
+            candidates_total=0,
+            kept_total=0,
+            paths={},
+            hot_board_source="fresh",
+            keyword_source="core_keywords",
+            keyword_count=0,
+            report_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/report.md"),
+            focused_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/focused.json"),
+        )
+
+    # Build a real v1 profile (CLI uses load_user_profile, not load_persona_profile).
+    profile_path = tmp_path / "zhao_001.json"
+    profile_path.write_text(json.dumps({
+        "profile_id": "zhao_001", "display_name": "zhao",
+        "core_keywords": ["AI"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    import heated_topics_v3.fetcher_factory as ff
+    import heated_topics_v3.pipeline as pipeline_mod
+    monkeypatch.setattr(pipeline_mod, "run_sina_news_pipeline", fake_run)
+    monkeypatch.setattr(
+        ff,
+        "make_sina_news_fetcher",
+        lambda **kwargs: fetcher_options.update(kwargs) or (lambda _url, _timeout: ""),
+    )
+
+    # Sanity: load_user_profile should find profile_id.
+    loaded = load_user_profile(profile_path)
+    assert loaded.profile_id == "zhao_001"
+
+    state_root = tmp_path / "state"
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "heated-topics",
+            "sina-news",
+            "--profile",
+            str(profile_path),
+            "--fetched-at",
+            "2026-07-25T10:00:00+08:00",
+            "--state-root",
+            str(state_root),
+        ],
+    )
+
+    cli._main()
+
+    # on_search_committed must be a callable (wired, not None).
+    assert callable(captured["on_search_committed"])
+    # Invoke it; it should create the quota file (date is deterministic from --fetched-at).
+    captured["on_search_committed"]()
+    quota_file = state_root / "quota" / "zhao_001.json"
+    assert quota_file.exists(), (
+        f"quota file should be created when callback fires, missing: {quota_file}"
+    )
+
+
 def test_netease_news_dispatch(monkeypatch, capsys):
     """Verify _main wires the right pipeline / fetcher / kwargs for netease-news."""
     captured: dict = {}
