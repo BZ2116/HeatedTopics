@@ -294,6 +294,10 @@ def _add_news_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force-search-refresh", dest="force_search_refresh", action="store_true")
     parser.add_argument("--force-article-refresh", dest="force_article_refresh", action="store_true")
     parser.add_argument("--matched-query-ids", dest="matched_query_ids", action="append", default=[])
+    parser.add_argument("--custom-keyword", dest="custom_keyword", action="append", default=[])
+    parser.add_argument("--state-root", default=Path("state"), type=Path)
+    parser.add_argument("--max-quota-per-day", dest="max_quota_per_day", default=3, type=int)
+    parser.add_argument("--skip-quota", dest="skip_quota", action="store_true")
 
 
 def _add_juejin_args(parser: argparse.ArgumentParser) -> None:
@@ -366,6 +370,25 @@ def _handle_sina_news(args) -> None:
 
     fetched_at = args.fetched_at or datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
     matched_query_ids = tuple(q.strip() for q in args.matched_query_ids if q.strip())
+    custom_keywords = tuple(k.strip() for k in args.custom_keyword if k.strip())
+    today = utc8_today()
+
+    on_search_committed = None
+    if not args.skip_quota:
+        from heated_topics_v3.pipeline import load_user_profile
+        profile = load_user_profile(args.profile)
+        user_id = getattr(profile, "profile_id", "") or ""
+        if not user_id:
+            print("profile 缺少 profile_id，无法应用配额；请用 --skip-quota", file=sys.stderr)
+            raise SystemExit(2)
+        state = load_quota(args.state_root, user_id, today)
+        try:
+            check_quota(state, args.max_quota_per_day)
+        except QuotaExceededError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(2) from exc
+        on_search_committed = lambda: commit_quota(args.state_root, user_id, today)
+
     log_path = Path(__file__).resolve().parent.parent / ".sina_news_fetcher_log.json"
     fetcher = make_sina_news_fetcher(log_path=log_path, retry_policy=BaiduRetryPolicy())
     result = run_sina_news_pipeline(
@@ -379,12 +402,15 @@ def _handle_sina_news(args) -> None:
         force_search_refresh=args.force_search_refresh,
         force_article_refresh=args.force_article_refresh,
         matched_query_ids=matched_query_ids,
+        custom_keywords=custom_keywords,
+        on_search_committed=on_search_committed,
         fetcher=fetcher,
     )
     print(f"run_dir: {result.run_dir}")
     print(f"focused: {result.focused_path}")
     print(f"candidates: {result.kept_total}/{result.candidates_total}")
     print(f"paths: {result.paths}")
+    print(f"hot_board_source: {result.hot_board_source}")
     print(f"keyword_source: {result.keyword_source}")
     print(f"keyword_count: {result.keyword_count}")
 

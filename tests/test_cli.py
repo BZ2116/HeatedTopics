@@ -305,6 +305,7 @@ def test_sina_news_dispatch(monkeypatch, capsys):
             "",
             "--matched-query-ids",
             "q2",
+            "--skip-quota",
         ],
     )
 
@@ -322,6 +323,10 @@ def test_sina_news_dispatch(monkeypatch, capsys):
     # matched_query_ids stripped and empties removed
     assert captured["matched_query_ids"] == ("q1", "q2")
     assert callable(captured["fetcher"])
+    # --skip-quota: no on_search_committed wiring
+    assert captured["on_search_committed"] is None
+    # custom_keywords default to empty tuple
+    assert captured["custom_keywords"] == ()
     log_path = fetcher_options["log_path"]
     assert log_path.name == ".sina_news_fetcher_log.json"
 
@@ -330,6 +335,7 @@ def test_sina_news_dispatch(monkeypatch, capsys):
     assert "focused:" in out
     assert "candidates: 7/12" in out
     assert "paths: " in out
+    assert "hot_board_source: fresh" in out
     assert "keyword_source: core_keywords" in out
     assert "keyword_count: 5" in out
 
@@ -415,10 +421,15 @@ def test_sina_news_generates_fetched_at_when_missing(monkeypatch, capsys):
         "make_sina_news_fetcher",
         lambda **kwargs: (lambda _url, _timeout: ""),
     )
-    monkeypatch.setattr("sys.argv", ["heated-topics", "sina-news", "--profile", "p.json"])
+    monkeypatch.setattr(
+        "sys.argv",
+        ["heated-topics", "sina-news", "--profile", "p.json", "--skip-quota"],
+    )
 
     cli._main()
 
     assert captured["fetched_at"]  # non-empty
     # ISO-ish: contains a T and a timezone offset or Z
     assert "T" in captured["fetched_at"]
+    # --skip-quota: on_search_committed unwired
+    assert captured["on_search_committed"] is None
