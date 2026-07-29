@@ -1,0 +1,13 @@
+# OpenBiliClaw config for the heatedTopics integration layer.
+# Copy to config/openbiliclaw.toml and adjust paths / endpoints.
+# API keys MUST come from env vars (OPENBILICLAW_LLM_API_KEY); never put
+# them in this file.
+
+[llm]
+provider_type = "openai_compatible"
+base_url = "https://api.minimaxi.com/v1"
+model = "MiniMax-M2.7"
+api_key_env = "OPENBILICLAW_LLM_API_KEY"
+
+[embedding]
+provider = "ollama"
