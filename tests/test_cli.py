@@ -351,6 +351,7 @@ def test_netease_news_dispatch(monkeypatch, capsys):
             candidates_total=10,
             kept_total=5,
             paths={"A": 2, "B": 8},
+            hot_board_source="fresh",
             keyword_source="core_keywords",
             keyword_count=5,
             report_path=Path("outputs/users/zhao_001/2026-07-25/run_120000/report.md"),

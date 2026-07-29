@@ -1640,6 +1640,7 @@ class NeteaseNewsV2Result:
     candidates_total: int
     kept_total: int
     paths: dict[str, int]
+    hot_board_source: str
     keyword_source: str  # "core_keywords"
     keyword_count: int
     report_path: Path
@@ -1672,6 +1673,8 @@ def run_netease_news_pipeline(
     force_search_refresh: bool = False,
     force_article_refresh: bool = False,
     matched_query_ids: tuple[str, ...] = (),
+    custom_keywords: tuple[str, ...] = (),
+    on_search_committed: Callable[[], None] | None = None,
     path_filters: PathFilters = PathFilters(
         hot_board_min=1000,
         article_heat_min=0,
@@ -1705,12 +1708,12 @@ def run_netease_news_pipeline(
     def live_board(_date: str) -> dict:
         return {"response_text": fetch(NETEASE_HOT_URL, 20)}
 
-    board_payload, src = _news_cache_get(
+    board_payload, board_src = _news_cache_get(
         get_or_fetch_netease_news_board_with_record,
         cache_root_path, today, live_board,
         offline=offline, force_refresh=force_board_refresh,
     )
-    stats.record("board", src, forced=force_board_refresh)
+    stats.record("board", board_src, forced=force_board_refresh)
     board_text = str(board_payload.get("response_text", "")) if isinstance(board_payload, dict) else ""
     try:
         raw_board_items = parse_netease_hot_response(
@@ -1722,13 +1725,18 @@ def run_netease_news_pipeline(
         for item in raw_board_items
     ]
 
-    keywords = [word for word in profile.core_keywords[:5] if word.strip()]
+    if custom_keywords:
+        keywords = tuple(k.strip() for k in custom_keywords if k.strip())[:5]
+        source = "custom"
+    else:
+        keywords = tuple(w.strip() for w in profile.core_keywords if w.strip())[:5]
+        source = "core_keywords"
     extraction = PersonaKeywordExtraction(
         user_id=profile.profile_id,
         persona_signature="",
         generated_at=datetime.now(timezone(timedelta(hours=8))).isoformat(timespec="seconds"),
-        keywords=tuple(ExtractedKeyword(keyword, "热榜") for keyword in keywords),
-        source="core_keywords",
+        keywords=tuple(ExtractedKeyword(k, "热榜") for k in keywords),
+        source=source,
     )
     persona_keywords = tuple(keywords)
 
@@ -1834,6 +1842,9 @@ def run_netease_news_pipeline(
         output_root=output_root,
     )
 
+    if on_search_committed is not None and raw_search_by_keyword:
+        on_search_committed()
+
     return NeteaseNewsV2Result(
         user_id=profile.profile_id,
         date=today,
@@ -1842,6 +1853,7 @@ def run_netease_news_pipeline(
         candidates_total=run_result.candidates_total,
         kept_total=run_result.kept_total,
         paths=run_result.paths,
+        hot_board_source=board_src,
         keyword_source=extraction.source,
         keyword_count=len(extraction.keywords),
         report_path=run_result.run_dir / "report.md",

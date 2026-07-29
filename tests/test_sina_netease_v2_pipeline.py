@@ -504,3 +504,84 @@ def test_sina_v2_on_search_committed_not_fired_when_no_keywords(tmp_path: Path):
     assert counter["n"] == 0, (
         f"on_search_committed must NOT fire when keywords is empty, got {counter['n']}"
     )
+
+
+# --- Task 4: netease-news parity mirror (custom_keywords + hot_board_source + on_search_committed) ---
+
+
+def test_netease_v2_custom_keywords_truncate_to_5(tmp_path: Path):
+    """custom_keywords > 5 → fetcher sees only 5 search calls; extraction.source = 'custom'."""
+    seen_keywords: list[str] = []
+    profile = _netease_profile(tmp_path, core_keywords=("SHOULD_NOT_APPEAR",))
+
+    def fetcher(url: str, timeout_seconds: int = 20) -> str:
+        if url.startswith(NETEASE_SEARCH_URL):
+            qs = parse_qs(urlparse(url).query)
+            seen_keywords.append(qs.get("query", ["?"])[0])
+            return NETEASE_SEARCH_RAW
+        if url == NETEASE_HOT_URL:
+            return NETEASE_HOT_RAW
+        if "163.com/dy/article" in url:
+            return NETEASE_ARTICLE_HTML
+        raise AssertionError(f"unexpected netease URL: {url}")
+
+    result = run_netease_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", top_n=10, offline=False, fetcher=fetcher,
+        custom_keywords=("A", "B", "C", "D", "E", "F", "G"),
+    )
+    assert len(seen_keywords) == 5, (
+        f"netease v2 must cap custom_keywords at 5, fetcher saw {len(seen_keywords)}: {seen_keywords}"
+    )
+    assert seen_keywords == ["A", "B", "C", "D", "E"], (
+        f"first 5 custom keywords in order, got {seen_keywords}"
+    )
+    assert "SHOULD_NOT_APPEAR" not in seen_keywords
+    assert result.keyword_source == "custom"
+    assert result.keyword_count == 5
+
+
+def test_netease_v2_hot_board_source_in_result(tmp_path: Path):
+    """Result.hot_board_source is one of the cache layer source labels."""
+    profile = _netease_profile(tmp_path)
+    result = run_netease_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", offline=False,
+        fetcher=_make_netease_fetcher(),
+    )
+    assert result.hot_board_source in _HOT_BOARD_SOURCE_LABELS, (
+        f"hot_board_source must be one of {_HOT_BOARD_SOURCE_LABELS}, "
+        f"got {result.hot_board_source!r}"
+    )
+    # First run against a fresh cache_root → "fresh" (no prior data)
+    assert result.hot_board_source == "fresh", (
+        f"first run with no cache must return 'fresh', got {result.hot_board_source!r}"
+    )
+
+
+def test_netease_v2_on_search_committed_fires_once(tmp_path: Path):
+    """When custom_keywords provided, the on_search_committed callback fires exactly once."""
+    counter = {"n": 0}
+    profile = _netease_profile(tmp_path, core_keywords=("A", "B", "C"))
+
+    def fetcher(url: str, timeout_seconds: int = 20) -> str:
+        if url == NETEASE_HOT_URL:
+            return NETEASE_HOT_RAW
+        if url.startswith(NETEASE_SEARCH_URL):
+            return NETEASE_SEARCH_RAW
+        if "163.com/dy/article" in url:
+            return NETEASE_ARTICLE_HTML
+        raise AssertionError(f"unexpected netease URL: {url}")
+
+    run_netease_news_pipeline(
+        profile_path=profile, output_root=tmp_path / "out",
+        fetched_at="2026-07-25T00:00:00+08:00",
+        cache_root=tmp_path / "cache", top_n=10, offline=False, fetcher=fetcher,
+        custom_keywords=("A", "B", "C"),
+        on_search_committed=lambda: counter.__setitem__("n", counter["n"] + 1),
+    )
+    assert counter["n"] == 1, (
+        f"on_search_committed must fire exactly once per run, got {counter['n']}"
+    )
