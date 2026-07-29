@@ -139,3 +139,46 @@ def run_one_user(
             shared_runtime=shared_runtime,
         )
     )
+
+
+async def run_all_users(
+    *,
+    users_path: Path,
+    data_dir: Path,
+    max_parallel: int = 5,
+    limit: int = 5,
+    body_preview_chars: int = 800,
+    per_user_timeout: float = 60.0,
+    providers: list[str] | None = None,
+    shared_runtime: Any | None = None,
+) -> list[dict[str, Any]]:
+    """Run recommendation for all users with bounded concurrency.
+
+    Per-user failures are isolated: one user's exception does not affect
+    the others. Each user gets a separate data_dir under data_dir/users/.
+    """
+    specs = load_users(users_path)
+    sem = asyncio.Semaphore(max_parallel)
+
+    async def _one(spec: user_profile.UserSpec) -> dict[str, Any]:
+        async with sem:
+            user_data = user_profile.user_data_dir(data_dir, spec.user_id)
+            try:
+                return await _run_one_user_async(
+                    spec,
+                    data_dir=user_data,
+                    limit=limit,
+                    body_preview_chars=body_preview_chars,
+                    per_user_timeout=per_user_timeout,
+                    providers=providers,
+                    shared_runtime=shared_runtime,
+                )
+            except Exception as exc:
+                logger.exception("user %s unexpected error", spec.user_id)
+                return output.format_user_failure(
+                    user_id=spec.user_id,
+                    error_code="internal",
+                    error_detail=f"{type(exc).__name__}: {exc}",
+                )
+
+    return await asyncio.gather(*[_one(s) for s in specs])
