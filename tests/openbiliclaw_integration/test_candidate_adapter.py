@@ -13,12 +13,16 @@ from heated_topics_v3.openbiliclaw_integration import candidate_adapter
 
 @pytest.fixture
 def juejin_articles(fixtures_dir: Path) -> list[dict[str, Any]]:
-    return json.loads((fixtures_dir / "articles_juejin_5.json").read_text(encoding="utf-8"))["articles"]
+    return json.loads(
+        (fixtures_dir / "articles_juejin_5.json").read_text(encoding="utf-8")
+    )["articles"]
 
 
 @pytest.fixture
 def zhihu_articles(fixtures_dir: Path) -> list[dict[str, Any]]:
-    return json.loads((fixtures_dir / "articles_zhihu_3.json").read_text(encoding="utf-8"))["articles"]
+    return json.loads(
+        (fixtures_dir / "articles_zhihu_3.json").read_text(encoding="utf-8")
+    )["articles"]
 
 
 def test_to_discovered_maps_basic_fields(juejin_articles: list[dict]) -> None:
@@ -47,7 +51,9 @@ def test_to_discovered_includes_body_text(juejin_articles: list[dict]) -> None:
     assert "零信任" in items[0].body_text
 
 
-def test_to_discovered_uses_platform_namespaced_item_key(juejin_articles: list[dict]) -> None:
+def test_to_discovered_uses_platform_namespaced_item_key(
+    juejin_articles: list[dict],
+) -> None:
     items = candidate_adapter.to_discovered(juejin_articles, platform="juejin")
     assert items[0].item_key.startswith("juejin:")
     assert "712345" in items[0].item_key

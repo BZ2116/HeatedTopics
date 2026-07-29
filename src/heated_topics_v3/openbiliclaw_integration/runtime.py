@@ -21,6 +21,7 @@ def load_openbiliclaw_config(path: str | Path) -> Any | None:
         return None
     try:
         from openbiliclaw.config import load_config  # type: ignore
+
         return load_config(p)
     except Exception as exc:
         logger.warning("Failed to load OpenBiliClaw config from %s: %s", p, exc)
@@ -59,6 +60,7 @@ def check_env() -> list[str]:
 def check_ollama(base_url: str = "http://127.0.0.1:11434") -> tuple[bool, str]:
     """Check that Ollama is reachable. Returns (ok, message)."""
     import httpx
+
     try:
         r = httpx.get(f"{base_url}/api/tags", timeout=2.0)
         if r.status_code != 200:
@@ -66,7 +68,10 @@ def check_ollama(base_url: str = "http://127.0.0.1:11434") -> tuple[bool, str]:
         tags = r.json().get("models", [])
         names = {t.get("name", "").split(":")[0] for t in tags}
         if "bge-m3" not in names:
-            return False, f"Ollama at {base_url} has no 'bge-m3' model; run `ollama pull bge-m3`"
+            return (
+                False,
+                f"Ollama at {base_url} has no 'bge-m3' model; run `ollama pull bge-m3`",
+            )
         return True, "ok"
     except Exception as exc:
         return False, f"Ollama at {base_url} unreachable: {exc}"

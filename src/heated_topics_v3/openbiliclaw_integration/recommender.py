@@ -10,7 +10,11 @@ from typing import Any
 
 from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
-from heated_topics_v3.openbiliclaw_integration import candidate_adapter, output, user_profile
+from heated_topics_v3.openbiliclaw_integration import (
+    candidate_adapter,
+    output,
+    user_profile,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,27 +56,35 @@ def _build_provider(platform: str) -> Any | None:
     )
     if platform == "juejin":
         from heated_topics_v3.providers.juejin import JuejinProvider
+
         return JuejinProvider(client), client
     if platform == "toutiao":
         from heated_topics_v3.providers.toutiao import ToutiaoProvider
+
         return ToutiaoProvider(client), client
     if platform == "baidu_hot":
         from heated_topics_v3.providers.baidu_hot import BaiduHotProvider
+
         return BaiduHotProvider(client), client
     if platform == "zhihu_hot":
         from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
+
         return ZhihuHotProvider(client, ""), client
     if platform == "zhihu_daily":
         from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
+
         return ZhihuDailyProvider(client), client
     if platform == "sina_news":
         from heated_topics_v3.providers.sina_news import SinaNewsProvider
+
         return SinaNewsProvider(client), client
     if platform == "thepaper":
         from heated_topics_v3.providers.thepaper import ThePaperProvider
+
         return ThePaperProvider(client), client
     if platform == "netease_news":
         from heated_topics_v3.providers.netease_news import NeteaseNewsProvider
+
         return NeteaseNewsProvider(client), client
     try:
         client.close()
@@ -156,7 +168,9 @@ def fetch_candidates(
                 except Exception as exc:
                     logger.debug(
                         "provider %s.fetch_detail(%s) failed: %s",
-                        platform, item.item_id, exc,
+                        platform,
+                        item.item_id,
+                        exc,
                     )
                     detail = None
                 article = _hotitem_to_article(item, detail, platform)
@@ -224,9 +238,9 @@ def build_recommender(
     (shared_runtime). Database, MemoryManager, and RecommendationEngine
     are per-user.
     """
+    from openbiliclaw.memory.manager import MemoryManager
     from openbiliclaw.recommendation.engine import RecommendationEngine
     from openbiliclaw.storage.database import Database
-    from openbiliclaw.memory.manager import MemoryManager
 
     if shared_runtime is None:
         shared_runtime = _build_shared_runtime(shared_data_dir=data_dir.parent)
@@ -267,11 +281,18 @@ async def _run_one_user_async(
             error_code="no_candidates",
             error_detail=f"Fetched 0 articles from providers={providers or 'all'}",
         )
-    candidates = candidate_adapter.to_discovered(articles, platform=articles[0].get("platform", "juejin") if isinstance(articles[0], dict) and "platform" in articles[0] else "juejin")
+    candidates = candidate_adapter.to_discovered(
+        articles,
+        platform=articles[0].get("platform", "juejin")
+        if isinstance(articles[0], dict) and "platform" in articles[0]
+        else "juejin",
+    )
     # If articles don't carry 'platform' per-item, attribute by provider list order.
     if not any(isinstance(a, dict) and "platform" in a for a in articles):
         if providers and len(providers) == 1:
-            candidates = candidate_adapter.to_discovered(articles, platform=providers[0])
+            candidates = candidate_adapter.to_discovered(
+                articles, platform=providers[0]
+            )
     profile = user_profile.build_onion_profile(spec)
     engine = build_recommender(
         spec,
@@ -286,7 +307,8 @@ async def _run_one_user_async(
             )
     except TimeoutError:
         return output.format_user_failure(
-            user_id=spec.user_id, error_code="timeout",
+            user_id=spec.user_id,
+            error_code="timeout",
             error_detail=f"exceeded {per_user_timeout}s",
         )
     except Exception as exc:
@@ -303,7 +325,9 @@ async def _run_one_user_async(
             error_detail="Engine returned 0 recommendations",
         )
     rec_dicts = [
-        output.format_recommendation(rec, rank=i + 1, body_preview_chars=body_preview_chars)
+        output.format_recommendation(
+            rec, rank=i + 1, body_preview_chars=body_preview_chars
+        )
         for i, rec in enumerate(recommendations)
     ]
     user_summary = output.format_user_success_summary(

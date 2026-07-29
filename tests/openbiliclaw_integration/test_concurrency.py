@@ -31,7 +31,8 @@ async def test_run_all_users_serial_default(tmp_path: Path) -> None:
     users_p = tmp_path / "users.json"
     users_p.write_text(json.dumps(_users(3), ensure_ascii=False), encoding="utf-8")
     with patch.object(
-        recommender, "_run_one_user_async",
+        recommender,
+        "_run_one_user_async",
         new_callable=AsyncMock,
         side_effect=[
             {"user_id": "u0", "recommendations": []},
@@ -66,8 +67,10 @@ async def test_run_all_users_parallel_respects_cap(tmp_path: Path) -> None:
         return {"user_id": spec.user_id, "recommendations": []}
 
     with patch.object(
-        recommender, "_run_one_user_async",
-        new_callable=AsyncMock, side_effect=fake_run,
+        recommender,
+        "_run_one_user_async",
+        new_callable=AsyncMock,
+        side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
             users_path=users_p, data_dir=tmp_path, max_parallel=3
@@ -88,8 +91,10 @@ async def test_run_all_users_isolates_failures(tmp_path: Path) -> None:
         return {"user_id": spec.user_id, "recommendations": []}
 
     with patch.object(
-        recommender, "_run_one_user_async",
-        new_callable=AsyncMock, side_effect=fake_run,
+        recommender,
+        "_run_one_user_async",
+        new_callable=AsyncMock,
+        side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
             users_path=users_p, data_dir=tmp_path, max_parallel=2

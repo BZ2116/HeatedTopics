@@ -12,8 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from heated_topics_v3.openbiliclaw_integration import cli, runtime
-
+from heated_topics_v3.openbiliclaw_integration import cli
 
 pytestmark = pytest.mark.requires_llm
 
@@ -39,19 +38,33 @@ def require_ollama() -> None:
 
 
 def test_acceptance_one_user_juejin(tmp_path: Path) -> None:
-    users = {"users": [
-        {"user_id": "u_acc", "display_name": "Acceptance",
-         "interests": [{"name": "Rust", "category": "Rust", "weight": 0.9}],
-         "disliked_topics": ["财经"]}
-    ]}
+    users = {
+        "users": [
+            {
+                "user_id": "u_acc",
+                "display_name": "Acceptance",
+                "interests": [{"name": "Rust", "category": "Rust", "weight": 0.9}],
+                "disliked_topics": ["财经"],
+            }
+        ]
+    }
     up = tmp_path / "users.json"
     up.write_text(__import__("json").dumps(users, ensure_ascii=False), encoding="utf-8")
     out = tmp_path / "recs.json"
-    code = cli.main([
-        "--users", str(up), "--output", str(out),
-        "--max-parallel", "1", "--limit", "5",
-        "--providers", "juejin",
-    ])
+    code = cli.main(
+        [
+            "--users",
+            str(up),
+            "--output",
+            str(out),
+            "--max-parallel",
+            "1",
+            "--limit",
+            "5",
+            "--providers",
+            "juejin",
+        ]
+    )
     assert code == 0
     data = __import__("json").loads(out.read_text(encoding="utf-8"))
     user = data["users"][0]

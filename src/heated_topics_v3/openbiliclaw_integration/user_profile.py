@@ -13,12 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from openbiliclaw.soul.profile import (
-    AwarenessNote,
-    InsightHypothesis,
-    InterestTag,
     OnionProfile,
-    StylePreference,
-    ContextMode,
 )
 
 from heated_topics_v3.openbiliclaw_integration.exceptions import ProfileValidationError

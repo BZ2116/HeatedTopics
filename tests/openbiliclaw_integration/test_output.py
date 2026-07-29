@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
-
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
 
@@ -91,7 +88,9 @@ def test_format_recommendation_handles_missing_optional_fields() -> None:
         content_url="u",
         source_platform="juejin",
     )
-    rec = Recommendation(content=item, expression="", topic_label="", confidence=0.0, presented=False)
+    rec = Recommendation(
+        content=item, expression="", topic_label="", confidence=0.0, presented=False
+    )
     d = output.format_recommendation(rec, rank=1, body_preview_chars=800)
     assert d["body_text_preview"] == ""
     assert d["body_text_length"] == 0
@@ -130,9 +129,7 @@ def test_format_user_success_summary() -> None:
 
 def test_full_envelope() -> None:
     rec = _make_recommendation()
-    user = output.format_user_success_summary(
-        "u_x", "X", 1, 0, 10, 10, 10, False
-    )
+    user = output.format_user_success_summary("u_x", "X", 1, 0, 10, 10, 10, False)
     user["recommendations"] = [
         output.format_recommendation(rec, rank=1, body_preview_chars=800)
     ]

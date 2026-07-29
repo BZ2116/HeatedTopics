@@ -32,6 +32,7 @@ packages = ["src/heated_topics_v3"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24",
+    "ruff>=0.16.0",
 ]
 
 [tool.pytest.ini_options]
@@ -40,3 +41,23 @@ markers = [
     "requires_ollama: requires Ollama with bge-m3",
 ]
 asyncio_mode = "auto"
+
+[tool.ruff]
+# Integration layer uses defensive patterns intentionally:
+#   BLE001/S110: providers/ollama may raise arbitrary exceptions; we log + skip.
+#   SIM102: nested-if kept readable for per-platform branching.
+#   PLW1510: subprocess calls are best-effort guards with explicit timeout.
+#   E501: long error message strings + test fixture lines kept for readability.
+line-length = 88
+lint.select = ["E", "F", "I", "RUF", "UP"]
+lint.ignore = [
+    "BLE001",
+    "E501",
+    "PLW1510",
+    "S110",
+    "SIM102",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test fixtures legitimately use CJK punctuation and long embedded strings.
+"tests/**" = ["RUF001"]

@@ -11,7 +11,9 @@ from heated_topics_v3.openbiliclaw_integration import user_profile
 from heated_topics_v3.openbiliclaw_integration.exceptions import ProfileValidationError
 
 
-def test_load_users_returns_list_of_user_specs(tmp_path: Path, users_valid_3users: dict) -> None:
+def test_load_users_returns_list_of_user_specs(
+    tmp_path: Path, users_valid_3users: dict
+) -> None:
     p = tmp_path / "users.json"
     p.write_text(json.dumps(users_valid_3users, ensure_ascii=False), encoding="utf-8")
     specs = user_profile.load_users(p)
@@ -55,14 +57,23 @@ def test_load_users_raises_on_missing_top_level_users_key(tmp_path: Path) -> Non
 
 
 def test_user_spec_interest_weight_out_of_range_raises(tmp_path: Path) -> None:
-    bad = {"users": [{"user_id": "x", "interests": [{"name": "a", "category": "a", "weight": 1.5}]}]}
+    bad = {
+        "users": [
+            {
+                "user_id": "x",
+                "interests": [{"name": "a", "category": "a", "weight": 1.5}],
+            }
+        ]
+    }
     p = tmp_path / "bad.json"
     p.write_text(json.dumps(bad), encoding="utf-8")
     with pytest.raises(ProfileValidationError):
         user_profile.load_users(p)
 
 
-def test_build_onion_profile_populates_layers(tmp_path: Path, users_valid_3users: dict) -> None:
+def test_build_onion_profile_populates_layers(
+    tmp_path: Path, users_valid_3users: dict
+) -> None:
     p = tmp_path / "users.json"
     p.write_text(json.dumps(users_valid_3users, ensure_ascii=False), encoding="utf-8")
     specs = user_profile.load_users(p)

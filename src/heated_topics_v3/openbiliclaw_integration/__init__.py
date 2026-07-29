@@ -6,11 +6,11 @@ as JSON input and producing per-user top-N recommendations as JSON output.
 """
 
 __all__ = [
-    "exceptions",
-    "user_profile",
     "candidate_adapter",
+    "cli",
+    "exceptions",
     "output",
     "recommender",
     "runtime",
-    "cli",
+    "user_profile",
 ]

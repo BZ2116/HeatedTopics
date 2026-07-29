@@ -12,7 +12,6 @@ import pytest
 
 from heated_topics_v3.openbiliclaw_integration import cli
 
-
 pytestmark = pytest.mark.requires_llm
 
 
@@ -32,19 +31,33 @@ def require_llm() -> None:
 
 
 def test_acceptance_embedding_degraded(tmp_path: Path) -> None:
-    users = {"users": [
-        {"user_id": "u_deg", "interests": [{"name": "Rust", "category": "Rust", "weight": 0.9}]}
-    ]}
+    users = {
+        "users": [
+            {
+                "user_id": "u_deg",
+                "interests": [{"name": "Rust", "category": "Rust", "weight": 0.9}],
+            }
+        ]
+    }
     up = tmp_path / "users.json"
     up.write_text(json.dumps(users, ensure_ascii=False), encoding="utf-8")
     out = tmp_path / "recs.json"
     _stop_ollama()
     try:
-        code = cli.main([
-            "--users", str(up), "--output", str(out),
-            "--max-parallel", "1", "--limit", "3",
-            "--providers", "juejin",
-        ])
+        code = cli.main(
+            [
+                "--users",
+                str(up),
+                "--output",
+                str(out),
+                "--max-parallel",
+                "1",
+                "--limit",
+                "3",
+                "--providers",
+                "juejin",
+            ]
+        )
     finally:
         # Best-effort restart
         try:

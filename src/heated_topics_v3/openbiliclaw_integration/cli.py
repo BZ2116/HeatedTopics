@@ -7,8 +7,9 @@ import asyncio
 import json
 import logging
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from heated_topics_v3.openbiliclaw_integration import output, recommender, runtime
 from heated_topics_v3.openbiliclaw_integration.exceptions import ProfileValidationError
@@ -26,28 +27,37 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--output", required=True, help="Path to write recommendations.json")
     p.add_argument("--limit", type=int, default=10, help="Top-N per user (default 10)")
     p.add_argument(
-        "--max-parallel", type=int, default=5,
+        "--max-parallel",
+        type=int,
+        default=5,
         help="Max concurrent users (default 5; 1 = serial)",
     )
     p.add_argument(
-        "--providers", default=None,
+        "--providers",
+        default=None,
         help="Comma-separated provider list (default: all)",
         type=lambda s: [x for x in s.split(",") if x],
     )
     p.add_argument(
-        "--body-preview-chars", type=int, default=800,
+        "--body-preview-chars",
+        type=int,
+        default=800,
         help="body_text_preview truncation length (default 800)",
     )
     p.add_argument(
-        "--config", default="config/openbiliclaw.toml",
+        "--config",
+        default="config/openbiliclaw.toml",
         help="OpenBiliClaw config path (default config/openbiliclaw.toml)",
     )
     p.add_argument(
-        "--data-dir", default="data",
+        "--data-dir",
+        default="data",
         help="Per-user data root (default data/)",
     )
     p.add_argument(
-        "--per-user-timeout", type=float, default=60.0,
+        "--per-user-timeout",
+        type=float,
+        default=60.0,
         help="Per-user timeout in seconds (default 60)",
     )
     return p.parse_args(list(argv))
@@ -68,7 +78,9 @@ def run_all_users_sync(**kwargs: Any) -> list[dict[str, Any]]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry. Returns process exit code."""
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     args = parse_args(argv if argv is not None else sys.argv[1:])
 
     # Fail-fast checks
@@ -115,7 +127,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         tmp = output_path.with_suffix(output_path.suffix + ".tmp")
-        tmp.write_text(json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.write_text(
+            json.dumps(envelope, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         tmp.replace(output_path)
     except OSError as exc:
         logger.error("failed to write %s: %s", output_path, exc)
