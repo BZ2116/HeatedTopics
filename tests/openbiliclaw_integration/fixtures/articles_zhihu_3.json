@@ -1,0 +1,35 @@
+{
+  "platform": "zhihu",
+  "articles": [
+    {
+      "article_id": "q_987654",
+      "title": "零信任架构在企业落地的 5 个坑",
+      "url": "https://www.zhihu.com/question/987654",
+      "author": "网安布道者",
+      "body_text": "我们团队去年推零信任，踩了 5 个明显的坑...",
+      "published_at": "2026-07-22T15:00:00Z",
+      "tags": ["零信任", "网安", "企业"],
+      "heat": {"view": 45000, "like": 1200, "comment": 380, "rank": 2}
+    },
+    {
+      "article_id": "q_987655",
+      "title": "Rust 在嵌入式开发中的现状",
+      "url": "https://www.zhihu.com/question/987655",
+      "author": "embedded_rust",
+      "body_text": "Rust 在嵌入式领域已经有 5 年历史了...",
+      "published_at": "2026-07-23T11:00:00Z",
+      "tags": ["Rust", "嵌入式"],
+      "heat": {"view": 12300, "like": 234, "comment": 67, "rank": 4}
+    },
+    {
+      "article_id": "q_987656",
+      "title": "RAG 系统的 7 种注入攻击",
+      "url": "https://www.zhihu.com/question/987656",
+      "author": "llm_security",
+      "body_text": "RAG 系统的攻击面比想象的大...",
+      "published_at": "2026-07-25T09:00:00Z",
+      "tags": ["LLM", "网安", "RAG"],
+      "heat": {"view": 38000, "like": 980, "comment": 250, "rank": 3}
+    }
+  ]
+}

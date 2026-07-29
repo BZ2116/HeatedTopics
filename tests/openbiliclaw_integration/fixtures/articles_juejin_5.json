@@ -1,0 +1,55 @@
+{
+  "platform": "juejin",
+  "articles": [
+    {
+      "article_id": "712345",
+      "title": "用 Tokio 实现零信任网关：源码级拆解",
+      "url": "https://juejin.cn/post/712345",
+      "author": "rustacean_daily",
+      "body_text": "本文从零开始拆解一个基于 Tokio 的零信任网关实现...",
+      "published_at": "2026-07-25T10:00:00Z",
+      "tags": ["Rust", "Tokio", "网安"],
+      "heat": {"view": 12345, "like": 234, "comment": 56, "rank": 3}
+    },
+    {
+      "article_id": "712346",
+      "title": "Rust 异步运行时对比：Tokio vs async-std",
+      "url": "https://juejin.cn/post/712346",
+      "author": "async_explorer",
+      "body_text": "两个 runtime 的设计哲学差异...",
+      "published_at": "2026-07-24T08:00:00Z",
+      "tags": ["Rust", "async"],
+      "heat": {"view": 8901, "like": 156, "comment": 32, "rank": 5}
+    },
+    {
+      "article_id": "712347",
+      "title": "财经快讯：本周市场热点",
+      "url": "https://juejin.cn/post/712347",
+      "author": "finance_bot",
+      "body_text": "本周市场热点摘要...",
+      "published_at": "2026-07-26T03:00:00Z",
+      "tags": ["财经"],
+      "heat": {"view": 50230, "like": 100, "comment": 200, "rank": 1}
+    },
+    {
+      "article_id": "712348",
+      "title": "TypeScript 5.4 新特性",
+      "url": "https://juejin.cn/post/712348",
+      "author": "ts_news",
+      "body_text": "TypeScript 5.4 引入的新语法...",
+      "published_at": "2026-07-26T12:00:00Z",
+      "tags": ["TypeScript"],
+      "heat": {"view": 6700, "like": 89, "comment": 12, "rank": 8}
+    },
+    {
+      "article_id": "712349",
+      "title": "娱乐八卦：本周热搜",
+      "url": "https://juejin.cn/post/712349",
+      "author": "gossip",
+      "body_text": "本周娱乐圈热门...",
+      "published_at": "2026-07-27T01:00:00Z",
+      "tags": ["娱乐"],
+      "heat": {"view": 99999, "like": 200, "comment": 500, "rank": 1}
+    }
+  ]
+}
