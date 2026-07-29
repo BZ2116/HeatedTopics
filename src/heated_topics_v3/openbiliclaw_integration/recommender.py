@@ -389,11 +389,10 @@ async def run_all_users(
 
     async def _one(spec: user_profile.UserSpec) -> dict[str, Any]:
         async with sem:
-            user_data = user_profile.user_data_dir(data_dir, spec.user_id)
             try:
                 return await _run_one_user_async(
                     spec,
-                    data_dir=user_data,
+                    data_dir=data_dir,
                     limit=limit,
                     body_preview_chars=body_preview_chars,
                     per_user_timeout=per_user_timeout,

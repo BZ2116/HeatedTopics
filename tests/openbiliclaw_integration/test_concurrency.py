@@ -102,3 +102,35 @@ async def test_run_all_users_isolates_failures(tmp_path: Path) -> None:
     assert len(results) == 3
     assert any(r.get("error") == "boom" for r in results)
     assert sum(1 for r in results if "error" not in r) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_all_users_passes_raw_data_dir_no_double_nest(
+    tmp_path: Path,
+) -> None:
+    """Regression: ``_run_one_user_async`` must receive the raw data_dir, not
+    a per-user subpath. Per-user isolation is its job, not the orchestrator's.
+    Otherwise we get ``data_dir/users/<id>/users/<id>/...``.
+    """
+    users_p = tmp_path / "users.json"
+    users_p.write_text(json.dumps(_users(2), ensure_ascii=False), encoding="utf-8")
+
+    captured: list[Path] = []
+
+    async def fake_run(spec, **kwargs):
+        captured.append(kwargs["data_dir"])
+        return {"user_id": spec.user_id, "recommendations": []}
+
+    with patch.object(
+        recommender,
+        "_run_one_user_async",
+        new_callable=AsyncMock,
+        side_effect=fake_run,
+    ):
+        await recommender.run_all_users(
+            users_path=users_p, data_dir=tmp_path, max_parallel=2
+        )
+
+    assert len(captured) == 2
+    for d in captured:
+        assert d == tmp_path, f"expected raw data_dir {tmp_path}, got {d}"
