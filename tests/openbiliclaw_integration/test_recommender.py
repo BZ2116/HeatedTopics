@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
 
@@ -143,3 +144,64 @@ def test_run_one_user_isolated_engine_per_user(
     assert len(engines) == 3
     # Each user gets a distinct data_dir
     assert len({d for _, d in engines}) == 3
+
+
+def test_run_one_user_propagates_rank_to_confidence(
+    tmp_path: Path, users_valid_3users: dict
+) -> None:
+    """End-to-end-ish: fetch_candidates returns articles with various ranks,
+    the engine mirrors real OpenBiliClaw behavior (sets ``confidence`` from
+    ``content.relevance_score``), and the output dict reflects the non-zero
+    confidence. Regression for the ``confidence: 0.0`` bug where
+    candidate_adapter never set relevance_score.
+    """
+    from heated_topics_v3.openbiliclaw_integration import candidate_adapter
+
+    users_p = tmp_path / "users.json"
+    users_p.write_text(
+        json.dumps(users_valid_3users, ensure_ascii=False), encoding="utf-8"
+    )
+    articles = [
+        {**_mock_article(article_id=f"a{i}"), "heat": {"rank": i}}
+        for i in (1, 2, 5, 10)
+    ]
+
+    captured: list[DiscoveredContent] = []
+
+    async def fake_serve(profile, candidates, **kwargs):
+        captured.extend(candidates)
+        # Mirror what the real engine does:
+        # confidence = item.relevance_score
+        return [
+            Recommendation(
+                content=item,
+                expression=f"rec for {item.content_id}",
+                topic_label="t",
+                confidence=item.relevance_score,
+                presented=False,
+            )
+            for item in candidates
+        ]
+
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(side_effect=fake_serve)
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(recommender, "fetch_candidates", return_value=articles),
+    ):
+        spec = recommender.load_users(users_p)[0]
+        result = recommender.run_one_user(spec, data_dir=tmp_path / "runtime", limit=5)
+
+    # Adapter received the rank and mapped it to relevance_score.
+    assert len(captured) == 4
+    by_rank = {item.source_rank: item for item in captured}
+    assert by_rank[1].relevance_score == 1.0
+    assert by_rank[2].relevance_score == 0.5
+    assert by_rank[5].relevance_score == 0.2
+    assert by_rank[10].relevance_score == 0.1
+
+    # Confidence on the output reflects the rank-derived relevance_score.
+    confidences = [r["confidence"] for r in result["recommendations"]]
+    assert all(c > 0.0 for c in confidences), confidences
+    assert max(confidences) == pytest.approx(1.0)

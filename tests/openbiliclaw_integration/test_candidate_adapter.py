@@ -97,3 +97,43 @@ def test_to_discovered_handles_missing_heat_field() -> None:
     items = candidate_adapter.to_discovered(articles, platform="juejin")
     assert items[0].view_count == 0
     assert items[0].like_count == 0
+
+
+def test_to_discovered_maps_rank_to_relevance_score(juejin_articles: list[dict]) -> None:
+    """rank 1 -> 1.0, rank 2 -> 0.5, rank 5 -> 0.2. Ensures confidence field
+    on returned Recommendations is non-zero. Mirrors the OpenBiliClaw
+    relevance_score floor (0.01) so the engine never sees a zero score.
+    """
+    items = candidate_adapter.to_discovered(juejin_articles, platform="juejin")
+    by_rank = {item.source_rank: item for item in items}
+    assert by_rank[1].relevance_score == pytest.approx(1.0)
+    assert by_rank[3].relevance_score == pytest.approx(1.0 / 3)
+    assert by_rank[5].relevance_score == pytest.approx(0.2)
+    assert by_rank[8].relevance_score == pytest.approx(0.125)
+
+
+def test_to_discovered_relevance_score_floor_on_missing_rank() -> None:
+    articles = [
+        {
+            "article_id": "1",
+            "title": "no rank",
+            "url": "https://x.com/1",
+            "body_text": "x",
+        }
+    ]
+    items = candidate_adapter.to_discovered(articles, platform="juejin")
+    assert items[0].relevance_score == pytest.approx(0.01)
+
+
+def test_to_discovered_relevance_score_floor_on_zero_rank() -> None:
+    articles = [
+        {
+            "article_id": "1",
+            "title": "rank zero",
+            "url": "https://x.com/1",
+            "body_text": "x",
+            "heat": {"rank": 0},
+        }
+    ]
+    items = candidate_adapter.to_discovered(articles, platform="juejin")
+    assert items[0].relevance_score == pytest.approx(0.01)

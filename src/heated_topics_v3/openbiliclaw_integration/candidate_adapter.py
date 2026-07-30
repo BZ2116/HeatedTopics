@@ -10,6 +10,28 @@ from heated_topics_v3.openbiliclaw_integration.exceptions import CandidateMappin
 
 _REQUIRED_FIELDS = ("article_id", "title", "url", "body_text")
 
+# Floor mirrors the OpenBiliClaw engine: classification_failed rows use 0.01
+# so callers can distinguish "never evaluated" from "evaluated but low score".
+_RELEVANCE_FLOOR = 0.01
+
+
+def _rank_to_relevance(rank: int) -> float:
+    """Map a 1-based hot-list rank to a relevance score in [0.01, 1.0].
+
+    Top items dominate: rank 1 -> 1.0, rank 2 -> 0.5, rank 5 -> 0.2, rank 10 -> 0.1,
+    rank 100 -> 0.01 (floor). Missing/zero rank -> floor.
+
+    The OpenBiliClaw engine's serve_external_candidates selector falls back
+    to ``item.relevance_score`` when no curator is attached (the heatedTopics
+    integration never passes one), and the ``Recommendation.confidence``
+    field reads ``relevance_score`` verbatim. Without this mapping every
+    candidate's relevance_score is 0.0, the MMR diversifier degenerates to
+    diversity-only selection, and confidence always reports as 0.0.
+    """
+    if rank <= 0:
+        return _RELEVANCE_FLOOR
+    return max(_RELEVANCE_FLOOR, min(1.0, 1.0 / rank))
+
 
 def to_discovered(
     articles: list[dict[str, Any]],
@@ -34,6 +56,7 @@ def to_discovered(
         if missing:
             continue
         heat = raw.get("heat") or {}
+        rank = int(heat.get("rank", 0))
         item = DiscoveredContent(
             title=str(raw["title"]),
             content_id=str(raw["article_id"]),
@@ -49,7 +72,8 @@ def to_discovered(
             comment_count=int(heat.get("comment", 0)),
             favorite_count=int(heat.get("favorite", 0)),
             share_count=int(heat.get("share", 0)),
-            source_rank=int(heat.get("rank", 0)),
+            source_rank=rank,
+            relevance_score=_rank_to_relevance(rank),
             content_type="note",
         )
         out.append(item)
