@@ -61,7 +61,7 @@ def to_discovered(
             title=str(raw["title"]),
             content_id=str(raw["article_id"]),
             content_url=str(raw["url"]),
-            source_platform=platform,
+            source_platform=str(raw.get("platform") or platform),
             body_text=str(raw["body_text"]),
             description=str(raw.get("summary", raw.get("description", ""))),
             author_name=str(raw.get("author", "")),

@@ -137,3 +137,40 @@ def test_to_discovered_relevance_score_floor_on_zero_rank() -> None:
     ]
     items = candidate_adapter.to_discovered(articles, platform="juejin")
     assert items[0].relevance_score == pytest.approx(0.01)
+
+
+def test_to_discovered_uses_per_article_platform_when_present() -> None:
+    """When an article carries its own ``platform`` (set by the provider
+    fetcher in ``_hotitem_to_article``), use it. Fall back to the function
+    arg only when missing. Regression: previously all articles inherited
+    the first article's platform, collapsing toutiao/zhihu/bilibili into
+    one source and making MMR diversity blind to actual content mix.
+    """
+    articles = [
+        {
+            "article_id": "1",
+            "title": "toutiao item",
+            "url": "https://t.com/1",
+            "body_text": "x",
+            "platform": "toutiao",
+        },
+        {
+            "article_id": "2",
+            "title": "bilibili item",
+            "url": "https://b.com/2",
+            "body_text": "x",
+            "platform": "dailyhot:bilibili",
+        },
+        {
+            "article_id": "3",
+            "title": "no platform key",
+            "url": "https://x.com/3",
+            "body_text": "x",
+        },
+    ]
+    items = candidate_adapter.to_discovered(articles, platform="toutiao")
+    by_id = {item.content_id: item for item in items}
+    assert by_id["1"].source_platform == "toutiao"
+    assert by_id["2"].source_platform == "dailyhot:bilibili"
+    # Item 3 has no platform key — should fall back to the arg.
+    assert by_id["3"].source_platform == "toutiao"
