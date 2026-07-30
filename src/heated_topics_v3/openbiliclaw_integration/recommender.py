@@ -190,15 +190,68 @@ def _call_provider_search(
     return provider.search(keyword, 1)
 
 
+def _is_hot_relevant(article: dict[str, Any], interests: Any) -> bool:
+    """Loose relevance: any interest name appears in title/body/summary.
+
+    Cheap stand-in for "does this hot-list item actually match what the
+    user cares about". Embedding similarity would be more accurate but
+    costs an extra LLM/embedding round-trip per hot item; the keyword
+    check is a 0-cost filter that catches obvious mismatches like
+    "解放军警告" vs interests = ["非遗", "地方习俗"…].
+    """
+    if not interests:
+        return False
+    title = article.get("title") or ""
+    body_text = article.get("body_text") or ""
+    summary = article.get("summary") or ""
+    haystack = f"{title} {body_text} {summary}".lower()
+    if not haystack.strip():
+        return False
+    return any(i.name.lower() in haystack for i in interests)
+
+
+def _rebalance_pool(
+    hot: list[dict[str, Any]],
+    search: list[dict[str, Any]],
+    interests: Any,
+    target_limit: int,
+    prefer_search: bool,
+) -> list[dict[str, Any]]:
+    """Build the final candidate pool. Search is trusted over hot when
+    prefer_search=True; hot-list items that don't mention the user's
+    interests are dropped so the engine's MMR doesn't get pulled back to
+    generic-news top picks.
+    """
+    if not prefer_search:
+        return hot + search
+    relevant_hot = [a for a in hot if _is_hot_relevant(a, interests)]
+    other_hot = [a for a in hot if not _is_hot_relevant(a, interests)]
+    plenty = target_limit * 4  # search-only pool > 4× limit = drop hot
+    enough = target_limit  # search >= limit: keep some relevant_hot for variety
+    target_pool_size = max(40, target_limit * 4)
+    if len(search) >= plenty:
+        return list(search)[:target_pool_size]
+    pool: list[dict[str, Any]] = list(search)
+    if len(search) >= enough:
+        pool.extend(relevant_hot[:target_limit])
+    else:
+        pool.extend(relevant_hot)
+        if len(pool) < target_pool_size:
+            pool.extend(other_hot[: target_pool_size - len(pool)])
+    return pool[:target_pool_size]
+
+
 def fetch_candidates(
     spec: user_profile.UserSpec,
     *,
     providers: list[str] | None = None,
     data_dir: Path | None = None,
     use_search: bool = True,
+    prefer_search: bool = True,
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    target_limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Fetch hot articles for one user from V3 providers.
 
@@ -207,19 +260,21 @@ def fetch_candidates(
       2. Search (top-K interests × search-capable providers). Provides
          topic-aligned candidates that are *not* on today's hot board.
 
-    The two passes are merged with URL dedup so a search hit that also
-    appears on the hot list doesn't get duplicated. Search results carry
-    an extra ``search_query`` field for downstream inspection.
+    When ``prefer_search=True`` (default) the pool is built from search
+    first; hot-list items that don't mention any of the user's interests
+    are dropped unless we need them to backfill. URL dedup applies across
+    both passes. Search results carry an extra ``search_query`` field.
 
     Failures in individual providers or individual searches are isolated:
     one bad pair returns zero items rather than crashing the whole fetch.
     """
     enabled = list(providers) if providers else list(_DEFAULT_PROVIDERS)
     collected_at = datetime.now(SHANGHAI).isoformat()
-    out: list[dict[str, Any]] = []
     seen_urls: set[str] = set()
+    hot_articles: list[dict[str, Any]] = []
+    search_articles: list[dict[str, Any]] = []
 
-    def _add(article: dict[str, Any] | None) -> None:
+    def _add_to(bucket: list[dict[str, Any]], article: dict[str, Any] | None) -> None:
         if article is None:
             return
         url = article.get("url") or ""
@@ -227,7 +282,7 @@ def fetch_candidates(
             return
         if url:
             seen_urls.add(url)
-        out.append(article)
+        bucket.append(article)
 
     # --- Pass 1: hot list --------------------------------------------------
     for platform in enabled:
@@ -255,9 +310,11 @@ def fetch_candidates(
                         exc,
                     )
                     detail = None
-                _add(_hotitem_to_article(item, detail, platform))
+                _add_to(hot_articles, _hotitem_to_article(item, detail, platform))
             for item in items[_DETAIL_FETCH_CAP:]:
-                _add(_hotitem_to_article(item, None, platform))
+                _add_to(
+                    hot_articles, _hotitem_to_article(item, None, platform)
+                )
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -267,77 +324,89 @@ def fetch_candidates(
                     pass
 
     # --- Pass 2: search ---------------------------------------------------
-    if not use_search or not spec.interests:
-        return out
-    search_enabled = [
-        p
-        for p in (
-            list(search_providers) if search_providers else list(_SEARCH_PROVIDERS)
+    if use_search and spec.interests:
+        search_enabled = [
+            p
+            for p in (
+                list(search_providers)
+                if search_providers
+                else list(_SEARCH_PROVIDERS)
+            )
+            if p in enabled
+        ]
+        if search_enabled:
+            top_interests = sorted(
+                spec.interests, key=lambda i: i.weight, reverse=True
+            )[:search_top_k]
+            logger.info(
+                "search pass: providers=%s interests=%s",
+                search_enabled,
+                [i.name for i in top_interests],
+            )
+            for platform in search_enabled:
+                built = _build_provider(platform)
+                if built is None:
+                    continue
+                provider, client = built
+                try:
+                    for interest in top_interests:
+                        try:
+                            capture = _call_provider_search(
+                                provider,
+                                platform,
+                                interest.name,
+                                search_results_per_interest,
+                                collected_at,
+                            )
+                            items = capture.items[:search_results_per_interest]
+                        except Exception as exc:
+                            logger.warning(
+                                "search %s(%s) failed: %s",
+                                platform,
+                                interest.name,
+                                exc,
+                            )
+                            continue
+                        if not items:
+                            continue
+                        cap_items = items[:_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST]
+                        for item in cap_items:
+                            try:
+                                detail = provider.fetch_detail(item, collected_at)
+                            except Exception as exc:
+                                logger.debug(
+                                    "search %s.fetch_detail(%s) failed: %s",
+                                    platform,
+                                    item.item_id,
+                                    exc,
+                                )
+                                detail = None
+                            article = _hotitem_to_article(item, detail, platform)
+                            if article is not None:
+                                article["search_query"] = interest.name
+                            _add_to(search_articles, article)
+                        for item in items[_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST:]:
+                            article = _hotitem_to_article(item, None, platform)
+                            if article is not None:
+                                article["search_query"] = interest.name
+                            _add_to(search_articles, article)
+                finally:
+                    close = getattr(client, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:
+                            pass
+
+    if use_search:
+        return _rebalance_pool(
+            hot_articles,
+            search_articles,
+            spec.interests,
+            target_limit=target_limit,
+            prefer_search=prefer_search,
         )
-        if p in enabled
-    ]
-    if not search_enabled:
-        return out
-    top_interests = sorted(spec.interests, key=lambda i: i.weight, reverse=True)[
-        :search_top_k
-    ]
-    logger.info(
-        "search pass: providers=%s interests=%s",
-        search_enabled,
-        [i.name for i in top_interests],
-    )
-    for platform in search_enabled:
-        built = _build_provider(platform)
-        if built is None:
-            continue
-        provider, client = built
-        try:
-            for interest in top_interests:
-                try:
-                    capture = _call_provider_search(
-                        provider,
-                        platform,
-                        interest.name,
-                        search_results_per_interest,
-                        collected_at,
-                    )
-                    items = capture.items[:search_results_per_interest]
-                except Exception as exc:
-                    logger.warning(
-                        "search %s(%s) failed: %s", platform, interest.name, exc
-                    )
-                    continue
-                if not items:
-                    continue
-                cap_items = items[:_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST]
-                for item in cap_items:
-                    try:
-                        detail = provider.fetch_detail(item, collected_at)
-                    except Exception as exc:
-                        logger.debug(
-                            "search %s.fetch_detail(%s) failed: %s",
-                            platform,
-                            item.item_id,
-                            exc,
-                        )
-                        detail = None
-                    article = _hotitem_to_article(item, detail, platform)
-                    if article is not None:
-                        article["search_query"] = interest.name
-                    _add(article)
-                for item in items[_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST:]:
-                    article = _hotitem_to_article(item, None, platform)
-                    if article is not None:
-                        article["search_query"] = interest.name
-                    _add(article)
-        finally:
-            close = getattr(client, "close", None)
-            if callable(close):
-                try:
-                    close()
-                except Exception:
-                    pass
-    return out
+    return hot_articles
 
 
 def _build_shared_runtime(
@@ -435,6 +504,7 @@ async def _run_one_user_async(
     providers: list[str] | None,
     shared_runtime: Any | None,
     use_search: bool = True,
+    prefer_search: bool = True,
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
@@ -444,9 +514,11 @@ async def _run_one_user_async(
         spec,
         providers=providers,
         use_search=use_search,
+        prefer_search=prefer_search,
         search_providers=search_providers,
         search_top_k=search_top_k,
         search_results_per_interest=search_results_per_interest,
+        target_limit=limit,
     )
     if not articles:
         return output.format_user_failure(
@@ -528,6 +600,7 @@ def run_one_user(
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
     use_search: bool = True,
+    prefer_search: bool = True,
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
@@ -543,6 +616,7 @@ def run_one_user(
             providers=providers,
             shared_runtime=shared_runtime,
             use_search=use_search,
+            prefer_search=prefer_search,
             search_providers=search_providers,
             search_top_k=search_top_k,
             search_results_per_interest=search_results_per_interest,
@@ -562,6 +636,7 @@ async def run_all_users(
     shared_runtime: Any | None = None,
     config_path: Path | None = None,
     use_search: bool = True,
+    prefer_search: bool = True,
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
@@ -591,6 +666,7 @@ async def run_all_users(
                     providers=providers,
                     shared_runtime=shared_runtime,
                     use_search=use_search,
+                    prefer_search=prefer_search,
                     search_providers=search_providers,
                     search_top_k=search_top_k,
                     search_results_per_interest=search_results_per_interest,

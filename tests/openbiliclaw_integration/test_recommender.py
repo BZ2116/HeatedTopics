@@ -564,3 +564,309 @@ def test_fetch_candidates_search_only_runs_on_enabled_providers() -> None:
     assert toutiao_called["search"] == 2
     # 1 hot + 2 search = 3 articles.
     assert len(articles) == 3
+
+
+def test_is_hot_relevant_keyword_match() -> None:
+    interests = [user_profile.InterestSpec("非遗", "x", 0.9)]
+    relevant = {
+        "title": "苏绣：非遗手工的当代叙事",
+        "body_text": "讲讲非遗手艺的年轻人",
+        "summary": "",
+    }
+    irrelevant = {
+        "title": "解放军两次警告日方不能自称海军",
+        "body_text": "海上对峙的最新进展",
+        "summary": "",
+    }
+    assert recommender._is_hot_relevant(relevant, interests) is True
+    assert recommender._is_hot_relevant(irrelevant, interests) is False
+    assert recommender._is_hot_relevant(
+        {"title": "", "body_text": "", "summary": ""}, interests
+    ) is False
+    assert (
+        recommender._is_hot_relevant(
+            {"title": "x", "body_text": "y", "summary": ""}, []
+        )
+        is False
+    )
+
+
+def test_fetch_candidates_prefer_search_drops_irrelevant_hot_when_search_yields_plenty() -> None:
+    """When search produces many items (>= target_limit * 4), prefer_search
+    must drop ALL hot items regardless of relevance. Rationale: the user
+    explicitly said 'if hot didn't match, replace with search entirely'.
+    """
+    spec = _build_search_spec()
+
+    class ManySearchProvider:
+        platform = "toutiao"
+
+        def __init__(self) -> None:
+            pass
+
+        def collect_hot_list(self, collected_at):
+            # Three hot items, NONE mentioning any user interest
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(
+                    _make_hotitem("h1", "https://hot.com/h1", title="军事新闻"),
+                    _make_hotitem("h2", "https://hot.com/h2", title="南海局势"),
+                    _make_hotitem("h3", "https://hot.com/h3", title="台风快讯"),
+                ),
+                metadata={},
+            )
+
+        def fetch_detail(self, item, collected_at):
+            return ItemDetail(
+                item.item_id,
+                "zzz",
+                "full_text",
+                "",
+                collected_at,
+                item.url,
+                "success",
+            )
+
+        def search(self, keyword, page, page_size, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=tuple(
+                    _make_hotitem(
+                        f"{keyword}-{i}",
+                        f"https://search.com/{keyword}/{i}",
+                        title=f"zzz{i}",
+                    )
+                    for i in range(50)
+                ),
+                metadata={},
+            )
+
+    fake_client = MagicMock()
+    with patch.object(
+        recommender,
+        "_build_provider",
+        return_value=(ManySearchProvider(), fake_client),
+    ):
+        articles = recommender.fetch_candidates(
+            spec,
+            providers=["toutiao"],
+            search_top_k=3,
+            target_limit=5,
+            prefer_search=True,
+        )
+
+    # 3 interests × 5 (capped by search_results_per_interest) = 15 search
+    # < plenty (20), so the "enough" branch runs. Since none of the hot
+    # items mention any interest keyword, relevant_hot = [] and only the
+    # 15 search items are returned.
+    urls = [a["url"] for a in articles]
+    assert all("hot.com" not in u for u in urls), urls
+    assert all(a.get("search_query") for a in articles)
+    assert len(articles) == 15
+
+
+def test_fetch_candidates_prefer_search_drops_hot_when_search_far_exceeds_plenty() -> None:
+    """If search results per interest are bumped above plenty, the
+    plenty-branch drops ALL hot — proves the > 4× threshold works.
+    """
+    spec = _build_search_spec()
+
+    class Provider:
+        platform = "toutiao"
+
+        def collect_hot_list(self, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(
+                    _make_hotitem("h1", "https://hot.com/h1", title="zzz"),
+                ),
+                metadata={},
+            )
+
+        def fetch_detail(self, item, collected_at):
+            return ItemDetail(item.item_id, "zzz", "full_text", "", collected_at, item.url, "success")
+
+        def search(self, keyword, page, page_size, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=tuple(
+                    _make_hotitem(f"{keyword}-{i}", f"https://s.com/{i}", title="zzz")
+                    for i in range(20)
+                ),
+                metadata={},
+            )
+
+    fake = MagicMock()
+    with patch.object(recommender, "_build_provider", return_value=(Provider(), fake)):
+        articles = recommender.fetch_candidates(
+            spec,
+            providers=["toutiao"],
+            search_top_k=3,
+            target_limit=5,
+            search_results_per_interest=20,  # 3 × 20 = 60 > plenty(20) pre-dedup
+            prefer_search=True,
+        )
+    # Plenty branch: hot is fully dropped.
+    urls = [a["url"] for a in articles]
+    assert all("hot.com" not in u for u in urls), urls
+    # After URL dedup across 3 interests × 20 same-prefix URLs, exactly
+    # 20 unique search items remain.
+    assert len(articles) == 20
+
+
+def test_fetch_candidates_prefer_search_backfills_when_search_is_thin() -> None:
+    """When search is thin (< target_limit), backfill with relevant hot
+    items first; tail-fill with other_hot to reach the engine's pool size.
+    """
+    spec = user_profile.UserSpec(
+        user_id="u1",
+        display_name="U1",
+        interests=[user_profile.InterestSpec("非遗", "x", 0.9)],
+        disliked_topics=[],
+    )
+
+    class ThinSearchProvider:
+        platform = "toutiao"
+
+        def collect_hot_list(self, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(
+                    _make_hotitem("h_relevant_1", "https://r.com/1", title="非遗手工"),
+                    _make_hotitem(
+                        "h_relevant_2", "https://r.com/2", title="老手艺传承"
+                    ),
+                    _make_hotitem("h_other_1", "https://o.com/1", title="军事新闻"),
+                    _make_hotitem("h_other_2", "https://o.com/2", title="南海局势"),
+                ),
+                metadata={},
+            )
+
+        def fetch_detail(self, item, collected_at):
+            return ItemDetail(
+                item.item_id,
+                "body",
+                "full_text",
+                "",
+                collected_at,
+                item.url,
+                "success",
+            )
+
+        def search(self, keyword, page, page_size, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(
+                    _make_hotitem(
+                        "s1", "https://search.com/1", title=f"{keyword}第1篇"
+                    ),
+                ),
+                metadata={},
+            )
+
+    fake_client = MagicMock()
+    with patch.object(
+        recommender,
+        "_build_provider",
+        return_value=(ThinSearchProvider(), fake_client),
+    ):
+        articles = recommender.fetch_candidates(
+            spec,
+            providers=["toutiao"],
+            search_top_k=1,
+            target_limit=5,
+            prefer_search=True,
+        )
+
+    # Search thin (only 1 hit) → backfill with relevant_hot first, then
+    # other_hot to reach ~40 candidates.
+    urls = [a["url"] for a in articles]
+    search_urls = [u for u in urls if "search.com" in u]
+    relevant_hot_urls = [u for u in urls if "r.com" in u]
+    other_hot_urls = [u for u in urls if "o.com" in u]
+    # 1 search + 2 relevant_hot + ≥1 other_hot = at least 4
+    assert len(search_urls) == 1
+    assert len(relevant_hot_urls) == 2
+    assert len(other_hot_urls) >= 1
+    # The search article must come first in the returned list.
+    assert urls[0].endswith("/search.com/1")
+
+
+def test_fetch_candidates_no_prefer_search_keeps_all_hot() -> None:
+    """With prefer_search=False, the V3 merge behavior (all hot + all
+    search, dedup'd by URL) is preserved.
+    """
+    spec = _build_search_spec()
+
+    class AllProvider:
+        platform = "toutiao"
+
+        def collect_hot_list(self, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(
+                    _make_hotitem("h1", "https://hot.com/h1", title="军事新闻"),
+                    _make_hotitem("h2", "https://hot.com/h2", title="南海局势"),
+                ),
+                metadata={},
+            )
+
+        def fetch_detail(self, item, collected_at):
+            return ItemDetail(
+                item.item_id,
+                "body",
+                "full_text",
+                "",
+                collected_at,
+                item.url,
+                "success",
+            )
+
+        def search(self, keyword, page, page_size, collected_at):
+            from heated_topics_v3.providers.common import ProviderCapture
+
+            return ProviderCapture(
+                raw_text="",
+                raw_suffix="",
+                items=(_make_hotitem(f"s-{keyword}", f"https://s.com/{keyword}"),),
+                metadata={},
+            )
+
+    fake_client = MagicMock()
+    with patch.object(
+        recommender,
+        "_build_provider",
+        return_value=(AllProvider(), fake_client),
+    ):
+        articles = recommender.fetch_candidates(
+            spec,
+            providers=["toutiao"],
+            search_top_k=3,
+            prefer_search=False,
+        )
+
+    # 2 hot + 3 search = 5 (all).
+    assert len(articles) == 5
+    hot_urls = [a["url"] for a in articles if "hot.com" in a["url"]]
+    assert len(hot_urls) == 2

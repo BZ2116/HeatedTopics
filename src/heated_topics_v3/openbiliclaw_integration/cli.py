@@ -68,6 +68,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Augment hot-list with provider.search() hits per user interest (default on)",
     )
     p.add_argument(
+        "--prefer-search",
+        dest="prefer_search",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Trust search results over hot-list. Drops hot items that don't "
+            "mention any user interest when search yields enough candidates "
+            "(default on; pass --no-prefer-search to fall back to merge-only)"
+        ),
+    )
+    p.add_argument(
         "--search-top-k",
         type=int,
         default=None,
@@ -146,6 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             providers=providers,
             config_path=Path(args.config),
             use_search=use_search,
+            prefer_search=bool(args.prefer_search),
             search_providers=args.search_providers,
             search_top_k=search_top_k,
             search_results_per_interest=args.search_results_per_interest,
