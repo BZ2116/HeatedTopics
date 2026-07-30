@@ -143,3 +143,240 @@ Valid output:
 If the status is `missing` or `expired`, replace only the local `.env` value
 and rerun the check. `collect-news` isolates this failure from every other
 platform.
+
+---
+
+## Multi-user OpenBiliClaw recommender
+
+A second pipeline on top of V3 hot-list providers: take a list of user profiles,
+let OpenBiliClaw rank and personalize the candidates, write a per-user
+top-N JSON. Lives at `src/heated_topics_v3/openbiliclaw_integration/`.
+
+### What you get
+
+For each user, a list of up to `--limit` recommendations with:
+
+- `title`, `url`, `source_platform` — what to read
+- `body_text_preview` — first 800 chars (configurable) of the article body, fetched via HTTP + GNE
+- `topic_label`, `reason` — LLM-generated (MiniMax-M2.7) one-line topic + friend-style explanation tuned to the user's interests
+- `confidence` — `1/rank` from the hot-list position, used by the engine's MMR diversifier
+- `heat.*` — view / like / comment / favorite / share / rank pulled from each provider's native metrics
+
+Failures are isolated per user: one user crashing does not affect the others; the failing user's entry has `error` + `error_detail` fields instead of `recommendations`.
+
+### Prerequisites
+
+| Component | Why | How |
+|---|---|---|
+| Python 3.11+ | project | `uv sync` or `pip install -e .` |
+| `OPENBILICLAW_LLM_API_KEY` env var | LLM call (MiniMax-M2.7 via `https://api.minimaxi.com/v1`) | export before running the CLI |
+| Ollama running on `http://127.0.0.1:11434` with `bge-m3` pulled | embedding service for MMR | `ollama pull bge-m3` |
+| OpenBiliClaw patched with `serve_external_candidates` | the engine entry point this CLI calls | see *Patching OpenBiliClaw* below |
+
+### One-time setup
+
+```bash
+# 1. Install the patched OpenBiliClaw into your venv
+git clone https://github.com/whiteguo233/OpenBiliClaw.git openbiliclaw-sandbox
+# apply the serve_external_candidates patch (see openbiliclaw-sandbox/PATCH_NOTES.md),
+# then:
+pip install -e openbiliclaw-sandbox
+
+# 2. Copy the example config
+cp config/openbiliclaw.toml.example config/openbiliclaw.toml
+
+# 3. Export the API key
+export OPENBILICLAW_LLM_API_KEY=sk-...
+
+# 4. (Optional) point at a shared DailyHotApi cache
+export DAILYHOT_CACHE_DIR=/path/to/data/cache/dailyhot
+```
+
+### Running
+
+```bash
+source .venv/Scripts/activate        # Windows: adjust path
+export PYTHONPATH=src
+export OPENBILICLAW_LLM_API_KEY=sk-...
+
+python -m heated_topics_v3.openbiliclaw_integration.cli \
+    --users  config/profiles/users_demo.json \
+    --output data/recommendations.json \
+    --limit  5 \
+    --providers dailyhot:36kr,juejin,toutiao \
+    --data-dir data/runtime \
+    --max-parallel 5 \
+    --per-user-timeout 300
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--users` | required | path to `users.json` (see schema below) |
+| `--output` | required | where to write the recommendations envelope |
+| `--limit` | `10` | top-N per user |
+| `--providers` | all | comma-separated; supports `dailyhot:<route>` (e.g. `dailyhot:36kr`, `dailyhot:zhihu`) |
+| `--max-parallel` | `5` | concurrent users; `1` = serial |
+| `--per-user-timeout` | `180` | seconds before a single user is marked `error: timeout` |
+| `--body-preview-chars` | `800` | truncation length of `body_text_preview` |
+| `--config` | `config/openbiliclaw.toml` | OpenBiliClaw config (see below) |
+| `--data-dir` | `data` | per-user state root; each user gets `data/users/<id>/openbiliclaw.db` |
+
+### Available providers
+
+| Name | Source |
+|---|---|
+| `juejin`, `toutiao`, `baidu_hot`, `zhihu_hot`, `zhihu_daily`, `sina_news`, `thepaper`, `netease_news` | first-party V3 providers (HTTP) |
+| `dailyhot:<route>` | DailyHotApi cache reader — `route` is any of 40+ upstream platforms (`36kr`, `sspai`, `xiaohongshu`, `csdn`, `ithome`, `github`, `hellogithub`, `douyin`, `weibo`, `baidu`, `bilibili`, ...). Body is fetched per-URL via GNE with a `title_only` fallback. |
+
+To list the routes currently in your cache:
+
+```bash
+python -c "import json,pathlib; p=pathlib.Path('data/cache/dailyhot'); \
+  print(sorted({json.loads(f.read_text(encoding='utf-8')).get('key','').split(':')[1] \
+  for f in p.iterdir() if f.suffix=='.json'}))"
+```
+
+### `users.json` schema
+
+```json
+{
+  "users": [
+    {
+      "user_id": "caifu_001",
+      "display_name": "普通人财富管理（学生/新人）",
+      "interests": [
+        {"name": "记账", "category": "理财", "weight": 0.85},
+        {"name": "基金",  "category": "理财", "weight": 0.75}
+      ],
+      "disliked_topics": ["杠杆炒股", "一夜暴富"],
+      "style": {"reading_depth": "medium", "tone_preference": "neutral"},
+      "context": {"primary_scene": "general", "device": "mobile"},
+      "exploration_openness": 0.4,
+      "core_traits": ["稳扎稳打"],
+      "deep_needs": ["可落地的实操内容"],
+      "values": ["稳健", "不焦虑"],
+      "life_stage": "大学 / 职场新人",
+      "current_phase": "刚开始学理财",
+      "cognitive_style": ["由表及里"],
+      "recent_awareness": [{"date": "2026-07-29", "observation": "...", "trend": "...", "emotion_guess": "..."}],
+      "active_insights":  [{"hypothesis": "...", "evidence": ["..."], "confidence": 0.7}],
+      "favorite_up_users": [],
+      "source_platform_mix": {}
+    }
+  ]
+}
+```
+
+Required: `user_id`, `interests` (≥ 1, each with `name` and `weight ∈ [0, 1]`). Everything else is optional and gets a sensible default. See `tests/openbiliclaw_integration/fixtures/users_valid_3users.json` for three complete examples.
+
+### `config/openbiliclaw.toml`
+
+```toml
+[llm]
+routing_version = 2
+default_chain   = ["minimax"]    # must match an [llm.instances.*] key
+
+[llm.instances.minimax]
+name           = "minimax"       # LOWERCASE — see warning in openbiliclaw.toml.example
+provider_type  = "openai_compatible"
+enabled        = true
+model          = "MiniMax-M2.7"
+base_url       = "https://api.minimaxi.com/v1"
+# api_key is sourced from $OPENBILICLAW_LLM_API_KEY at runtime
+
+[llm.embedding]
+provider             = "ollama"
+model                = "bge-m3"
+output_dimensionality = 1024
+```
+
+If the file is missing, the CLI falls back to the same defaults from env. If `OPENBILICLAW_LLM_API_KEY` is unset, the CLI exits with code 2 before running anything.
+
+### Output envelope
+
+```json
+{
+  "generated_at": "2026-07-30T20:30:00Z",
+  "config_version": "0.3.186+mur.1",
+  "llm_model": "MiniMax-M2.7",
+  "embedding_model": "bge-m3",
+  "users": [
+    {
+      "user_id": "caifu_001",
+      "display_name": "...",
+      "input_profile_summary": {"interests_count": 9, "disliked_count": 3},
+      "pipeline": {
+        "candidates_fetched": 50,
+        "candidates_after_filter": 19,
+        "candidates_considered_by_engine": 19,
+        "embedding_degraded": false
+      },
+      "recommendations": [
+        {
+          "rank": 1,
+          "title": "...",
+          "url": "https://...",
+          "source_platform": "dailyhot:36kr",
+          "heat": {"view": 56641, "like": 0, "comment": 0, "favorite": 0, "share": 0, "rank": 1},
+          "body_text_preview": "...",
+          "body_text_length": 5336,
+          "topic_label": "大厂投资思路里的稳健逻辑",
+          "reason": "看了下腾讯这两年在AI上的投资版图...",
+          "confidence": 1.0,
+          "published_at": ""
+        }
+      ]
+    },
+    {
+      "user_id": "u_broken",
+      "error": "timeout",
+      "error_detail": "exceeded 300s"
+    }
+  ]
+}
+```
+
+The envelope is written atomically (`<output>.tmp` then `os.replace`) — a partial file is never observed by readers.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | All users produced recommendations |
+| `1` | At least one user errored (`error` field present) — others may have succeeded |
+| `2` | Bad CLI args, missing `OPENBILICLAW_LLM_API_KEY`, or `users.json` invalid |
+| `4` | Fatal error inside `run_all_users` or output write failed |
+| `130` | SIGINT (Ctrl-C) |
+
+### Tests
+
+```bash
+source .venv/Scripts/activate
+export PYTHONPATH=src
+python -m pytest tests/openbiliclaw_integration tests/providers -v
+```
+
+The openbiliclaw_integration suite (57 tests) covers: schema validation, profile building, candidate adapter (rank → relevance mapping), per-user error isolation, parallel orchestration, the `serve_external_candidates` patch verification, and config loading.
+
+The provider suite covers every V3 provider including the DailyHotApi adapter (6 tests for cache-scan lookup, fetch_detail title-only / full-text / HTTP-failure paths).
+
+### File layout
+
+```text
+src/heated_topics_v3/openbiliclaw_integration/
+├── cli.py              # argparse entry; exit codes; atomic output write
+├── recommender.py      # fetch_candidates → candidate_adapter → engine.serve_external_candidates
+├── user_profile.py     # users.json schema + OnionProfile builder
+├── candidate_adapter.py # V3 HotItem → openbiliclaw DiscoveredContent
+├── output.py           # Recommendation → JSON dict + envelope builder
+├── runtime.py          # config loader, env check, patch verification
+└── exceptions.py       # IntegrationError hierarchy
+```
+
+### Troubleshooting
+
+- **`RuntimeError: OpenBiliClaw patch missing`**: the `serve_external_candidates` method is not on `RecommendationEngine`. Re-install the patched openbiliclaw-sandbox (`pip install -e openbiliclaw-sandbox`) and rerun.
+- **Every recommendation has `confidence: 0.0`**: the candidate adapter is not setting `relevance_score`. Confirm you're on a build that includes `src/heated_topics_v3/openbiliclaw_integration/candidate_adapter.py` (rank → `1/rank` mapping).
+- **All users fail with `error: engine_error`**: usually the embedding service is unreachable. Check `curl http://127.0.0.1:11434/api/embeddings -d '{"model":"bge-m3","prompt":"test"}'`.
+- **A `--providers dailyhot:<route>` returns zero items**: no cache file with `key="dailyhot:<route>:today"` exists in `data/cache/dailyhot` (or `$DAILYHOT_CACHE_DIR`). Run the upstream dailyhot client to refresh, or remove the route from `--providers`.
+- **Body text is empty for an item**: GNE couldn't extract a usable body (`content_status: "title_only"`). The item still surfaces — the engine ranks by title — but personalization will be weaker.
