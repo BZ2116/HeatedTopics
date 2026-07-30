@@ -48,6 +48,30 @@ _DEFAULT_PROVIDERS: tuple[str, ...] = (
 _DETAIL_FETCH_CAP = 20
 
 
+# Search-enabled providers (no API key required, returns content actually
+# matching a keyword — not just whatever is on the hot board today). Order
+# matters only for tie-breaks. ``baidu_hot`` and ``zhihu_hot`` are excluded
+# because they need credentials / return captcha-blocked pages.
+_SEARCH_PROVIDERS: tuple[str, ...] = (
+    "toutiao",
+    "sina_news",
+    "thepaper",
+    "zhihu_daily",
+)
+
+# Per user: take the top-K interests (by weight) and search each on each
+# search-enabled provider. 3 × 4 = 12 (provider, interest) pairs; with
+# 5 results each = up to 60 search candidates per user. After URL-dedup
+# against ~250 hot-list candidates this typically lands around 80-100
+# unique items, well within the engine's filter budget.
+_SEARCH_TOP_K_INTERESTS = 3
+_SEARCH_RESULTS_PER_INTEREST = 5
+# Full-body fetches are slow (HTTP + GNE per article). Cap per
+# (provider, interest) pair so total stays bounded: 3 × 4 × 3 = 36 fetches
+# per user worst case.
+_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST = 3
+
+
 def _build_provider(platform: str) -> Any | None:
     """Instantiate the V3 provider class for ``platform``.
 
@@ -139,24 +163,73 @@ def _hotitem_to_article(
     }
 
 
+def _call_provider_search(
+    provider: Any, platform: str, keyword: str, page_size: int, collected_at: str
+) -> Any:
+    """Invoke a provider's ``search`` regardless of signature variant.
+
+    The ``NewsProvider`` protocol declares
+    ``search(keyword, page, page_size, collected_at)`` but two providers
+    (toutiao, sina_news) shipped with a different shape before the
+    protocol was finalized. Try the protocol first, fall back per-provider.
+    """
+    try:
+        return provider.search(
+            keyword,
+            page=1,
+            page_size=page_size,
+            collected_at=collected_at,
+        )
+    except TypeError:
+        pass
+    if platform == "toutiao":
+        return provider.search(keyword, collected_at)
+    if platform == "sina_news":
+        return provider.search(keyword, collected_at, page=1)
+    # Last-ditch: try the (keyword, page) 2-arg variant.
+    return provider.search(keyword, 1)
+
+
 def fetch_candidates(
     spec: user_profile.UserSpec,
     *,
     providers: list[str] | None = None,
     data_dir: Path | None = None,
+    use_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
 ) -> list[dict[str, Any]]:
     """Fetch hot articles for one user from V3 providers.
 
-    Each provider returns a list of Article dicts. We normalize to a flat
-    list with a ``platform`` field set per article.
+    Two passes:
+      1. Hot list (every enabled provider). Provides topical breadth.
+      2. Search (top-K interests × search-capable providers). Provides
+         topic-aligned candidates that are *not* on today's hot board.
 
-    Failures in individual providers are isolated: a single provider going
-    down returns zero items rather than crashing the whole fetch. This is
-    what tests mock.
+    The two passes are merged with URL dedup so a search hit that also
+    appears on the hot list doesn't get duplicated. Search results carry
+    an extra ``search_query`` field for downstream inspection.
+
+    Failures in individual providers or individual searches are isolated:
+    one bad pair returns zero items rather than crashing the whole fetch.
     """
     enabled = list(providers) if providers else list(_DEFAULT_PROVIDERS)
     collected_at = datetime.now(SHANGHAI).isoformat()
     out: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+
+    def _add(article: dict[str, Any] | None) -> None:
+        if article is None:
+            return
+        url = article.get("url") or ""
+        if url and url in seen_urls:
+            return
+        if url:
+            seen_urls.add(url)
+        out.append(article)
+
+    # --- Pass 1: hot list --------------------------------------------------
     for platform in enabled:
         built = _build_provider(platform)
         if built is None:
@@ -170,8 +243,6 @@ def fetch_candidates(
             except Exception as exc:
                 logger.warning("provider %s.collect_hot_list failed: %s", platform, exc)
                 continue
-            # Fetch bodies (slow). Cap to top items; the rest stay bodyless
-            # (they will be skipped by the candidate adapter).
             cap_items = items[:_DETAIL_FETCH_CAP]
             for item in cap_items:
                 try:
@@ -184,14 +255,81 @@ def fetch_candidates(
                         exc,
                     )
                     detail = None
-                article = _hotitem_to_article(item, detail, platform)
-                if article is not None:
-                    out.append(article)
-            # Remaining items without detail (best-effort).
+                _add(_hotitem_to_article(item, detail, platform))
             for item in items[_DETAIL_FETCH_CAP:]:
-                article = _hotitem_to_article(item, None, platform)
-                if article is not None:
-                    out.append(article)
+                _add(_hotitem_to_article(item, None, platform))
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+
+    # --- Pass 2: search ---------------------------------------------------
+    if not use_search or not spec.interests:
+        return out
+    search_enabled = [
+        p
+        for p in (
+            list(search_providers) if search_providers else list(_SEARCH_PROVIDERS)
+        )
+        if p in enabled
+    ]
+    if not search_enabled:
+        return out
+    top_interests = sorted(spec.interests, key=lambda i: i.weight, reverse=True)[
+        :search_top_k
+    ]
+    logger.info(
+        "search pass: providers=%s interests=%s",
+        search_enabled,
+        [i.name for i in top_interests],
+    )
+    for platform in search_enabled:
+        built = _build_provider(platform)
+        if built is None:
+            continue
+        provider, client = built
+        try:
+            for interest in top_interests:
+                try:
+                    capture = _call_provider_search(
+                        provider,
+                        platform,
+                        interest.name,
+                        search_results_per_interest,
+                        collected_at,
+                    )
+                    items = capture.items[:search_results_per_interest]
+                except Exception as exc:
+                    logger.warning(
+                        "search %s(%s) failed: %s", platform, interest.name, exc
+                    )
+                    continue
+                if not items:
+                    continue
+                cap_items = items[:_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST]
+                for item in cap_items:
+                    try:
+                        detail = provider.fetch_detail(item, collected_at)
+                    except Exception as exc:
+                        logger.debug(
+                            "search %s.fetch_detail(%s) failed: %s",
+                            platform,
+                            item.item_id,
+                            exc,
+                        )
+                        detail = None
+                    article = _hotitem_to_article(item, detail, platform)
+                    if article is not None:
+                        article["search_query"] = interest.name
+                    _add(article)
+                for item in items[_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST:]:
+                    article = _hotitem_to_article(item, None, platform)
+                    if article is not None:
+                        article["search_query"] = interest.name
+                    _add(article)
         finally:
             close = getattr(client, "close", None)
             if callable(close):
@@ -296,9 +434,20 @@ async def _run_one_user_async(
     per_user_timeout: float,
     providers: list[str] | None,
     shared_runtime: Any | None,
+    use_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
 ) -> dict[str, Any]:
     """Async body of run_one_user."""
-    articles = fetch_candidates(spec, providers=providers)
+    articles = fetch_candidates(
+        spec,
+        providers=providers,
+        use_search=use_search,
+        search_providers=search_providers,
+        search_top_k=search_top_k,
+        search_results_per_interest=search_results_per_interest,
+    )
     if not articles:
         return output.format_user_failure(
             user_id=spec.user_id,
@@ -378,6 +527,10 @@ def run_one_user(
     per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
+    use_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
 ) -> dict[str, Any]:
     """Synchronous wrapper around _run_one_user_async."""
     return asyncio.run(
@@ -389,6 +542,10 @@ def run_one_user(
             per_user_timeout=per_user_timeout,
             providers=providers,
             shared_runtime=shared_runtime,
+            use_search=use_search,
+            search_providers=search_providers,
+            search_top_k=search_top_k,
+            search_results_per_interest=search_results_per_interest,
         )
     )
 
@@ -404,6 +561,10 @@ async def run_all_users(
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
     config_path: Path | None = None,
+    use_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
 ) -> list[dict[str, Any]]:
     """Run recommendation for all users with bounded concurrency.
 
@@ -429,6 +590,10 @@ async def run_all_users(
                     per_user_timeout=per_user_timeout,
                     providers=providers,
                     shared_runtime=shared_runtime,
+                    use_search=use_search,
+                    search_providers=search_providers,
+                    search_top_k=search_top_k,
+                    search_results_per_interest=search_results_per_interest,
                 )
             except Exception as exc:
                 logger.exception("user %s unexpected error", spec.user_id)

@@ -60,6 +60,31 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=180.0,
         help="Per-user timeout in seconds (default 180)",
     )
+    p.add_argument(
+        "--use-search",
+        dest="use_search",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Augment hot-list with provider.search() hits per user interest (default on)",
+    )
+    p.add_argument(
+        "--search-top-k",
+        type=int,
+        default=None,
+        help="Top-K interests (by weight) to search; 0 disables search (default 3)",
+    )
+    p.add_argument(
+        "--search-providers",
+        default=None,
+        help="Comma-separated override of providers used for search (default: toutiao,sina_news,thepaper,zhihu_daily)",
+        type=lambda s: [x for x in s.split(",") if x],
+    )
+    p.add_argument(
+        "--search-results-per-interest",
+        type=int,
+        default=5,
+        help="Search results per (provider, interest) pair (default 5)",
+    )
     return p.parse_args(list(argv))
 
 
@@ -103,6 +128,12 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     providers = args.providers if args.providers else None
     data_dir = Path(args.data_dir)
+    search_top_k = (
+        args.search_top_k
+        if args.search_top_k is not None
+        else recommender._SEARCH_TOP_K_INTERESTS
+    )
+    use_search = bool(args.use_search) and search_top_k > 0
 
     try:
         results = run_all_users_sync(
@@ -114,6 +145,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_user_timeout=args.per_user_timeout,
             providers=providers,
             config_path=Path(args.config),
+            use_search=use_search,
+            search_providers=args.search_providers,
+            search_top_k=search_top_k,
+            search_results_per_interest=args.search_results_per_interest,
         )
     except Exception:
         logger.exception("fatal error in run_all_users")
