@@ -26,6 +26,10 @@ load_users = user_profile.load_users
 
 
 # Default provider list (ordered by typical relevance for V3 hot topics).
+# ``dailyhot:<route>`` syntax dispatches to DailyHotApiProvider — e.g.
+# ``dailyhot:36kr`` for 36氪, ``dailyhot:sspai`` for 少数派. Hot-list data
+# comes from data/cache/dailyhot/*.json (written by the upstream dailyhot
+# client); article bodies are fetched per-URL via GNE.
 _DEFAULT_PROVIDERS: tuple[str, ...] = (
     "juejin",
     "toutiao",
@@ -56,6 +60,11 @@ def _build_provider(platform: str) -> Any | None:
         timeout=_httpx.Timeout(20.0),
         headers={"User-Agent": "heatedtopics-v3/0.1 (+anonymous-public-data)"},
     )
+    if platform.startswith("dailyhot:"):
+        from heated_topics_v3.providers.dailyhot import DailyHotApiProvider
+
+        route = platform.split(":", 1)[1]
+        return DailyHotApiProvider(route, client=client), client
     if platform == "juejin":
         from heated_topics_v3.providers.juejin import JuejinProvider
 

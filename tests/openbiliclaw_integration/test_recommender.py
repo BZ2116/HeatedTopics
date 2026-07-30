@@ -205,3 +205,19 @@ def test_run_one_user_propagates_rank_to_confidence(
     confidences = [r["confidence"] for r in result["recommendations"]]
     assert all(c > 0.0 for c in confidences), confidences
     assert max(confidences) == pytest.approx(1.0)
+
+
+def test_build_provider_dispatches_dailyhot_route() -> None:
+    """``dailyhot:<route>`` resolves to DailyHotApiProvider(route)."""
+    from heated_topics_v3.providers.dailyhot import DailyHotApiProvider
+
+    built = recommender._build_provider("dailyhot:36kr")
+    assert built is not None
+    provider, client = built
+    assert isinstance(provider, DailyHotApiProvider)
+    assert provider.platform == "36kr"
+    client.close()
+
+
+def test_build_provider_returns_none_for_unknown() -> None:
+    assert recommender._build_provider("totally_made_up_platform") is None
