@@ -79,7 +79,7 @@ class DailyHotApiProvider:
             return None, ""
         target_key = f"dailyhot:{self.platform}:today"
         for entry in self._cache_dir.iterdir():
-            if not entry.is_file() or not entry.suffix == ".json":
+            if not entry.is_file() or entry.suffix != ".json":
                 continue
             try:
                 raw = entry.read_text(encoding="utf-8")

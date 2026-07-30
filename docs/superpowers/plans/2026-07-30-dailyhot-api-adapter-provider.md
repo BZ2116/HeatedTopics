@@ -24,7 +24,7 @@
 - Create: `src/heated_topics_v3/providers/dailyhot.py`
 - Modify: `src/heated_topics_v3/providers/__init__.py` (register the class)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 # tests/providers/test_dailyhot_provider.py
@@ -87,12 +87,12 @@ def test_collect_hot_list_reads_cache(fake_cache: Path) -> None:
     assert first.item_id == "3865519682802948"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PYTHONPATH=src python -m pytest tests/providers/test_dailyhot_provider.py -v`
 Expected: `ModuleNotFoundError: No module named 'heated_topics_v3.providers.dailyhot'`
 
-- [ ] **Step 3: Implement minimal provider**
+- [x] **Step 3: Implement minimal provider**
 
 ```python
 # src/heated_topics_v3/providers/dailyhot.py
@@ -217,7 +217,7 @@ class DailyHotApiProvider:
         return tuple(items)
 ```
 
-- [ ] **Step 4: Register the provider**
+- [x] **Step 4: Register the provider**
 
 ```python
 # src/heated_topics_v3/providers/__init__.py — append
@@ -237,7 +237,7 @@ __all__ = [
 ]
 ```
 
-- [ ] **Step 5: Re-run test, expect PASS**
+- [x] **Step 5: Re-run test, expect PASS**
 
 Run: `PYTHONPATH=src python -m pytest tests/providers/test_dailyhot_provider.py -v`
 Expected: 1 passed.
@@ -249,7 +249,7 @@ Expected: 1 passed.
 **Files:**
 - Modify: `src/heated_topics_v3/providers/dailyhot.py` (replace `fetch_detail`)
 
-- [ ] **Step 1: Write failing tests for fetch_detail**
+- [x] **Step 1: Write failing tests for fetch_detail**
 
 Append to `tests/providers/test_dailyhot_provider.py`:
 
@@ -306,12 +306,12 @@ def test_fetch_detail_returns_full_text_when_gne_succeeds(tmp_path: Path) -> Non
     assert "段落一" in detail.content
 ```
 
-- [ ] **Step 2: Run, expect ImportError on `fetch_detail` NotImplementedError path**
+- [x] **Step 2: Run, expect ImportError on `fetch_detail` NotImplementedError path**
 
 Run: `PYTHONPATH=src python -m pytest tests/providers/test_dailyhot_provider.py -v`
 Expected: tests fail with `NotImplementedError`.
 
-- [ ] **Step 3: Implement fetch_detail**
+- [x] **Step 3: Implement fetch_detail**
 
 Replace the placeholder in `src/heated_topics_v3/providers/dailyhot.py`:
 
@@ -361,12 +361,12 @@ Replace the placeholder in `src/heated_topics_v3/providers/dailyhot.py`:
         return "\n".join(line.strip() for line in text.splitlines() if line.strip())
 ```
 
-- [ ] **Step 4: Re-run, expect PASS**
+- [x] **Step 4: Re-run, expect PASS**
 
 Run: `PYTHONPATH=src python -m pytest tests/providers/test_dailyhot_provider.py -v`
 Expected: 3 passed.
 
-- [ ] **Step 5: Run full provider test suite to confirm no regression**
+- [x] **Step 5: Run full provider test suite to confirm no regression**
 
 Run: `PYTHONPATH=src python -m pytest tests/providers/ tests/openbiliclaw_integration/test_candidate_adapter.py -q`
 Expected: all green.
@@ -378,7 +378,7 @@ Expected: all green.
 **Files:**
 - Modify: `src/heated_topics_v3/openbiliclaw_integration/recommender.py` (`_build_provider`, `_DEFAULT_PROVIDERS`)
 
-- [ ] **Step 1: Add provider dispatch**
+- [x] **Step 1: Add provider dispatch**
 
 In `src/heated_topics_v3/openbiliclaw_integration/recommender.py`, extend `_build_provider` to handle the `dailyhot:<route>` pattern. Replace the existing function with:
 
@@ -441,7 +441,7 @@ def _build_provider(platform: str) -> Any | None:
     return None
 ```
 
-- [ ] **Step 2: Extend the integration test for the new dispatch path**
+- [x] **Step 2: Extend the integration test for the new dispatch path**
 
 Append to `tests/openbiliclaw_integration/test_recommender.py`:
 
@@ -467,12 +467,12 @@ def test_build_provider_returns_none_for_unknown() -> None:
     assert recommender._build_provider("totally_made_up_platform") is None
 ```
 
-- [ ] **Step 3: Run the recommender tests**
+- [x] **Step 3: Run the recommender tests**
 
 Run: `PYTHONPATH=src python -m pytest tests/openbiliclaw_integration/test_recommender.py -v`
 Expected: existing 5 + 2 new = 7 passed.
 
-- [ ] **Step 4: Update `_DEFAULT_PROVIDERS` comment**
+- [x] **Step 4: Update `_DEFAULT_PROVIDERS` comment**
 
 `_DEFAULT_PROVIDERS` in `recommender.py` should mention the dailyhot dispatch syntax:
 
@@ -503,12 +503,12 @@ configurations keep working; new users opt in via `--providers`.
 
 **Files:** none — verification step.
 
-- [ ] **Step 1: Verify the cache file exists**
+- [x] **Step 1: Verify the cache file exists**
 
 Run: `ls -la data/cache/dailyhot/36kr.json`
 Expected: file present (50 items).
 
-- [ ] **Step 2: Run the CLI with the new provider**
+- [x] **Step 2: Run the CLI with the new provider**
 
 ```bash
 PYTHONPATH=src \
@@ -525,7 +525,7 @@ PYTHONPATH=src \
 
 Expected: exit code 0, output JSON written, 5 recommendations returned.
 
-- [ ] **Step 3: Inspect results**
+- [x] **Step 3: Inspect results**
 
 ```bash
 PYTHONIOENCODING=utf-8 python -c "
@@ -540,7 +540,7 @@ for u in d['users']:
 
 Expected: 5 recommendations from `dailyhot:36kr`, all with non-zero `confidence`. Titles should be business/finance-flavored (vs. the news-heavy toutiao results).
 
-- [ ] **Step 4: Run a second demo mixing dailyhot with existing providers**
+- [ ] **Step 4: Run a second demo mixing dailyhot with existing providers** (skipped — single-source demo was sufficient for the user; the cache supports this whenever needed)
 
 ```bash
 PYTHONPATH=src \
