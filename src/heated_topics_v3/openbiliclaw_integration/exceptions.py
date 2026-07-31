@@ -5,6 +5,14 @@ class IntegrationError(Exception):
     """Base exception for the integration layer."""
 
 
+class Last30DaysSourceError(IntegrationError):
+    """Raised when last30days subprocess fails or produces no parseable output."""
+
+
+class Last30DaysParseError(Last30DaysSourceError):
+    """Raised when last30days JSON output cannot be parsed or is malformed."""
+
+
 class ProfileValidationError(IntegrationError):
     """Raised when a user profile fails schema validation."""
 
