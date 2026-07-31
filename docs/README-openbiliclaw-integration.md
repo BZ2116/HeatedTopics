@@ -62,6 +62,27 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 }
 ```
 
+## 候选源（v3 / last30days / both）
+
+CLI 用 `--source` 选择候选采集路径：
+
+| 模式 | 覆盖 | 备注 |
+|---|---|---|
+| `v3-hotlist`（默认） | 8 个 V3 provider | juejin/头条/百度热榜/知乎热榜/知乎日报/新浪/澎湃/网易 |
+| `last30days` | 8 个中文平台 | 详见 [README-last30days-source.md](README-last30days-source.md) |
+| `both` | V3 + last30days，URL 去重 | 跨平台最大覆盖 |
+
+走 last30days 时需要 `--last30days-cli-path`：
+
+```bash
+python -m heated_topics_v3.openbiliclaw_integration.cli \
+  --users data/users.json --output data/recs.json \
+  --source last30days \
+  --last30days-cli-path "E:/.code/My/last30days-skill-cn/scripts/last30days.py" \
+  --last30days-query "AI 大模型" \
+  --max-parallel 5 --per-user-timeout 300
+```
+
 ## 故障排查
 
 | 错误 | 原因 | 修复 |
@@ -70,7 +91,10 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 | `Missing env vars: OPENBILICLAW_LLM_API_KEY` | 没设 key | `export OPENBILICLAW_LLM_API_KEY=...` |
 | `Ollama at ... unreachable` | Ollama 没启动 | `ollama serve` |
 | `Ollama has no 'bge-m3' model` | 模型未拉 | `ollama pull bge-m3` |
+| `Last30DaysSourceError` | last30days 子进程失败 | 检查 `--last30days-cli-path`、拉大 `--last30days-timeout` |
+| `Last30DaysParseError` | 报告 JSON 损坏或格式变更 | 看 `data/last30days/<user_id>/last30days.json` 的内容 |
 | 退出码 1 | 部分用户失败 | 看 recs.json `users[].error` 字段 |
+| 退出码 2 | `--source last30days/both` 但缺 `--last30days-cli-path` | 加 flag 或写配置文件 |
 | 退出码 4 | 写文件失败 | 检查 `--output` 路径权限 |
 
 ## CLI 退出码
