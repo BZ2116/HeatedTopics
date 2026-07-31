@@ -156,7 +156,6 @@ def test_run_one_user_propagates_rank_to_confidence(
     confidence. Regression for the ``confidence: 0.0`` bug where
     candidate_adapter never set relevance_score.
     """
-    from heated_topics_v3.openbiliclaw_integration import candidate_adapter
 
     users_p = tmp_path / "users.json"
     users_p.write_text(

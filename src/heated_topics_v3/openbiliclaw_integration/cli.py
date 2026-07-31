@@ -96,6 +96,56 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=5,
         help="Search results per (provider, interest) pair (default 5)",
     )
+    p.add_argument(
+        "--source",
+        choices=("v3-hotlist", "last30days", "both"),
+        default="v3-hotlist",
+        help=(
+            "Candidate source(s). 'v3-hotlist' uses HeatedTopics V3 providers "
+            "(default). 'last30days' invokes the last30days CLI for 8 CN "
+            "platforms. 'both' merges both pools and dedupes by URL."
+        ),
+    )
+    p.add_argument(
+        "--last30days-cli-path",
+        default=None,
+        help=(
+            "Path to last30days's scripts/last30days.py "
+            "(default: read from config/openbiliclaw.toml [last30days] cli_path)"
+        ),
+    )
+    p.add_argument(
+        "--last30days-query",
+        default=None,
+        help=(
+            "Query passed to last30days CLI. If omitted, each user's "
+            "primary_keyword or top-weighted interest is used."
+        ),
+    )
+    p.add_argument(
+        "--last30days-days",
+        type=int,
+        default=30,
+        help="Days back for last30days (default 30)",
+    )
+    p.add_argument(
+        "--last30days-no-fetch-bodies",
+        dest="last30days_fetch_bodies",
+        action="store_false",
+        default=True,
+        help="Disable --fetch-bodies on last30days (default: enabled)",
+    )
+    p.add_argument(
+        "--last30days-timeout",
+        type=float,
+        default=120.0,
+        help="Per-user last30days subprocess timeout in seconds (default 120)",
+    )
+    p.add_argument(
+        "--last30days-save-dir",
+        default=None,
+        help="Base dir for last30days per-user output (default data/last30days)",
+    )
     return p.parse_args(list(argv))
 
 
@@ -146,6 +196,26 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     use_search = bool(args.use_search) and search_top_k > 0
 
+    last30days_config: dict[str, Any] | None = None
+    if args.source in ("last30days", "both"):
+        cli_path_str = args.last30days_cli_path
+        if cli_path_str is None:
+            logger.error(
+                "--source %s requires --last30days-cli-path or "
+                "[last30days] cli_path in config",
+                args.source,
+            )
+            return 2
+        last30days_config = {
+            "cli_path": cli_path_str,
+            "query": args.last30days_query,
+            "days": args.last30days_days,
+            "fetch_bodies": bool(args.last30days_fetch_bodies),
+            "timeout": args.last30days_timeout,
+            "save_dir": args.last30days_save_dir or str(data_dir / "last30days"),
+            "platforms": (),
+        }
+
     try:
         results = run_all_users_sync(
             users_path=users_path,
@@ -161,6 +231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             search_providers=args.search_providers,
             search_top_k=search_top_k,
             search_results_per_interest=args.search_results_per_interest,
+            source=args.source,
+            last30days_config=last30days_config,
         )
     except Exception:
         logger.exception("fatal error in run_all_users")

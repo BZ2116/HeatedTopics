@@ -13,6 +13,8 @@ from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
 from heated_topics_v3.openbiliclaw_integration import (
     candidate_adapter,
+    last30days_adapter,
+    last30days_source,
     output,
     runtime,
     user_profile,
@@ -409,6 +411,116 @@ def fetch_candidates(
     return hot_articles
 
 
+# --- last30days source support ----------------------------------------------
+
+
+def _first_interest_name(spec: user_profile.UserSpec) -> str:
+    """Return the highest-weight interest name, or '' if none."""
+    if not spec.interests:
+        return ""
+    return max(spec.interests, key=lambda i: i.weight).name
+
+
+def _fetch_last30days_candidates(
+    spec: user_profile.UserSpec,
+    cfg: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Invoke last30days CLI for one user; return V3 article dicts.
+
+    Pipeline: subprocess → parse JSON → adapter (Item → HotItem/ItemDetail)
+    → ``_hotitem_to_article`` (existing V3 internal mapper). The returned
+    list is in the same shape as ``fetch_candidates``, so downstream code
+    needs no awareness of which source produced each article.
+    """
+    cli_path = Path(cfg["cli_path"])
+    query = cfg.get("query") or spec.user_id  # fallback chain handled below
+    if not query:
+        query = _first_interest_name(spec)
+    if not query:
+        logger.warning("user %s: no query for last30days, skipping", spec.user_id)
+        return []
+
+    save_dir = Path(cfg.get("save_dir", "data/last30days")) / spec.user_id
+    try:
+        report_path = last30days_source.run(
+            cli_path=cli_path,
+            query=query,
+            days=int(cfg.get("days", 30)),
+            save_dir=save_dir,
+            fetch_bodies=bool(cfg.get("fetch_bodies", True)),
+            platforms=tuple(cfg.get("platforms") or ()),
+            timeout=float(cfg.get("timeout", 120.0)),
+        )
+        report = last30days_source.parse_report(report_path)
+    except Exception as exc:
+        logger.warning("user %s: last30days fetch failed: %s", spec.user_id, exc)
+        return []
+
+    items, details = last30days_adapter.to_hot_items(report)
+    articles: list[dict[str, Any]] = []
+    for item, detail in zip(items, details):
+        article = _hotitem_to_article(item, detail, item.platform)
+        if article is not None:
+            articles.append(article)
+    return articles
+
+
+def _fetch_candidates_for_user(
+    spec: user_profile.UserSpec,
+    *,
+    source: str,
+    last30days_config: dict[str, Any] | None,
+    target_limit: int = 10,
+    v3_providers: list[str] | None = None,
+    use_search: bool = True,
+    prefer_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+) -> list[dict[str, Any]]:
+    """Dispatch candidate fetching based on ``source``.
+
+    - ``v3-hotlist``: only V3 providers (default; preserves existing behaviour).
+    - ``last30days``: only last30days CLI (requires ``last30days_config``).
+    - ``both``: V3 first, last30days second with URL dedup (V3 wins ties).
+    """
+    articles: list[dict[str, Any]] = []
+    if source in ("v3-hotlist", "both"):
+        articles.extend(
+            fetch_candidates(
+                spec,
+                providers=v3_providers,
+                use_search=use_search,
+                prefer_search=prefer_search,
+                search_providers=search_providers,
+                search_top_k=search_top_k,
+                search_results_per_interest=search_results_per_interest,
+                target_limit=target_limit,
+            )
+        )
+    if source in ("last30days", "both"):
+        if last30days_config is None:
+            if source == "last30days":
+                logger.warning(
+                    "user %s: source=last30days but no config; returning []",
+                    spec.user_id,
+                )
+                return []
+        else:
+            l30 = _fetch_last30days_candidates(spec, last30days_config)
+            if source == "both":
+                seen = {a.get("url") for a in articles if a.get("url")}
+                for a in l30:
+                    if a.get("url") and a["url"] in seen:
+                        continue
+                    if a.get("url"):
+                        seen.add(a["url"])
+                    articles.append(a)
+            else:
+                articles.extend(l30)
+    return articles
+
+
 def _build_shared_runtime(
     shared_data_dir: Path | None = None,
     config_path: Path | None = None,
@@ -508,17 +620,21 @@ async def _run_one_user_async(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    source: str = "v3-hotlist",
+    last30days_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Async body of run_one_user."""
-    articles = fetch_candidates(
+    articles = _fetch_candidates_for_user(
         spec,
-        providers=providers,
+        source=source,
+        last30days_config=last30days_config,
+        target_limit=limit,
+        v3_providers=providers,
         use_search=use_search,
         prefer_search=prefer_search,
         search_providers=search_providers,
         search_top_k=search_top_k,
         search_results_per_interest=search_results_per_interest,
-        target_limit=limit,
     )
     if not articles:
         return output.format_user_failure(
@@ -604,6 +720,8 @@ def run_one_user(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    source: str = "v3-hotlist",
+    last30days_config: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Synchronous wrapper around _run_one_user_async."""
     return asyncio.run(
@@ -620,6 +738,8 @@ def run_one_user(
             search_providers=search_providers,
             search_top_k=search_top_k,
             search_results_per_interest=search_results_per_interest,
+            source=source,
+            last30days_config=last30days_config,
         )
     )
 
@@ -640,6 +760,8 @@ async def run_all_users(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    source: str = "v3-hotlist",
+    last30days_config: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Run recommendation for all users with bounded concurrency.
 
@@ -670,6 +792,8 @@ async def run_all_users(
                     search_providers=search_providers,
                     search_top_k=search_top_k,
                     search_results_per_interest=search_results_per_interest,
+                    source=source,
+                    last30days_config=last30days_config,
                 )
             except Exception as exc:
                 logger.exception("user %s unexpected error", spec.user_id)

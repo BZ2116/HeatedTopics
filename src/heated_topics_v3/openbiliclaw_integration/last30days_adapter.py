@@ -64,12 +64,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 
 from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
-
 
 # last30days top-level platform keys we know how to map.
 _PLATFORM_KEYS: tuple[str, ...] = (
@@ -94,7 +94,7 @@ def _engagement_to_metrics(eng: Any) -> dict[str, int | float]:
 def _dominant_metric(metrics: dict[str, int | float]) -> tuple[int | float, str]:
     """Pick the single best engagement value for HeatMetrics.value + label."""
     for candidate in ("views", "voteups", "likes", "score"):
-        if candidate in metrics and metrics[candidate]:
+        if metrics.get(candidate):
             return metrics[candidate], candidate
     if metrics:
         first_key = next(iter(metrics))
@@ -253,7 +253,7 @@ def to_hot_items(
             extracted = extractor(raw)
             if extracted is None:
                 continue
-            item_id, title, body, summary, author = extracted
+            item_id, title, body, summary, _author = extracted
             metrics = _engagement_to_metrics(raw.get("engagement"))
             value, label = _dominant_metric(metrics)
             heat = HeatMetrics(

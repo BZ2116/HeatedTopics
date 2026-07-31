@@ -15,8 +15,8 @@ import json
 import logging
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from heated_topics_v3.openbiliclaw_integration.exceptions import (
     Last30DaysParseError,
