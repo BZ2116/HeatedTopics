@@ -1,0 +1,31 @@
+{
+  "topic": "测试",
+  "range": {"from": "2026-07-24", "to": "2026-07-31"},
+  "generated_at": "2026-07-31T15:26:37.625045+00:00",
+  "mode": "all",
+  "weibo": [
+    {
+      "id": "WB1",
+      "text": "测试微博内容正文，长度足够做推荐理由。",
+      "url": "https://weibo.com/123/abc",
+      "author_handle": "user_x",
+      "date": "2026-07-28",
+      "date_confidence": "low",
+      "engagement": {"views": 12000, "likes": 340, "comments": 56, "reposts": 12},
+      "relevance": 0.85,
+      "why_relevant": "test match",
+      "subs": {"relevance": 80, "recency": 60, "engagement": 50},
+      "score": 78,
+      "cross_refs": []
+    }
+  ],
+  "xiaohongshu": [],
+  "bilibili": [],
+  "zhihu": [],
+  "douyin": [],
+  "wechat": [],
+  "baidu": [],
+  "toutiao": [],
+  "best_practices": [],
+  "prompt_pack": []
+}

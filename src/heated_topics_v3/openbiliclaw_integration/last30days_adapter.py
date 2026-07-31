@@ -64,4 +64,227 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Callable
+
+from heated_topics_v3.clock import SHANGHAI
+from heated_topics_v3.contracts import HeatMetrics, HotItem, ItemDetail
+
+
+# last30days top-level platform keys we know how to map.
+_PLATFORM_KEYS: tuple[str, ...] = (
+    "weibo", "xiaohongshu", "bilibili", "zhihu",
+    "douyin", "wechat", "baidu", "toutiao",
+)
+
+
+def _engagement_to_metrics(eng: Any) -> dict[str, int | float]:
+    """Filter last30days engagement dict to int/float values for HeatMetrics."""
+    if not isinstance(eng, dict):
+        return {}
+    out: dict[str, int | float] = {}
+    for key, value in eng.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            out[key] = value
+    return out
+
+
+def _dominant_metric(metrics: dict[str, int | float]) -> tuple[int | float, str]:
+    """Pick the single best engagement value for HeatMetrics.value + label."""
+    for candidate in ("views", "voteups", "likes", "score"):
+        if candidate in metrics and metrics[candidate]:
+            return metrics[candidate], candidate
+    if metrics:
+        first_key = next(iter(metrics))
+        return metrics[first_key], first_key
+    return 0, "engagement"
+
+
+def _now_iso() -> str:
+    """Current Shanghai time as ISO-8601 string for collected_at."""
+    return datetime.now(tz=SHANGHAI).isoformat(timespec="seconds")
+
+
+# ---- Per-platform extractors -----------------------------------------------
+# Each takes a raw last30days item dict and returns a tuple of
+# (item_id, title, body, summary, author_name) or None to skip.
+
+
+def _extract_weibo(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    text = (raw.get("text") or "").strip()
+    if not text:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    return (
+        f"weibo:{rid}",
+        text[:80] or "(无标题)",
+        text,
+        text[:200],
+        str(raw.get("author_handle") or ""),
+    )
+
+
+def _extract_xiaohongshu(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    desc = (raw.get("desc") or "").strip()
+    if not title and not desc:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    return (
+        f"xiaohongshu:{rid}",
+        title or desc[:80],
+        desc,
+        f"{title}\n{desc[:200]}".strip(),
+        str(raw.get("author_name") or ""),
+    )
+
+
+def _extract_bilibili(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    if not title:
+        return None
+    rid = str(raw.get("bvid") or raw.get("id") or "").strip()
+    return (
+        f"bilibili:{rid}",
+        title,
+        str(raw.get("description") or ""),
+        title,
+        str(raw.get("channel_name") or ""),
+    )
+
+
+def _extract_zhihu(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    excerpt = (raw.get("excerpt") or "").strip()
+    if not title and not excerpt:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    return (
+        f"zhihu:{rid}",
+        title or excerpt[:80],
+        excerpt,
+        f"{title}\n{excerpt[:200]}".strip(),
+        str(raw.get("author") or ""),
+    )
+
+
+def _extract_douyin(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    text = (raw.get("text") or "").strip()
+    if not text:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    return (
+        f"douyin:{rid}",
+        text[:80] or "(无标题)",
+        text,
+        text[:200],
+        str(raw.get("author_name") or ""),
+    )
+
+
+def _extract_wechat(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    if not title:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    body = str(raw.get("content") or raw.get("summary") or "")
+    summary = str(raw.get("summary") or title)
+    author = str(raw.get("author") or raw.get("account_name") or "")
+    return (f"wechat:{rid}", title, body, summary, author)
+
+
+def _extract_baidu(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    if not title:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    body = str(raw.get("abstract") or raw.get("content") or "")
+    summary = str(raw.get("abstract") or title)
+    author = str(raw.get("source") or raw.get("source_domain") or "")
+    return (f"baidu:{rid}", title, body, summary, author)
+
+
+def _extract_toutiao(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None:
+    title = (raw.get("title") or "").strip()
+    if not title:
+        return None
+    rid = str(raw.get("id") or "").strip()
+    body = str(raw.get("content") or raw.get("abstract") or "")
+    summary = str(raw.get("abstract") or title)
+    author = str(raw.get("source") or raw.get("author") or "")
+    return (f"toutiao:{rid}", title, body, summary, author)
+
+
+_PLATFORM_EXTRACTORS: dict[str, Callable[[dict[str, Any]], tuple[str, str, str, str, str] | None]] = {
+    "weibo": _extract_weibo,
+    "xiaohongshu": _extract_xiaohongshu,
+    "bilibili": _extract_bilibili,
+    "zhihu": _extract_zhihu,
+    "douyin": _extract_douyin,
+    "wechat": _extract_wechat,
+    "baidu": _extract_baidu,
+    "toutiao": _extract_toutiao,
+}
+
+
+def to_hot_items(
+    report: dict[str, Any],
+) -> tuple[list[HotItem], list[ItemDetail]]:
+    """Convert a parsed last30days report into V3 (HotItem, ItemDetail) pairs.
+
+    Iterates top-level platform keys in `_PLATFORM_KEYS` order. Rank is the
+    1-based position within each platform's item list. Items missing
+    required fields are skipped silently.
+    """
+    items: list[HotItem] = []
+    details: list[ItemDetail] = []
+    now = _now_iso()
+
+    for platform in _PLATFORM_KEYS:
+        raw_items = report.get(platform)
+        if not isinstance(raw_items, list):
+            continue
+        extractor = _PLATFORM_EXTRACTORS[platform]
+        for rank, raw in enumerate(raw_items, start=1):
+            if not isinstance(raw, dict):
+                continue
+            extracted = extractor(raw)
+            if extracted is None:
+                continue
+            item_id, title, body, summary, author = extracted
+            metrics = _engagement_to_metrics(raw.get("engagement"))
+            value, label = _dominant_metric(metrics)
+            heat = HeatMetrics(
+                value=value,
+                label=label,
+                metric_name="last30days_engagement",
+                metrics=metrics,
+            )
+            item = HotItem(
+                item_id=item_id,
+                platform=platform,
+                title=title,
+                url=str(raw.get("url") or ""),
+                rank=rank,
+                heat=heat,
+                summary=summary,
+                publication_time=raw.get("date"),
+                collected_at=now,
+                raw_payload=dict(raw),
+            )
+            detail = ItemDetail(
+                item_id=item_id,
+                content=body,
+                content_status="full_text" if body else "title_only",
+                publication_time=raw.get("date"),
+                collected_at=now,
+                source_url=str(raw.get("url") or ""),
+                fetch_status="ok" if body else "title_only",
+                metadata={"source": "last30days", "platform": platform},
+            )
+            items.append(item)
+            details.append(detail)
+
+    return items, details
