@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
 
@@ -726,4 +728,64 @@ def test_run_one_user_skips_extraction_when_disabled(tmp_path: Path) -> None:
         )
     assert called["extract"] is False
     assert captured["v3_keywords"] is None  # signals "fall back to tracks"
+
+
+def test_run_one_user_passes_keyword_vectors_to_adapter(tmp_path: Path) -> None:
+    """When keywords are extracted, embedding service + keyword vectors
+    are threaded into candidate_adapter.to_discovered for relevance scoring."""
+    from heated_topics_v3.openbiliclaw_integration import candidate_adapter
+
+    spec = _make_spec(track_1="非遗", track_2="民俗")
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[_mock_recommendation()]
+    )
+    captured: dict[str, Any] = {}
+    fake_emb = AsyncMock()
+    fake_emb.embed = AsyncMock(side_effect=[
+        [1.0, 0.0, 0.0],  # keyword 1
+        [0.0, 1.0, 0.0],  # keyword 2
+        [0.0, 0.0, 1.0],  # keyword 3
+    ])
+    fake_runtime = {"llm": MagicMock(), "embedding": fake_emb}
+
+    async def fake_extract(s, llm, cache_dir, *, n=3):
+        return ["非遗", "节气", "民俗"]
+
+    real_to_discovered = candidate_adapter.to_discovered
+
+    async def spy_to_discovered(articles, *, platform, **kwargs):
+        captured.setdefault("calls", []).append({
+            "keyword_vectors": kwargs.get("keyword_vectors"),
+            "sim_threshold": kwargs.get("sim_threshold"),
+            "embedding_service": kwargs.get("embedding_service"),
+            "platform": platform,
+        })
+        return await real_to_discovered(articles, platform=platform, **kwargs)
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(recommender, "extract_or_load", fake_extract),
+        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(candidate_adapter, "to_discovered", spy_to_discovered),
+    ):
+        recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=True,
+            keyword_cache_dir=tmp_path / "_kw_cache",
+            shared_runtime=fake_runtime,
+        )
+
+    # At least one call to to_discovered, and it received our keyword vectors.
+    assert len(captured["calls"]) >= 1
+    first = captured["calls"][0]
+    assert first["embedding_service"] is fake_emb
+    assert first["sim_threshold"] == pytest.approx(0.3)
+    assert first["keyword_vectors"] == [
+        [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
+    ]
+    # 3 keyword embeddings + 1 article embedding (to_discovered) = 4 total.
+    assert fake_emb.embed.call_count == 4
 

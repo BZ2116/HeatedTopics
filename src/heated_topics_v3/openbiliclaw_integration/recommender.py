@@ -665,6 +665,23 @@ async def _run_one_user_async(
             )
             keywords = None
 
+    # 1.5) Embed the 3 keywords once per user (EmbeddingService caches via
+    # L1+L2, so repeat runs within a session / across sessions are free).
+    keyword_vectors: list[list[float]] = []
+    if keywords and shared_runtime is not None:
+        from heated_topics_v3.openbiliclaw_integration import relevance
+        embedding_service = shared_runtime.get("embedding")
+        if embedding_service is not None:
+            keyword_vectors = await relevance.embed_keywords(
+                keywords, embedding_service,
+            )
+            if not keyword_vectors:
+                logger.warning(
+                    "all keyword embeddings failed for %s; "
+                    "falling back to 1/rank scoring",
+                    spec.user_id,
+                )
+
     # 2) Fetch candidates using keywords (or track fallback).
     articles = _fetch_candidates_for_user(
         spec,
@@ -685,17 +702,26 @@ async def _run_one_user_async(
             error_code="no_candidates",
             error_detail=f"Fetched 0 articles from providers={providers or 'all'}",
         )
+    embedding_service = (
+        shared_runtime.get("embedding") if shared_runtime else None
+    )
     candidates = await candidate_adapter.to_discovered(
         articles,
         platform=articles[0].get("platform", "juejin")
         if isinstance(articles[0], dict) and "platform" in articles[0]
         else "juejin",
+        embedding_service=embedding_service,
+        keyword_vectors=keyword_vectors,
+        sim_threshold=0.3,
     )
     # If articles don't carry 'platform' per-item, attribute by provider list order.
     if not any(isinstance(a, dict) and "platform" in a for a in articles):
         if providers and len(providers) == 1:
             candidates = await candidate_adapter.to_discovered(
-                articles, platform=providers[0]
+                articles, platform=providers[0],
+                embedding_service=embedding_service,
+                keyword_vectors=keyword_vectors,
+                sim_threshold=0.3,
             )
     profile = user_profile.build_onion_profile(spec)
     user_data_dir = user_profile.user_data_dir(data_dir, spec.user_id)
