@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from openbiliclaw.discovery.engine import DiscoveredContent
 
 from heated_topics_v3.openbiliclaw_integration.exceptions import CandidateMappingError
+
+logger = logging.getLogger(__name__)
 
 _REQUIRED_FIELDS = ("article_id", "title", "url", "body_text")
 
@@ -33,21 +36,52 @@ def _rank_to_relevance(rank: int) -> float:
     return max(_RELEVANCE_FLOOR, min(1.0, 1.0 / rank))
 
 
-def to_discovered(
+def _article_text_for_embedding(raw: dict[str, Any]) -> str:
+    """Compose the text used to embed a candidate article.
+
+    Title dominates; description / summary / body prefix fill in the rest.
+    Body is capped to avoid runaway embedding cost on long articles.
+    """
+    title = str(raw.get("title") or "").strip()
+    summary = str(
+        raw.get("summary") or raw.get("description") or ""
+    ).strip()
+    body = str(raw.get("body_text") or "").strip()
+    body_prefix = body[:300]
+    parts = [p for p in (title, summary, body_prefix) if p]
+    return " | ".join(parts) if parts else title or "untitled"
+
+
+async def to_discovered(
     articles: list[dict[str, Any]],
     *,
     platform: str,
+    embedding_service: Any | None = None,
+    keyword_vectors: list[list[float]] | None = None,
+    sim_threshold: float = 0.3,
 ) -> list[DiscoveredContent]:
     """Convert a list of V3 Article dicts to DiscoveredContent.
 
-    Skips articles that lack required fields. Logs (does not raise) on
-    individual skips; raises CandidateMappingError only if the input list
-    is not a list.
+    Embedding-based relevance scoring (v2.1.2): when ``keyword_vectors`` is
+    provided, each article's title+summary is embedded and scored by max
+    cosine similarity against the keyword vectors. Articles below
+    ``sim_threshold`` are dropped. The final ``relevance_score`` is
+    ``max_sim * heat_factor(rank)``.
+
+    Falls back to ``1/rank`` (v2.1.1 behavior) when ``keyword_vectors`` is
+    None / empty, when ``embedding_service`` is None, or when the per-article
+    embed call fails / returns empty. Keeps backward compatibility for
+    callers that don't pass embeddings.
     """
+    from heated_topics_v3.openbiliclaw_integration.relevance import (
+        score_article,
+    )
+
     if not isinstance(articles, list):
         raise CandidateMappingError(
             f"articles must be a list, got {type(articles).__name__}"
         )
+    use_embedding = bool(keyword_vectors) and embedding_service is not None
     out: list[DiscoveredContent] = []
     for raw in articles:
         if not isinstance(raw, dict):
@@ -57,6 +91,26 @@ def to_discovered(
             continue
         heat = raw.get("heat") or {}
         rank = int(heat.get("rank", 0))
+
+        if use_embedding:
+            text = _article_text_for_embedding(raw)
+            try:
+                article_vec = await embedding_service.embed(text)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "candidate embedding failed for %r: %s",
+                    raw.get("article_id"), exc,
+                )
+                article_vec = []
+            score: float | None = score_article(
+                article_vec, keyword_vectors,
+                rank=rank, threshold=sim_threshold,
+            )
+            if score is None:
+                continue
+        else:
+            score = _rank_to_relevance(rank)
+
         item = DiscoveredContent(
             title=str(raw["title"]),
             content_id=str(raw["article_id"]),
@@ -73,7 +127,7 @@ def to_discovered(
             favorite_count=int(heat.get("favorite", 0)),
             share_count=int(heat.get("share", 0)),
             source_rank=rank,
-            relevance_score=_rank_to_relevance(rank),
+            relevance_score=score,
             content_type="note",
         )
         out.append(item)

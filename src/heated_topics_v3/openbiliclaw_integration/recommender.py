@@ -685,7 +685,7 @@ async def _run_one_user_async(
             error_code="no_candidates",
             error_detail=f"Fetched 0 articles from providers={providers or 'all'}",
         )
-    candidates = candidate_adapter.to_discovered(
+    candidates = await candidate_adapter.to_discovered(
         articles,
         platform=articles[0].get("platform", "juejin")
         if isinstance(articles[0], dict) and "platform" in articles[0]
@@ -694,7 +694,7 @@ async def _run_one_user_async(
     # If articles don't carry 'platform' per-item, attribute by provider list order.
     if not any(isinstance(a, dict) and "platform" in a for a in articles):
         if providers and len(providers) == 1:
-            candidates = candidate_adapter.to_discovered(
+            candidates = await candidate_adapter.to_discovered(
                 articles, platform=providers[0]
             )
     profile = user_profile.build_onion_profile(spec)
