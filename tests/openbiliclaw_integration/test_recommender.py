@@ -781,7 +781,7 @@ def test_run_one_user_passes_keyword_vectors_to_adapter(tmp_path: Path) -> None:
     assert len(captured["calls"]) >= 1
     first = captured["calls"][0]
     assert first["embedding_service"] is fake_emb
-    assert first["sim_threshold"] == pytest.approx(0.3)
+    assert first["sim_threshold"] == pytest.approx(0.5)
     assert first["keyword_vectors"] == [
         [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0],
     ]

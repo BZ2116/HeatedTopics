@@ -48,17 +48,17 @@ def _unit_vec(*coords: float) -> list[float]:
 
 
 def test_score_article_returns_none_below_threshold() -> None:
-    """Off-topic article (sim 0.1 < 0.3) is pre-filtered."""
+    """Off-topic article (sim 0 < 0.5) is pre-filtered."""
     article = _unit_vec(1.0, 0.0, 0.0)
     kws = [_unit_vec(0.0, 1.0, 0.0), _unit_vec(0.0, 0.0, 1.0)]
-    assert relevance.score_article(article, kws, rank=1, threshold=0.3) is None
+    assert relevance.score_article(article, kws, rank=1, threshold=0.5) is None
 
 
 def test_score_article_returns_sim_times_heat_factor() -> None:
     """On-topic article at rank 2 (heat 0.5) with sim 1.0 → 0.5."""
     article = _unit_vec(1.0, 0.0, 0.0)
     kws = [_unit_vec(1.0, 0.0, 0.0)]
-    score = relevance.score_article(article, kws, rank=2, threshold=0.3)
+    score = relevance.score_article(article, kws, rank=2, threshold=0.5)
     assert score == pytest.approx(0.5, rel=1e-3)
 
 
@@ -69,7 +69,7 @@ def test_score_article_uses_max_sim_across_keywords() -> None:
         _unit_vec(0.0, 1.0, 0.0),  # orthogonal → sim 0
         _unit_vec(1.0, 0.0, 0.0),  # identical → sim 1
     ]
-    score = relevance.score_article(article, kws, rank=10, threshold=0.3)
+    score = relevance.score_article(article, kws, rank=10, threshold=0.5)
     assert score == pytest.approx(1 / 10, rel=1e-3)
 
 
@@ -77,27 +77,27 @@ def test_score_article_heat_floors_at_0_05_for_very_low_rank() -> None:
     """rank 1000 → heat 0.001 floored to 0.05; sim 1.0 → 0.05."""
     article = _unit_vec(1.0, 0.0, 0.0)
     kws = [_unit_vec(1.0, 0.0, 0.0)]
-    score = relevance.score_article(article, kws, rank=1000, threshold=0.3)
+    score = relevance.score_article(article, kws, rank=1000, threshold=0.5)
     assert score == pytest.approx(0.05, rel=1e-3)
 
 
 def test_score_article_returns_none_when_no_keywords() -> None:
     """No keywords → no embedding match → always pre-filtered."""
     article = _unit_vec(1.0, 0.0, 0.0)
-    assert relevance.score_article(article, [], rank=1, threshold=0.3) is None
+    assert relevance.score_article(article, [], rank=1, threshold=0.5) is None
 
 
 def test_score_article_handles_zero_vector_article() -> None:
     """Degenerate embedding (all zeros) → no sim → pre-filtered."""
     kws = [_unit_vec(1.0, 0.0, 0.0)]
-    assert relevance.score_article([0.0, 0.0, 0.0], kws, rank=1, threshold=0.3) is None
+    assert relevance.score_article([0.0, 0.0, 0.0], kws, rank=1, threshold=0.5) is None
 
 
 def test_score_article_handles_zero_vector_keyword() -> None:
     """Zero-vector keyword contributes 0 sim; other keywords still count."""
     article = _unit_vec(1.0, 0.0, 0.0)
     kws = [[0.0, 0.0, 0.0], _unit_vec(1.0, 0.0, 0.0)]
-    score = relevance.score_article(article, kws, rank=10, threshold=0.3)
+    score = relevance.score_article(article, kws, rank=10, threshold=0.5)
     assert score == pytest.approx(1 / 10, rel=1e-3)
 
 

@@ -213,7 +213,7 @@ async def test_to_discovered_filters_below_sim_threshold() -> None:
         articles, platform="juejin",
         embedding_service=fake_emb,
         keyword_vectors=[[1.0, 0.0, 0.0]],
-        sim_threshold=0.3,
+        sim_threshold=0.5,
     )
     assert [it.content_id for it in items] == ["on"]
     assert items[0].relevance_score == pytest.approx(1.0 * (1 / 5), rel=1e-3)
@@ -245,7 +245,7 @@ async def test_to_discovered_uses_empty_keyword_vecs_as_fallback() -> None:
     fake_emb = AsyncMock()
     items = await candidate_adapter.to_discovered(
         articles, platform="juejin",
-        embedding_service=fake_emb, keyword_vectors=[], sim_threshold=0.3,
+        embedding_service=fake_emb, keyword_vectors=[], sim_threshold=0.5,
     )
     assert items[0].relevance_score == pytest.approx(1 / 4, rel=1e-3)
     # Embed was never called because we have no keyword vectors to compare to.
@@ -267,6 +267,6 @@ async def test_to_discovered_skips_article_when_embed_returns_empty() -> None:
         articles, platform="juejin",
         embedding_service=fake_emb,
         keyword_vectors=[[1.0, 0.0, 0.0]],
-        sim_threshold=0.3,
+        sim_threshold=0.5,
     )
     assert items == []

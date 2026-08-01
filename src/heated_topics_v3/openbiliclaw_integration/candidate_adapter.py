@@ -58,7 +58,7 @@ async def to_discovered(
     platform: str,
     embedding_service: Any | None = None,
     keyword_vectors: list[list[float]] | None = None,
-    sim_threshold: float = 0.3,
+    sim_threshold: float = 0.5,
 ) -> list[DiscoveredContent]:
     """Convert a list of V3 Article dicts to DiscoveredContent.
 

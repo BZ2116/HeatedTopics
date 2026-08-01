@@ -270,9 +270,12 @@ def test_end_to_end_one_user_filters_offtopic_via_embedding(
         ])
 
     assert code == 0
+    # CLI writes to today's date; find the file dynamically.
+    user_dir = out_dir / "wh_user_01"
+    date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
+    assert len(date_dirs) == 1
     data = json.loads(
-        (out_dir / "wh_user_01" / "2026-08-01" / "recommendations.json")
-        .read_text(encoding="utf-8")
+        (date_dirs[0] / "recommendations.json").read_text(encoding="utf-8")
     )
     titles = [r["title"] for r in data["recommendations"]]
     assert not any("Flutter" in t for t in titles), titles

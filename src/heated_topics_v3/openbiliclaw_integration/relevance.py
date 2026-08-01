@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 
 _HEAT_FLOOR = 0.05
 _HEAT_CEIL = 1.0
-_SIM_THRESHOLD = 0.3
+# Empirically calibrated for bge-m3 + Chinese short-text. Random off-topic
+# articles cluster at sim 0.30-0.42 (Flutter UI ≈ 0.35, empty wechat stubs ≈
+# 0.42). On-topic content starts at sim ≈ 0.50. 0.50 cleanly separates.
+_SIM_THRESHOLD = 0.5
 
 
 def _heat_factor(rank: int) -> float:

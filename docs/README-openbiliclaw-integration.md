@@ -142,14 +142,14 @@ recs/
 sim         = max(cosine(article_vec, kw_vec) for kw in keywords)   # 0-1
 heat_factor = clamp(1/rank, 0.05, 1.0)
 score       = sim * heat_factor                                    # 0-1
-if sim < 0.3: drop article (pre-filter)
+if sim < 0.5: drop article (pre-filter)
 ```
 
 **关键词嵌入**：`extract_or_load` 抽完 3 个关键词后，每个调 `EmbeddingService.embed`（bge-m3，1024-d，L1+L2 缓存 → 重复跑免费）。如果全部失败，**退回 v2.1.1 的 `1/rank`** 行为，pipeline 不崩。
 
 **文章嵌入**：对每条候选文章用 `title + summary + body[:300]` 调一次 embed。空 body 或 embed 失败 → 该候选被视为无信号，直接丢弃。
 
-**Pre-filter**：sim < 0.3 的文章直接丢弃，根本进不了引擎；top-N 一定全是语义相关的。这是 v2.1.2 修掉 juejin Flutter UI / Apache Tika 跑进非遗用户推荐列表的根因。
+**Pre-filter 阈值 0.5 的来源**（bge-m3 中文短文实测）：完全离题的文章（如 Flutter UI）sim 落在 0.30-0.42；强相关内容 sim 起点约 0.50；0.50 是干净的分离点。比 0.3 高很多，否则噪声文章会污染推荐列表。
 
 **热度的角色**：保留为 tie-breaker。两个 sim=0.8 的候选里，rank-1 排前，rank-10 排后。但 sim=0.1 的 rank-1 永远打不过 sim=0.5 的 rank-50。
 
@@ -187,7 +187,7 @@ LLM 抽出的关键词持久化在 `{output_dir}/_keyword_cache/{user_id}/keywor
 | `Last30DaysSourceError` | last30days 子进程失败 | 检查 `--last30days-cli-path`、拉大 `--last30days-timeout` |
 | `Last30DaysParseError` | 报告 JSON 损坏或格式变更 | 看 `data/last30days/<user_id>/last30days.json` |
 | 关键词抽得不相关 / 离线时 LLM 不可用 | 关键词质量差或网络问题 | ① 看日志 `keyword cache hit`/`miss` 确认是否命中缓存；② 删 `_keyword_cache/<user_id>/` 强制重抽；③ 用 `--no-keyword-extraction` 回退 |
-| 推荐全是空白 / top-8 少于 8 条 | sim threshold 把候选过滤光 | ① 检查关键词是否合理（看 `_keyword_cache/<user_id>/`）；② 删关键词缓存强制重抽；③ 临时把代码里 `sim_threshold=0.3` 调低 |
+| 推荐全是空白 / top-8 少于 8 条 | sim threshold 把候选过滤光 | ① 检查关键词是否合理（看 `_keyword_cache/<user_id>/`）；② 删关键词缓存强制重抽；③ 临时把代码里 `sim_threshold=0.5` 调低 |
 | `Excel invalid: missing required columns` | xlsx 表头缺列 | 4 列都写上 |
 | `Excel has zero users` | xlsx 没数据行 | 至少 1 行用户 |
 | 退出码 1 | 部分用户失败 | 看每个 `recommendations.json` 的 `error` 字段 |

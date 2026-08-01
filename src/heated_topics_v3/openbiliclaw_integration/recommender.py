@@ -712,7 +712,7 @@ async def _run_one_user_async(
         else "juejin",
         embedding_service=embedding_service,
         keyword_vectors=keyword_vectors,
-        sim_threshold=0.3,
+        sim_threshold=0.5,
     )
     # If articles don't carry 'platform' per-item, attribute by provider list order.
     if not any(isinstance(a, dict) and "platform" in a for a in articles):
@@ -721,7 +721,7 @@ async def _run_one_user_async(
                 articles, platform=providers[0],
                 embedding_service=embedding_service,
                 keyword_vectors=keyword_vectors,
-                sim_threshold=0.3,
+                sim_threshold=0.5,
             )
     profile = user_profile.build_onion_profile(spec)
     user_data_dir = user_profile.user_data_dir(data_dir, spec.user_id)
