@@ -180,3 +180,30 @@ async def _extract_via_llm(
         )
         return _fallback_keywords(spec)
     return keywords[:n]
+
+
+async def extract_or_load(
+    spec: UserSpec,
+    llm_service: "LLMService",
+    cache_dir: Path,
+    *,
+    n: int = _N_KEYWORDS,
+) -> list[str]:
+    """Return n keywords for the user, preferring the per-user cache.
+
+    Cache is keyed by ``_spec_hash(spec)``; if the user's track_1/track_2/
+    persona change, the hash changes and the keywords are re-extracted.
+    """
+    cached = _load_cache(cache_dir, spec)
+    if cached is not None:
+        logger.info("keyword cache hit for %s (%d kw)", spec.user_id, len(cached))
+        return cached[:n]
+    logger.info("keyword cache miss for %s; calling LLM", spec.user_id)
+    keywords = await _extract_via_llm(spec, llm_service, n=n)
+    try:
+        _save_cache(cache_dir, spec, keywords)
+    except OSError as exc:
+        logger.warning(
+            "failed to persist keyword cache for %s: %s", spec.user_id, exc,
+        )
+    return keywords
