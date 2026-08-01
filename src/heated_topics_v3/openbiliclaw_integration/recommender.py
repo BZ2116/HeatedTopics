@@ -611,7 +611,7 @@ async def _run_one_user_async(
     *,
     data_dir: Path,
     limit: int,
-    body_preview_chars: int,
+    body_max_chars: int,
     per_user_timeout: float,
     providers: list[str] | None,
     shared_runtime: Any | None,
@@ -665,7 +665,8 @@ async def _run_one_user_async(
     try:
         async with asyncio.timeout(per_user_timeout):
             recommendations = await engine.serve_external_candidates(
-                profile, candidates, limit=limit, persist=False
+                profile, candidates, limit=limit, persist=False,
+                expression_mode="precomputed",
             )
     except TimeoutError:
         return output.format_user_failure(
@@ -686,24 +687,14 @@ async def _run_one_user_async(
             error_code="no_recommendations",
             error_detail="Engine returned 0 recommendations",
         )
-    rec_dicts = [
-        output.format_recommendation(
-            rec, rank=i + 1, body_preview_chars=body_preview_chars
-        )
-        for i, rec in enumerate(recommendations)
-    ]
-    user_summary = output.format_user_success_summary(
+    return output.format_user_file(
         user_id=spec.user_id,
-        display_name=spec.display_name,
-        interests_count=len(spec.interests),
-        disliked_count=len(spec.disliked_topics),
-        fetched=len(articles),
-        after_filter=len(candidates),
-        considered=len(candidates),
-        embedding_degraded=False,
+        track_1=spec.track_1,
+        track_2=spec.track_2,
+        persona=spec.persona,
+        recommendations=recommendations,
+        body_max_chars=body_max_chars,
     )
-    user_summary["recommendations"] = rec_dicts
-    return user_summary
 
 
 def run_one_user(
@@ -711,7 +702,7 @@ def run_one_user(
     *,
     data_dir: Path,
     limit: int = 5,
-    body_preview_chars: int = 800,
+    body_max_chars: int = 50_000,
     per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
@@ -729,7 +720,7 @@ def run_one_user(
             spec,
             data_dir=data_dir,
             limit=limit,
-            body_preview_chars=body_preview_chars,
+            body_max_chars=body_max_chars,
             per_user_timeout=per_user_timeout,
             providers=providers,
             shared_runtime=shared_runtime,
@@ -746,11 +737,11 @@ def run_one_user(
 
 async def run_all_users(
     *,
-    users_path: Path,
+    specs: list[user_profile.UserSpec],
     data_dir: Path,
     max_parallel: int = 5,
     limit: int = 5,
-    body_preview_chars: int = 800,
+    body_max_chars: int = 50_000,
     per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
     shared_runtime: Any | None = None,
@@ -762,13 +753,13 @@ async def run_all_users(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
-) -> list[dict[str, Any]]:
-    """Run recommendation for all users with bounded concurrency.
+) -> dict[str, dict[str, Any]]:
+    """Run recommendation for all users. Returns {user_id: payload}.
 
-    Per-user failures are isolated: one user's exception does not affect
-    the others. Each user gets a separate data_dir under data_dir/users/.
+    v2: takes pre-loaded specs (caller loads from xlsx via excel_loader).
+    Returns dict keyed by user_id so CLI can write per-user files without
+    re-correlating with the input list.
     """
-    specs = load_users(users_path)
     if shared_runtime is None and config_path is not None:
         shared_runtime = _build_shared_runtime(
             shared_data_dir=data_dir,
@@ -783,7 +774,7 @@ async def run_all_users(
                     spec,
                     data_dir=data_dir,
                     limit=limit,
-                    body_preview_chars=body_preview_chars,
+                    body_max_chars=body_max_chars,
                     per_user_timeout=per_user_timeout,
                     providers=providers,
                     shared_runtime=shared_runtime,
@@ -803,4 +794,5 @@ async def run_all_users(
                     error_detail=f"{type(exc).__name__}: {exc}",
                 )
 
-    return await asyncio.gather(*[_one(s) for s in specs])
+    results = await asyncio.gather(*[_one(s) for s in specs])
+    return {r["user_id"]: r for r in results}
