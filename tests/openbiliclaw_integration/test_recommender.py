@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -643,3 +644,76 @@ def test_fetch_candidates_no_prefer_search_keeps_all_hot() -> None:
     assert len(articles) == 4
     hot_urls = [a["url"] for a in articles if "hot.com" in a["url"]]
     assert len(hot_urls) == 2
+
+
+def test_run_one_user_extracts_keywords_when_enabled(tmp_path: Path) -> None:
+    """When keyword extraction is enabled, LLM keywords flow into V3
+    search queries."""
+    spec = _make_spec(track_1="非遗", track_2="民俗")
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[_mock_recommendation()]
+    )
+    captured: dict[str, Any] = {}
+    fake_runtime = {"llm": MagicMock()}
+
+    async def fake_extract(s, llm, cache_dir, *, n=3):
+        captured["extracted_user"] = s.user_id
+        return ["非遗手工艺", "传统节气", "老字号"]
+
+    def fake_fetch(s, *, keywords=None, **kwargs):
+        captured["v3_keywords"] = keywords
+        return [_mock_article()]
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(recommender, "extract_or_load", fake_extract),
+        patch.object(recommender, "fetch_candidates", fake_fetch),
+    ):
+        recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=True,
+            keyword_cache_dir=tmp_path / "_kw_cache",
+            shared_runtime=fake_runtime,
+        )
+    assert captured["extracted_user"] == spec.user_id
+    assert captured["v3_keywords"] == ["非遗手工艺", "传统节气", "老字号"]
+
+
+def test_run_one_user_skips_extraction_when_disabled(tmp_path: Path) -> None:
+    """When --no-keyword-extraction is set, LLM is not called; tracks
+    fall back to track_1/track_2."""
+    spec = _make_spec()
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[_mock_recommendation()]
+    )
+    called = {"extract": False}
+    captured: dict[str, Any] = {}
+    fake_runtime = {"llm": MagicMock()}
+
+    async def fake_extract(s, llm, cache_dir, *, n=3):
+        called["extract"] = True
+        return ["x", "y", "z"]
+
+    def fake_fetch(s, *, keywords=None, **kwargs):
+        captured["v3_keywords"] = keywords
+        return [_mock_article()]
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(recommender, "extract_or_load", fake_extract),
+        patch.object(recommender, "fetch_candidates", fake_fetch),
+    ):
+        recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=False,
+            shared_runtime=fake_runtime,
+        )
+    assert called["extract"] is False
+    assert captured["v3_keywords"] is None  # signals "fall back to tracks"
+

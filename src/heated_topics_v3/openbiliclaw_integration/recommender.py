@@ -13,6 +13,7 @@ from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
 from heated_topics_v3.openbiliclaw_integration import (
     candidate_adapter,
+    keyword_extractor,
     last30days_adapter,
     last30days_source,
     output,
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 
 # Re-export for convenience so tests can patch via `recommender.load_users`.
 load_users = user_profile.load_users
+# Re-export keyword_extractor entry point so tests can patch via
+# `recommender.extract_or_load` (mirrors how the function is called below).
+extract_or_load = keyword_extractor.extract_or_load
 
 
 # Default provider list (ordered by typical relevance for V3 hot topics).
@@ -259,6 +263,7 @@ def fetch_candidates(
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     target_limit: int = 10,
+    keywords: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch hot articles for one user from V3 providers.
 
@@ -331,7 +336,12 @@ def fetch_candidates(
                     pass
 
     # --- Pass 2: search ---------------------------------------------------
-    tracks = _spec_tracks(spec)
+    # LLM-extracted keywords (if provided) take precedence over the raw
+    # track_1/track_2 — they are typically more specific and trending.
+    if keywords:
+        tracks = [k for k in keywords if k and k.strip()]
+    else:
+        tracks = _spec_tracks(spec)
     if use_search and tracks:
         search_enabled = [
             p
@@ -426,6 +436,8 @@ def _first_track(spec: user_profile.UserSpec) -> str:
 def _fetch_last30days_candidates(
     spec: user_profile.UserSpec,
     cfg: dict[str, Any],
+    *,
+    primary_keyword: str | None = None,
 ) -> list[dict[str, Any]]:
     """Invoke last30days CLI for one user; return V3 article dicts.
 
@@ -433,9 +445,13 @@ def _fetch_last30days_candidates(
     → ``_hotitem_to_article`` (existing V3 internal mapper). The returned
     list is in the same shape as ``fetch_candidates``, so downstream code
     needs no awareness of which source produced each article.
+
+    Query resolution: ``cfg['query']`` > ``primary_keyword`` (LLM-extracted
+    first keyword) > ``_first_track(spec)``. This lets the LLM keyword
+    extractor override the raw track when enabled.
     """
     cli_path = Path(cfg["cli_path"])
-    query = cfg.get("query") or _first_track(spec)
+    query = cfg.get("query") or primary_keyword or _first_track(spec)
     if not query:
         logger.warning("user %s: no query for last30days, skipping", spec.user_id)
         return []
@@ -477,12 +493,16 @@ def _fetch_candidates_for_user(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    keywords: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Dispatch candidate fetching based on ``source``.
 
     - ``v3-hotlist``: only V3 providers (default; preserves existing behaviour).
     - ``last30days``: only last30days CLI (requires ``last30days_config``).
     - ``both``: V3 first, last30days second with URL dedup (V3 wins ties).
+
+    ``keywords`` (LLM-extracted) override track_1/track_2 for both V3 search
+    queries and the last30days primary query (keywords[0]).
     """
     articles: list[dict[str, Any]] = []
     if source in ("v3-hotlist", "both"):
@@ -496,6 +516,7 @@ def _fetch_candidates_for_user(
                 search_top_k=search_top_k,
                 search_results_per_interest=search_results_per_interest,
                 target_limit=target_limit,
+                keywords=keywords,
             )
         )
     if source in ("last30days", "both"):
@@ -507,7 +528,10 @@ def _fetch_candidates_for_user(
                 )
                 return []
         else:
-            l30 = _fetch_last30days_candidates(spec, last30days_config)
+            primary_keyword = keywords[0] if keywords else None
+            l30 = _fetch_last30days_candidates(
+                spec, last30days_config, primary_keyword=primary_keyword,
+            )
             if source == "both":
                 seen = {a.get("url") for a in articles if a.get("url")}
                 for a in l30:
@@ -622,8 +646,26 @@ async def _run_one_user_async(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    use_keyword_extraction: bool = True,
+    keyword_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Async body of run_one_user."""
+    # 1) Extract (or load cached) hot keywords from the user's profile.
+    keywords: list[str] | None = None
+    if use_keyword_extraction and shared_runtime is not None:
+        cache_dir = keyword_cache_dir or (data_dir / "_keyword_cache")
+        try:
+            keywords = await extract_or_load(
+                spec, shared_runtime["llm"], cache_dir,
+            )
+        except Exception as exc:
+            logger.warning(
+                "keyword extraction crashed for %s, falling back to tracks: %s",
+                spec.user_id, exc,
+            )
+            keywords = None
+
+    # 2) Fetch candidates using keywords (or track fallback).
     articles = _fetch_candidates_for_user(
         spec,
         source=source,
@@ -635,6 +677,7 @@ async def _run_one_user_async(
         search_providers=search_providers,
         search_top_k=search_top_k,
         search_results_per_interest=search_results_per_interest,
+        keywords=keywords,
     )
     if not articles:
         return output.format_user_failure(
@@ -713,6 +756,8 @@ def run_one_user(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    use_keyword_extraction: bool = True,
+    keyword_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Synchronous wrapper around _run_one_user_async."""
     return asyncio.run(
@@ -731,6 +776,8 @@ def run_one_user(
             search_results_per_interest=search_results_per_interest,
             source=source,
             last30days_config=last30days_config,
+            use_keyword_extraction=use_keyword_extraction,
+            keyword_cache_dir=keyword_cache_dir,
         )
     )
 
@@ -753,6 +800,8 @@ async def run_all_users(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    use_keyword_extraction: bool = True,
+    keyword_cache_dir: Path | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run recommendation for all users. Returns {user_id: payload}.
 
@@ -785,6 +834,8 @@ async def run_all_users(
                     search_results_per_interest=search_results_per_interest,
                     source=source,
                     last30days_config=last30days_config,
+                    use_keyword_extraction=use_keyword_extraction,
+                    keyword_cache_dir=keyword_cache_dir,
                 )
             except Exception as exc:
                 logger.exception("user %s unexpected error", spec.user_id)
