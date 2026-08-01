@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from openpyxl import Workbook
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
+from openpyxl import Workbook
 
 from heated_topics_v3.openbiliclaw_integration import cli, recommender
 

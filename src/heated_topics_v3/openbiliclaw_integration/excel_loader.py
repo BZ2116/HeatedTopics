@@ -18,7 +18,6 @@ from heated_topics_v3.openbiliclaw_integration.user_profile import (
     load_users,
 )
 
-
 # Map known header aliases to canonical names. Case-insensitive, trimmed.
 _HEADER_ALIASES: dict[str, str] = {
     "user_id": "user_id",

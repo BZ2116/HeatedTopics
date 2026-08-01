@@ -192,16 +192,16 @@ def _call_provider_search(
     return provider.search(keyword, 1)
 
 
-def _is_hot_relevant(article: dict[str, Any], interests: Any) -> bool:
-    """Loose relevance: any interest name appears in title/body/summary.
+def _is_hot_relevant(article: dict[str, Any], tracks: list[str]) -> bool:
+    """Loose relevance: any track name appears in title/body/summary.
 
     Cheap stand-in for "does this hot-list item actually match what the
     user cares about". Embedding similarity would be more accurate but
     costs an extra LLM/embedding round-trip per hot item; the keyword
     check is a 0-cost filter that catches obvious mismatches like
-    "解放军警告" vs interests = ["非遗", "地方习俗"…].
+    "解放军警告" vs tracks = ["非遗", "地方习俗"…].
     """
-    if not interests:
+    if not tracks:
         return False
     title = article.get("title") or ""
     body_text = article.get("body_text") or ""
@@ -209,25 +209,25 @@ def _is_hot_relevant(article: dict[str, Any], interests: Any) -> bool:
     haystack = f"{title} {body_text} {summary}".lower()
     if not haystack.strip():
         return False
-    return any(i.name.lower() in haystack for i in interests)
+    return any(t.lower() in haystack for t in tracks if t.strip())
 
 
 def _rebalance_pool(
     hot: list[dict[str, Any]],
     search: list[dict[str, Any]],
-    interests: Any,
+    tracks: list[str],
     target_limit: int,
     prefer_search: bool,
 ) -> list[dict[str, Any]]:
     """Build the final candidate pool. Search is trusted over hot when
-    prefer_search=True; hot-list items that don't mention the user's
-    interests are dropped so the engine's MMR doesn't get pulled back to
+    prefer_search=True; hot-list items that don't mention any of the user's
+    tracks are dropped so the engine's MMR doesn't get pulled back to
     generic-news top picks.
     """
     if not prefer_search:
         return hot + search
-    relevant_hot = [a for a in hot if _is_hot_relevant(a, interests)]
-    other_hot = [a for a in hot if not _is_hot_relevant(a, interests)]
+    relevant_hot = [a for a in hot if _is_hot_relevant(a, tracks)]
+    other_hot = [a for a in hot if not _is_hot_relevant(a, tracks)]
     plenty = target_limit * 4  # search-only pool > 4× limit = drop hot
     enough = target_limit  # search >= limit: keep some relevant_hot for variety
     target_pool_size = max(40, target_limit * 4)
@@ -241,6 +241,11 @@ def _rebalance_pool(
         if len(pool) < target_pool_size:
             pool.extend(other_hot[: target_pool_size - len(pool)])
     return pool[:target_pool_size]
+
+
+def _spec_tracks(spec: user_profile.UserSpec) -> list[str]:
+    """Return non-empty track_1/track_2 as a list (search keywords)."""
+    return [t for t in (spec.track_1, spec.track_2) if t and t.strip()]
 
 
 def fetch_candidates(
@@ -326,7 +331,8 @@ def fetch_candidates(
                     pass
 
     # --- Pass 2: search ---------------------------------------------------
-    if use_search and spec.interests:
+    tracks = _spec_tracks(spec)
+    if use_search and tracks:
         search_enabled = [
             p
             for p in (
@@ -337,13 +343,11 @@ def fetch_candidates(
             if p in enabled
         ]
         if search_enabled:
-            top_interests = sorted(
-                spec.interests, key=lambda i: i.weight, reverse=True
-            )[:search_top_k]
+            top_tracks = tracks[:search_top_k]
             logger.info(
-                "search pass: providers=%s interests=%s",
+                "search pass: providers=%s tracks=%s",
                 search_enabled,
-                [i.name for i in top_interests],
+                top_tracks,
             )
             for platform in search_enabled:
                 built = _build_provider(platform)
@@ -351,12 +355,12 @@ def fetch_candidates(
                     continue
                 provider, client = built
                 try:
-                    for interest in top_interests:
+                    for track in top_tracks:
                         try:
                             capture = _call_provider_search(
                                 provider,
                                 platform,
-                                interest.name,
+                                track,
                                 search_results_per_interest,
                                 collected_at,
                             )
@@ -365,7 +369,7 @@ def fetch_candidates(
                             logger.warning(
                                 "search %s(%s) failed: %s",
                                 platform,
-                                interest.name,
+                                track,
                                 exc,
                             )
                             continue
@@ -385,12 +389,12 @@ def fetch_candidates(
                                 detail = None
                             article = _hotitem_to_article(item, detail, platform)
                             if article is not None:
-                                article["search_query"] = interest.name
+                                article["search_query"] = track
                             _add_to(search_articles, article)
                         for item in items[_SEARCH_DETAIL_FETCH_CAP_PER_INTEREST:]:
                             article = _hotitem_to_article(item, None, platform)
                             if article is not None:
-                                article["search_query"] = interest.name
+                                article["search_query"] = track
                             _add_to(search_articles, article)
                 finally:
                     close = getattr(client, "close", None)
@@ -404,7 +408,7 @@ def fetch_candidates(
         return _rebalance_pool(
             hot_articles,
             search_articles,
-            spec.interests,
+            tracks,
             target_limit=target_limit,
             prefer_search=prefer_search,
         )
@@ -414,11 +418,9 @@ def fetch_candidates(
 # --- last30days source support ----------------------------------------------
 
 
-def _first_interest_name(spec: user_profile.UserSpec) -> str:
-    """Return the highest-weight interest name, or '' if none."""
-    if not spec.interests:
-        return ""
-    return max(spec.interests, key=lambda i: i.weight).name
+def _first_track(spec: user_profile.UserSpec) -> str:
+    """Return the first non-empty track name, or '' if none."""
+    return (spec.track_1 or spec.track_2 or "").strip()
 
 
 def _fetch_last30days_candidates(
@@ -433,9 +435,7 @@ def _fetch_last30days_candidates(
     needs no awareness of which source produced each article.
     """
     cli_path = Path(cfg["cli_path"])
-    query = cfg.get("query") or spec.user_id  # fallback chain handled below
-    if not query:
-        query = _first_interest_name(spec)
+    query = cfg.get("query") or _first_track(spec)
     if not query:
         logger.warning("user %s: no query for last30days, skipping", spec.user_id)
         return []

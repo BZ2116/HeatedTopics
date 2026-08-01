@@ -1,26 +1,22 @@
-"""Tests for source dispatch in recommender."""
+"""Tests for source dispatch in recommender (v2 UserSpec)."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from heated_topics_v3.openbiliclaw_integration import recommender
+from heated_topics_v3.openbiliclaw_integration.user_profile import UserSpec
 
 
-def _make_spec():
-    """Minimal UserSpec-like dict for dispatch tests."""
-    from heated_topics_v3.openbiliclaw_integration.user_profile import UserSpec
-
+def _make_spec(user_id: str = "u_test") -> UserSpec:
+    """Minimal v2 UserSpec — no interests/core_traits/etc."""
     return UserSpec(
-        user_id="u_test",
-        display_name="Test",
-        interests=[],
-        disliked_topics=[],
-        core_traits=[],
-        deep_needs=[],
-        values=[],
-        recent_awareness=[],
-        active_insights=[],
+        user_id=user_id,
+        display_name=user_id,
+        track_1="AI",
+        track_2="副业",
+        persona="博主",
     )
 
 
@@ -148,4 +144,11 @@ def test_fetch_last30days_candidates_returns_list_dict(monkeypatch, tmp_path) ->
     assert out == []
 
 
-import json  # noqa: E402
+def test_first_track_returns_track_1_when_set() -> None:
+    spec = UserSpec(user_id="u", track_1="AI", track_2="副业", persona="")
+    assert recommender._first_track(spec) == "AI"
+
+
+def test_first_track_returns_track_1_even_when_track_2_empty() -> None:
+    spec = UserSpec(user_id="u", track_1="AI", track_2="", persona="")
+    assert recommender._first_track(spec) == "AI"

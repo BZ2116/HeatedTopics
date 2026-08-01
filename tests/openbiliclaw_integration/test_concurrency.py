@@ -1,35 +1,33 @@
-"""Tests for multi-user concurrent orchestration."""
+"""Tests for multi-user concurrent orchestration (v2 UserSpec)."""
 
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from heated_topics_v3.openbiliclaw_integration import recommender
+from heated_topics_v3.openbiliclaw_integration.user_profile import UserSpec
 
 
-def _users(n: int) -> dict[str, list[dict[str, Any]]]:
-    return {
-        "users": [
-            {
-                "user_id": f"u{i}",
-                "display_name": f"U{i}",
-                "interests": [{"name": "x", "category": "x", "weight": 0.5}],
-            }
-            for i in range(n)
-        ]
-    }
+def _specs(n: int) -> list[UserSpec]:
+    return [
+        UserSpec(
+            user_id=f"u{i}",
+            display_name=f"U{i}",
+            track_1="AI",
+            track_2="副业",
+            persona="博主",
+        )
+        for i in range(n)
+    ]
 
 
 @pytest.mark.asyncio
 async def test_run_all_users_serial_default(tmp_path: Path) -> None:
-    users_p = tmp_path / "users.json"
-    users_p.write_text(json.dumps(_users(3), ensure_ascii=False), encoding="utf-8")
+    specs = _specs(3)
     with patch.object(
         recommender,
         "_run_one_user_async",
@@ -41,16 +39,14 @@ async def test_run_all_users_serial_default(tmp_path: Path) -> None:
         ],
     ):
         results = await recommender.run_all_users(
-            users_path=users_p, data_dir=tmp_path, max_parallel=1
+            specs=specs, data_dir=tmp_path, max_parallel=1
         )
-    assert len(results) == 3
-    assert [r["user_id"] for r in results] == ["u0", "u1", "u2"]
+    assert set(results.keys()) == {"u0", "u1", "u2"}
 
 
 @pytest.mark.asyncio
 async def test_run_all_users_parallel_respects_cap(tmp_path: Path) -> None:
-    users_p = tmp_path / "users.json"
-    users_p.write_text(json.dumps(_users(10), ensure_ascii=False), encoding="utf-8")
+    specs = _specs(10)
 
     active = 0
     max_active = 0
@@ -73,7 +69,7 @@ async def test_run_all_users_parallel_respects_cap(tmp_path: Path) -> None:
         side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
-            users_path=users_p, data_dir=tmp_path, max_parallel=3
+            specs=specs, data_dir=tmp_path, max_parallel=3
         )
     assert len(results) == 10
     assert max_active <= 3
@@ -82,8 +78,7 @@ async def test_run_all_users_parallel_respects_cap(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_run_all_users_isolates_failures(tmp_path: Path) -> None:
-    users_p = tmp_path / "users.json"
-    users_p.write_text(json.dumps(_users(3), ensure_ascii=False), encoding="utf-8")
+    specs = _specs(3)
 
     async def fake_run(spec, **kwargs):
         if spec.user_id == "u1":
@@ -97,11 +92,11 @@ async def test_run_all_users_isolates_failures(tmp_path: Path) -> None:
         side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
-            users_path=users_p, data_dir=tmp_path, max_parallel=2
+            specs=specs, data_dir=tmp_path, max_parallel=2
         )
     assert len(results) == 3
-    assert any(r.get("error") == "boom" for r in results)
-    assert sum(1 for r in results if "error" not in r) == 2
+    assert results["u1"]["error"] == "boom"
+    assert sum(1 for r in results.values() if "error" not in r) == 2
 
 
 @pytest.mark.asyncio
@@ -112,8 +107,7 @@ async def test_run_all_users_passes_raw_data_dir_no_double_nest(
     a per-user subpath. Per-user isolation is its job, not the orchestrator's.
     Otherwise we get ``data_dir/users/<id>/users/<id>/...``.
     """
-    users_p = tmp_path / "users.json"
-    users_p.write_text(json.dumps(_users(2), ensure_ascii=False), encoding="utf-8")
+    specs = _specs(2)
 
     captured: list[Path] = []
 
@@ -128,7 +122,7 @@ async def test_run_all_users_passes_raw_data_dir_no_double_nest(
         side_effect=fake_run,
     ):
         await recommender.run_all_users(
-            users_path=users_p, data_dir=tmp_path, max_parallel=2
+            specs=specs, data_dir=tmp_path, max_parallel=2
         )
 
     assert len(captured) == 2
