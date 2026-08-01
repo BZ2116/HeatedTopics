@@ -87,6 +87,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--last30days-timeout", type=float, default=120.0,
         help="Per-user last30days subprocess timeout (default 120)",
     )
+    p.add_argument(
+        "--no-keyword-extraction", dest="keyword_extraction",
+        action="store_false", default=True,
+        help=(
+            "Skip LLM-driven keyword extraction; fall back to "
+            "track_1/track_2 as search queries. Default: extract 3 "
+            "keywords from track_1/track_2/persona via LLM, cache "
+            "per user under _keyword_cache/."
+        ),
+    )
     return p.parse_args(list(argv))
 
 
@@ -150,6 +160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_user_timeout=args.per_user_timeout,
             source=args.source,
             last30days_config=last30days_config,
+            use_keyword_extraction=args.keyword_extraction,
+            keyword_cache_dir=args.output_dir / "_keyword_cache",
         )
     except Exception:
         logger.exception("fatal error in run_all_users")

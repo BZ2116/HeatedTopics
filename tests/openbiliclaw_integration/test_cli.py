@@ -47,3 +47,21 @@ def test_parse_args_default_limit_is_8() -> None:
         ["--users-excel", "users.xlsx", "--output-dir", "recs/"]
     )
     assert args.limit == 8
+
+
+def test_parse_args_keyword_extraction_defaults_to_true() -> None:
+    args = cli.parse_args(
+        ["--users-excel", "u.xlsx", "--output-dir", "o/"]
+    )
+    assert args.keyword_extraction is True
+
+
+def test_parse_args_no_keyword_extraction_disables() -> None:
+    args = cli.parse_args(
+        [
+            "--users-excel", "u.xlsx",
+            "--output-dir", "o/",
+            "--no-keyword-extraction",
+        ]
+    )
+    assert args.keyword_extraction is False

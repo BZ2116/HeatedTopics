@@ -113,7 +113,7 @@ def _parse_keyword_json(text: str) -> list[str] | None:
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         stripped = "\n".join(lines).strip()
     start = stripped.find("[")
     end = stripped.rfind("]")
@@ -167,7 +167,7 @@ async def _extract_via_llm(
             ),
             timeout=timeout,
         )
-    except (LLMServiceError, asyncio.TimeoutError, RuntimeError, ValueError) as exc:
+    except (TimeoutError, LLMServiceError, RuntimeError, ValueError) as exc:
         logger.warning(
             "keyword extraction LLM call failed for %s: %s", spec.user_id, exc,
         )

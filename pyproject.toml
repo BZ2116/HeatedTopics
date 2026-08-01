@@ -63,3 +63,6 @@ lint.ignore = [
 [tool.ruff.lint.per-file-ignores]
 # Test fixtures legitimately use CJK punctuation and long embedded strings.
 "tests/**" = ["RUF001"]
+# keyword_extractor.py contains Chinese prompt templates (CJK punctuation
+# is required) and uses forward-reference quotes for LLMService (TYPE_CHECKING).
+"src/heated_topics_v3/openbiliclaw_integration/keyword_extractor.py" = ["RUF001", "UP037"]
