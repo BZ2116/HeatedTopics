@@ -760,6 +760,10 @@ def run_one_user(
     keyword_cache_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Synchronous wrapper around _run_one_user_async."""
+    if use_keyword_extraction and shared_runtime is None:
+        shared_runtime = _build_shared_runtime(
+            shared_data_dir=data_dir.parent,
+        )
     return asyncio.run(
         _run_one_user_async(
             spec,
@@ -809,7 +813,9 @@ async def run_all_users(
     Returns dict keyed by user_id so CLI can write per-user files without
     re-correlating with the input list.
     """
-    if shared_runtime is None and config_path is not None:
+    if shared_runtime is None and (
+        config_path is not None or use_keyword_extraction
+    ):
         shared_runtime = _build_shared_runtime(
             shared_data_dir=data_dir,
             config_path=config_path,

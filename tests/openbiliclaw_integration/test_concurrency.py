@@ -39,7 +39,8 @@ async def test_run_all_users_serial_default(tmp_path: Path) -> None:
         ],
     ):
         results = await recommender.run_all_users(
-            specs=specs, data_dir=tmp_path, max_parallel=1
+            specs=specs, data_dir=tmp_path, max_parallel=1,
+            use_keyword_extraction=False,
         )
     assert set(results.keys()) == {"u0", "u1", "u2"}
 
@@ -69,7 +70,8 @@ async def test_run_all_users_parallel_respects_cap(tmp_path: Path) -> None:
         side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
-            specs=specs, data_dir=tmp_path, max_parallel=3
+            specs=specs, data_dir=tmp_path, max_parallel=3,
+            use_keyword_extraction=False,
         )
     assert len(results) == 10
     assert max_active <= 3
@@ -92,7 +94,8 @@ async def test_run_all_users_isolates_failures(tmp_path: Path) -> None:
         side_effect=fake_run,
     ):
         results = await recommender.run_all_users(
-            specs=specs, data_dir=tmp_path, max_parallel=2
+            specs=specs, data_dir=tmp_path, max_parallel=2,
+            use_keyword_extraction=False,
         )
     assert len(results) == 3
     assert results["u1"]["error"] == "boom"
@@ -122,7 +125,8 @@ async def test_run_all_users_passes_raw_data_dir_no_double_nest(
         side_effect=fake_run,
     ):
         await recommender.run_all_users(
-            specs=specs, data_dir=tmp_path, max_parallel=2
+            specs=specs, data_dir=tmp_path, max_parallel=2,
+            use_keyword_extraction=False,
         )
 
     assert len(captured) == 2

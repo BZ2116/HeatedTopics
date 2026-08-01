@@ -75,6 +75,7 @@ def test_run_one_user_returns_recommendations(tmp_path: Path) -> None:
             spec,
             data_dir=tmp_path / "runtime",
             limit=5,
+            use_keyword_extraction=False,
         )
     assert result["user_id"] == spec.user_id
     assert "recommendations" in result
@@ -95,7 +96,10 @@ def test_run_one_user_handles_no_candidates(tmp_path: Path) -> None:
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(recommender, "fetch_candidates", return_value=[]),
     ):
-        result = recommender.run_one_user(spec, data_dir=tmp_path / "runtime", limit=5)
+        result = recommender.run_one_user(
+            spec, data_dir=tmp_path / "runtime", limit=5,
+            use_keyword_extraction=False,
+        )
     assert "error" in result
     assert result["error"] == "no_candidates"
 
@@ -110,7 +114,8 @@ def test_run_one_user_timeout_returns_error(tmp_path: Path) -> None:
         patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
     ):
         result = recommender.run_one_user(
-            spec, data_dir=tmp_path / "runtime", limit=5, per_user_timeout=0.1
+            spec, data_dir=tmp_path / "runtime", limit=5, per_user_timeout=0.1,
+            use_keyword_extraction=False,
         )
     assert "error" in result
 
@@ -133,7 +138,10 @@ def test_run_one_user_isolated_engine_per_user(tmp_path: Path) -> None:
         patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
     ):
         for spec in specs:
-            recommender.run_one_user(spec, data_dir=tmp_path / "runtime", limit=5)
+            recommender.run_one_user(
+                spec, data_dir=tmp_path / "runtime", limit=5,
+                use_keyword_extraction=False,
+            )
     assert len(engines) == 3
     # Each user gets a distinct data_dir
     assert len({d for _, d in engines}) == 3
@@ -150,7 +158,10 @@ def test_run_one_user_engine_error_returns_error(tmp_path: Path) -> None:
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
     ):
-        result = recommender.run_one_user(spec, data_dir=tmp_path / "runtime", limit=5)
+        result = recommender.run_one_user(
+            spec, data_dir=tmp_path / "runtime", limit=5,
+            use_keyword_extraction=False,
+        )
     assert result["error"] == "engine_error"
     assert "RuntimeError" in result["error_detail"]
 
