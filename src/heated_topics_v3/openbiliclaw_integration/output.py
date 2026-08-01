@@ -1,32 +1,54 @@
-"""Format recommendations into the JSON output schema."""
+"""Format recommendations into v2 JSON shape.
+
+Per-user file schema (CLI writes one per user_id per date):
+
+    {
+      "user_id": "u_001",
+      "input": {"track_1": ..., "track_2": ..., "persona": ...},
+      "generated_at": "2026-08-01T12:34:56+08:00",
+      "recommendations": [
+        {
+          "rank": 1, "title": "...", "url": "...",
+          "source": "weibo",
+          "heat": {"view":..., "like":..., "comment":..., "favorite":..., "share":..., "rank":...},
+          "body_text": "完整正文",
+          "body_text_length": 1234,
+          "body_truncated": false,
+          "published_at": "..."
+        }
+      ]
+    }
+
+v2 drops reason/topic_label/confidence (创作者要素材不要文案); body_text
+取代 v1 的 body_text_preview（保留完整正文，默认 50000 字封顶）。
+"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from openbiliclaw.recommendation.engine import Recommendation
 
-
-def _truncate(s: str, max_chars: int) -> str:
-    if max_chars <= 0 or len(s) <= max_chars:
-        return s
-    return s[:max_chars]
+from heated_topics_v3.clock import SHANGHAI
 
 
 def format_recommendation(
     rec: Recommendation,
     *,
     rank: int,
-    body_preview_chars: int,
+    body_max_chars: int = 50_000,
 ) -> dict[str, Any]:
-    """Convert one Recommendation to its output dict shape."""
+    """Convert one Recommendation to its output dict (v2 schema)."""
     item = rec.content
+    full_body = item.body_text or ""
+    truncated = len(full_body) > body_max_chars
+    body_text = full_body[:body_max_chars] if truncated else full_body
     return {
         "rank": rank,
         "title": item.title,
         "url": item.content_url,
-        "source_platform": item.source_platform,
+        "source": item.source_platform,
         "heat": {
             "view": int(item.view_count),
             "like": int(item.like_count),
@@ -35,12 +57,35 @@ def format_recommendation(
             "share": int(item.share_count),
             "rank": int(item.source_rank),
         },
-        "body_text_preview": _truncate(item.body_text or "", body_preview_chars),
-        "body_text_length": len(item.body_text or ""),
-        "topic_label": rec.topic_label or "",
-        "reason": rec.expression or "",
-        "confidence": float(rec.confidence),
+        "body_text": body_text,
+        "body_text_length": len(full_body),
+        "body_truncated": truncated,
         "published_at": item.published_at or "",
+    }
+
+
+def format_user_file(
+    *,
+    user_id: str,
+    track_1: str,
+    track_2: str,
+    persona: str,
+    recommendations: list[Recommendation],
+    body_max_chars: int = 50_000,
+) -> dict[str, Any]:
+    """Build the JSON payload for one user's recommendations file."""
+    return {
+        "user_id": user_id,
+        "input": {
+            "track_1": track_1,
+            "track_2": track_2,
+            "persona": persona,
+        },
+        "generated_at": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
+        "recommendations": [
+            format_recommendation(r, rank=i + 1, body_max_chars=body_max_chars)
+            for i, r in enumerate(recommendations)
+        ],
     }
 
 
@@ -55,49 +100,4 @@ def format_user_failure(
         "user_id": user_id,
         "error": error_code,
         "error_detail": error_detail,
-    }
-
-
-def format_user_success_summary(
-    user_id: str,
-    display_name: str,
-    interests_count: int,
-    disliked_count: int,
-    fetched: int,
-    after_filter: int,
-    considered: int,
-    embedding_degraded: bool,
-) -> dict[str, Any]:
-    """Format the per-user envelope (recommendations added separately)."""
-    return {
-        "user_id": user_id,
-        "display_name": display_name,
-        "input_profile_summary": {
-            "interests_count": interests_count,
-            "disliked_count": disliked_count,
-        },
-        "pipeline": {
-            "candidates_fetched": fetched,
-            "candidates_after_filter": after_filter,
-            "candidates_considered_by_engine": considered,
-            "embedding_degraded": embedding_degraded,
-        },
-        "recommendations": [],
-    }
-
-
-def build_envelope(
-    *,
-    users: list[dict[str, Any]],
-    llm_model: str,
-    embedding_model: str,
-    config_version: str,
-) -> dict[str, Any]:
-    """Build the top-level output JSON."""
-    return {
-        "generated_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "config_version": config_version,
-        "llm_model": llm_model,
-        "embedding_model": embedding_model,
-        "users": users,
     }
