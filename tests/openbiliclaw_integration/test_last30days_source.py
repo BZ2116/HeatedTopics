@@ -73,6 +73,22 @@ def test_run_subprocess_passes_cwd_as_save_dir(tmp_path: Path) -> None:
     assert mock_run.call_args.kwargs.get("text") is True
 
 
+def test_run_subprocess_passes_utf8_encoding(tmp_path: Path) -> None:
+    """On Windows, text=True alone uses GBK; we must force utf-8 so the
+    last30days CLI's UTF-8 stdout (Chinese content) decodes correctly.
+    Regression: see UnicodeDecodeError in live run."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stdout = '{"weibo": []}'
+        mock_run.return_value.stderr = ""
+        last30days_source._run_subprocess(
+            [str(tmp_path / "x.py"), "--emit", "json"],
+            save_dir=tmp_path,
+            timeout=30,
+        )
+    assert mock_run.call_args.kwargs.get("encoding") == "utf-8"
+
+
 def test_run_subprocess_writes_stdout_to_report_json(tmp_path: Path) -> None:
     """stdout from the CLI must be persisted to <save_dir>/report.json."""
     fake_json = json.dumps({"topic": "测试", "weibo": [{"id": "WB1"}]})

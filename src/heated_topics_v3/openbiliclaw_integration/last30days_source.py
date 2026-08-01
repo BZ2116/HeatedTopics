@@ -81,6 +81,8 @@ def _run_subprocess(cmd: list[str], *, save_dir: Path, timeout: float) -> Path:
             cwd=str(save_dir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             check=False,
         )
