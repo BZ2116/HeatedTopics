@@ -196,3 +196,84 @@ def test_end_to_end_no_keyword_extraction_skips_llm(
     assert code == 0
     cache_file = out_dir / "_keyword_cache" / "u_off" / "keyword_cache.json"
     assert not cache_file.exists()
+
+
+def test_end_to_end_one_user_filters_offtopic_via_embedding(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """An off-topic article (low cosine sim to keywords) is dropped before
+    the engine, so it never appears in recommendations.json — even if it
+    ranks high in its provider's hotlist."""
+    monkeypatch.setenv("OPENBILICLAW_LLM_API_KEY", "test-key")
+    xlsx = tmp_path / "users.xlsx"
+    _write_xlsx(xlsx, [["wh_user_01", "非遗", "民俗", "研究非遗"]])
+    out_dir = tmp_path / "recs"
+
+    article_off = {
+        "article_id": "flutter", "title": "Flutter UI 技巧",
+        "url": "https://x.com/flutter",
+        "body_text": "技术内容超过十字", "heat": {"rank": 1},
+        "platform": "juejin",
+    }
+    article_on = {
+        "article_id": "feiyi", "title": "非遗手工艺",
+        "url": "https://x.com/feiyi",
+        "body_text": "传统手工艺超过十字", "heat": {"rank": 1},
+        "platform": "bilibili",
+    }
+    from openbiliclaw.discovery.engine import DiscoveredContent
+    from openbiliclaw.recommendation.engine import Recommendation
+
+    item = DiscoveredContent(
+        title="非遗手工艺", content_id="feiyi",
+        content_url="https://x.com/feiyi", source_platform="bilibili",
+        body_text="传统手工艺超过十字", content_type="note",
+    )
+    on_topic_rec = Recommendation(
+        content=item, expression="x", topic_label="t",
+        confidence=0.7, presented=False,
+    )
+
+    fake_emb = AsyncMock()
+    # 3 keyword embeddings + 2 article embeddings (one filtered) = 5.
+    fake_emb.embed = AsyncMock(side_effect=[
+        [1.0, 0.0, 0.0],  # keyword 1 "非遗"
+        [1.0, 0.0, 0.0],  # keyword 2 "民俗"
+        [1.0, 0.0, 0.0],  # keyword 3
+        [0.0, 1.0, 0.0],  # article_off (Flutter) — sim 0 → filtered
+        [1.0, 0.0, 0.0],  # article_on  (非遗)   — sim 1.0 → kept
+    ])
+
+    async def fake_extract(spec, llm, cache_dir, *, n=3):
+        return ["非遗", "民俗", "传统"]
+
+    with (
+        patch.object(recommender, "extract_or_load", side_effect=fake_extract),
+        patch.object(
+            recommender, "fetch_candidates",
+            return_value=[article_off, article_on],
+        ),
+        patch.object(recommender, "build_recommender") as mock_factory,
+        patch.object(
+            recommender, "_build_shared_runtime",
+            return_value={"llm": MagicMock(), "embedding": fake_emb},
+        ),
+    ):
+        eng = MagicMock()
+        eng.serve_external_candidates = AsyncMock(return_value=[on_topic_rec])
+        mock_factory.return_value = eng
+        code = cli.main([
+            "--users-excel", str(xlsx),
+            "--output-dir", str(out_dir),
+            "--source", "v3-hotlist",
+            "--max-parallel", "1",
+        ])
+
+    assert code == 0
+    data = json.loads(
+        (out_dir / "wh_user_01" / "2026-08-01" / "recommendations.json")
+        .read_text(encoding="utf-8")
+    )
+    titles = [r["title"] for r in data["recommendations"]]
+    assert not any("Flutter" in t for t in titles), titles
+    assert any("非遗" in t for t in titles), titles
