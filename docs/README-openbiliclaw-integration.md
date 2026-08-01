@@ -1,8 +1,14 @@
-# HeatedTopics × OpenBiliClaw 多用户推荐（v2）
+# HeatedTopics × OpenBiliClaw 多用户推荐（v2.1）
 
 CLI 接受 Excel 用户画像（4 列），按 user / date 分层目录输出每个用户的 top-N 热点素材（带标题、出处、URL、完整正文、热度），下游创作者按目录取用。
 
-## 设计要点（v2 相对 v1 的变化）
+## 设计要点（v2.1 相对 v2 的变化）
+
+- **LLM 关键词提取（v2.1 新增）**：每位用户首次运行时调 LLM，把 `{track_1, track_2, persona}` 提炼成 3 个精准中文搜索词，**替代** 原 `track_1/track_2` 作为 V3 search + last30days query。命中度比单赛道词好得多（窄众用户尤其明显）。
+- **关键词缓存（v2.1 新增）**：结果按 `sha256(track_1|track_2|persona)` 缓存在 `{output_dir}/_keyword_cache/{user_id}/keyword_cache.json`。老用户修改了 track_1/track_2/persona 自动失效重抽。
+- **可关闭（v2.1 新增）**：`--no-keyword-extraction` 回退到 v2 行为（直接用 `track_1/track_2`）。
+
+## v2 相对 v1 的变化（背景）
 
 - **输入**：Excel `.xlsx`，4 列 `user_id / track_1 / track_2 / persona`，真人填表成本极低
 - **输出**：`{output_dir}/{user_id}/{YYYY-MM-DD}/recommendations.json` 三层目录，每用户每天一个文件
@@ -114,6 +120,7 @@ recs/
 | `--last30days-fetch-bodies` |  | on | 启用 `--fetch-bodies` |
 | `--no-last30days-fetch-bodies` |  | — | 关闭 `--fetch-bodies` |
 | `--last30days-timeout SEC` |  | 120 | per-user last30days 子进程超时 |
+| `--no-keyword-extraction` |  | — | 关闭 LLM 关键词提取；回退到 `track_1/track_2` 作查询词。默认开启（抽 3 个词，按用户缓存） |
 
 ## 候选源（v3 / last30days / both）
 
@@ -123,7 +130,32 @@ recs/
 | `last30days` | 8 个中文平台 | 详见 [README-last30days-source.md](README-last30days-source.md) |
 | `both` | V3 + last30days，URL 去重 | 跨平台最大覆盖（默认） |
 
-走 last30days 时 query 默认取用户的 `track_1`（v1 是 `--last30days-query` 共享词，v2 自动每用户不同）。
+走 last30days 时 query 来源（按优先级）：
+1. v2.1 起：`extract_or_load` 抽出的 3 个关键词的**第一个**（命中度最高）
+2. v2：`track_1`（兜底）
+
+## 关键词缓存（v2.1）
+
+LLM 抽出的关键词持久化在 `{output_dir}/_keyword_cache/{user_id}/keyword_cache.json`：
+
+```json
+{
+  "spec_hash": "sha256 hex（来自 track_1|track_2|persona）",
+  "keywords": ["非遗手工艺", "传统节气", "老字号"],
+  "track_1": "文化生活",
+  "track_2": "非遗与民俗",
+  "persona": "研究地方习俗、节气、非遗和老手艺"
+}
+```
+
+**失效逻辑**：
+
+- `spec_hash` 变了（track_1 / track_2 / persona 任一修改）→ 失效重抽
+- `user_id` 变了 → 视为新用户（hash 不包含 user_id）
+
+**手动重抽**：删 `_keyword_cache/{user_id}/keyword_cache.json` 或修改 xlsx 让 spec_hash 变化。
+
+**故障兜底**：LLM 调用失败（超时 / 解析失败 / 配额耗尽）→ 自动回退 `[track_1, track_2]`，pipeline 不会崩。
 
 ## 故障排查
 
@@ -135,6 +167,7 @@ recs/
 | `Ollama has no 'bge-m3' model` | 模型未拉 | `ollama pull bge-m3` |
 | `Last30DaysSourceError` | last30days 子进程失败 | 检查 `--last30days-cli-path`、拉大 `--last30days-timeout` |
 | `Last30DaysParseError` | 报告 JSON 损坏或格式变更 | 看 `data/last30days/<user_id>/last30days.json` |
+| 关键词抽得不相关 / 离线时 LLM 不可用 | 关键词质量差或网络问题 | ① 看日志 `keyword cache hit`/`miss` 确认是否命中缓存；② 删 `_keyword_cache/<user_id>/` 强制重抽；③ 用 `--no-keyword-extraction` 回退 |
 | `Excel invalid: missing required columns` | xlsx 表头缺列 | 4 列都写上 |
 | `Excel has zero users` | xlsx 没数据行 | 至少 1 行用户 |
 | 退出码 1 | 部分用户失败 | 看每个 `recommendations.json` 的 `error` 字段 |

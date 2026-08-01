@@ -1,4 +1,4 @@
-# Last30Days × HeatedTopics 集成说明（v2）
+# Last30Days × HeatedTopics 集成说明（v2.1）
 
 > 在多用户推荐 CLI 旁路引入 last30days 的 8 平台采集能力，扩大跨平台覆盖面。
 
@@ -40,7 +40,7 @@
 
 **v2 已移除**（v1 暴露但 v2 不再用）：
 
-- `--last30days-query`：v2 自动取用户 `track_1` 作 query，每用户不同
+- `--last30days-query`：v2 起自动取用户 `track_1` 作 query（v2.1 起取 LLM 抽出的关键词的第一个），每用户不同
 - `--last30days-no-fetch-bodies`：用 `--no-last30days-fetch-bodies` 替代
 - `--users / --output`：改用 `--users-excel / --output-dir`
 - `--body-preview-chars`：v2 写完整正文（≤`--body-max-chars`），不再截预览
@@ -70,9 +70,15 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
   --last30days-cli-path /path/to/last30days-skill-cn/scripts/last30days.py
 ```
 
-### 每用户 query 自动来自 track_1
+### 每用户 query 自动来自 LLM 关键词（v2.1）或 track_1（v2）
 
-不需要 `--last30days-query`：CLI 内部对每个用户调用 last30days 时，传 `track_1` 作关键词；`track_1` 为空时回退到 `track_2`，两者都空则跳过该用户（不会 crash，会写 `error: "no_candidates"` 到对应文件）。
+v2.1 起不需要 `--last30days-query`：CLI 内部对每个用户调用 last30days 时，query 来源优先级：
+
+1. **v2.1 默认**：LLM 抽出的 3 个关键词的**第一个**（`extract_or_load` 产出，缓存于 `_keyword_cache/<user_id>/`）
+2. v2 / `--no-keyword-extraction`：回退 `track_1`，再回退 `track_2`
+3. 都空则跳过该用户（不会 crash，会写 `error: "no_candidates"` 到对应文件）
+
+修改用户的 `track_1 / track_2 / persona` → `spec_hash` 变化 → 下次跑自动重抽关键词 → last30days query 跟着变。
 
 ## 5. 已知限制
 
@@ -96,10 +102,17 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 ```
 [CLI] --source={v3-hotlist,last30days,both}
    ↓
+[recommender._run_one_user_async]
+   ├─ v2.1 第一步: keyword_extractor.extract_or_load(spec, llm, cache_dir)
+   │               ├─ spec_hash = sha256(track_1|track_2|persona)
+   │               ├─ cache hit → 直接返回缓存的 3 关键词
+   │               └─ cache miss → LLM 抽词 → 写缓存
+   ↓
 [recommender._fetch_candidates_for_user()]
    ├─ v3-hotlist / both 分支: fetch_candidates() → V3 providers
+   │   └─ queries = 关键词[0..2]（v2.1） 或 track_1/track_2（v2）
    ├─ last30days / both 分支: _fetch_last30days_candidates()
-   │                          ├─ query = spec.track_1（fallback track_2）
+   │                          ├─ query = 关键词[0]（v2.1） 或 spec.track_1（v2 兜底）
    │                          ├─ last30days_source.run() [subprocess]
    │                          ├─ last30days_source.parse_report() [JSON]
    │                          └─ last30days_adapter.to_hot_items() [字段映射]
@@ -121,5 +134,8 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 - `test_last30days_adapter.py` — 8 平台 × 3 类样本（含 missing body）
 - `test_source_dispatch.py` — `_fetch_candidates_for_user` 分发 + URL dedup（7 测试）
 - `test_end_to_end_last30days.py` — CLI → dispatcher → engine 全链路
+- `test_keyword_extractor.py` — LLM 抽词 + JSON 解析 + 缓存读写（11 测试，v2.1 新增）
+- `test_recommender.py::test_run_one_user_extracts_keywords_*` — 关键词流入 V3 search + last30days query（v2.1 新增）
+- `test_end_to_end_one_user.py::test_end_to_end_*_keyword_cache` — CLI → cache 文件落盘（v2.1 新增）
 
 跑：`uv run pytest tests/openbiliclaw_integration -q -m "not requires_llm and not requires_ollama"`
