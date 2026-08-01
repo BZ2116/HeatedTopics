@@ -1,4 +1,4 @@
-"""End-to-end one-user test with mocked engine."""
+"""End-to-end one-user test (v2: per-user/date file output)."""
 
 from __future__ import annotations
 
@@ -6,64 +6,47 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from openpyxl import Workbook
+
 from heated_topics_v3.openbiliclaw_integration import cli, recommender
 
 
-def test_end_to_end_one_user_writes_correct_envelope(
+def _write_xlsx(path: Path, rows: list[list[str]]) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["user_id", "track_1", "track_2", "persona"])
+    for row in rows:
+        ws.append(row)
+    wb.save(path)
+
+
+def test_end_to_end_one_user_writes_per_user_file(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("OPENBILICLAW_LLM_API_KEY", "test-key")
-    up = tmp_path / "users.json"
-    up.write_text(
-        json.dumps(
-            {
-                "users": [
-                    {
-                        "user_id": "u_security",
-                        "display_name": "Sec",
-                        "interests": [
-                            {"name": "零信任", "category": "网安", "weight": 0.9}
-                        ],
-                    }
-                ]
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    out = tmp_path / "recs.json"
+    xlsx = tmp_path / "users.xlsx"
+    _write_xlsx(xlsx, [["u_001", "AI", "副业", "博主"]])
+    out_dir = tmp_path / "recs"
+
     article = {
-        "article_id": "1",
-        "title": "T",
-        "url": "https://x.com/1",
-        "body_text": "body",
-        "author": "a",
-        "heat": {"view": 100, "like": 10, "comment": 2, "rank": 1},
-        "tags": [],
-        "platform": "juejin",
+        "article_id": "1", "title": "T", "url": "https://x.com/1",
+        "body_text": "完整正文内容超过十个字", "author": "a",
+        "heat": {"rank": 1}, "tags": [], "platform": "juejin",
     }
     from openbiliclaw.discovery.engine import DiscoveredContent
     from openbiliclaw.recommendation.engine import Recommendation
 
     item = DiscoveredContent(
-        title="T",
-        content_id="1",
-        content_url="https://x.com/1",
-        source_platform="juejin",
-        body_text="body",
-        content_type="note",
-        view_count=100,
-        like_count=10,
-        comment_count=2,
-        source_rank=1,
+        title="T", content_id="1", content_url="https://x.com/1",
+        source_platform="juejin", body_text="完整正文内容超过十个字",
+        content_type="note", view_count=100, like_count=10,
+        comment_count=2, source_rank=1,
     )
     fake_rec = Recommendation(
-        content=item,
-        expression="matches your interest",
-        topic_label="网安",
-        confidence=0.85,
-        presented=False,
+        content=item, expression="ignored", topic_label="ignored",
+        confidence=0.85, presented=False,
     )
+
     with (
         patch.object(recommender, "fetch_candidates", return_value=[article]),
         patch.object(recommender, "build_recommender") as mock_factory,
@@ -71,14 +54,25 @@ def test_end_to_end_one_user_writes_correct_envelope(
         eng = MagicMock()
         eng.serve_external_candidates = AsyncMock(return_value=[fake_rec])
         mock_factory.return_value = eng
-        code = cli.main(
-            ["--users", str(up), "--output", str(out), "--max-parallel", "1"]
-        )
+        code = cli.main([
+            "--users-excel", str(xlsx),
+            "--output-dir", str(out_dir),
+            "--source", "v3-hotlist",
+            "--max-parallel", "1",
+        ])
+
     assert code == 0
-    data = json.loads(out.read_text(encoding="utf-8"))
-    rec = data["users"][0]["recommendations"][0]
-    assert data["users"][0]["user_id"] == "u_security"
-    assert rec["title"] == "T" and rec["heat"]["view"] == 100
-    assert rec["reason"] == "matches your interest" and rec["topic_label"] == "网安"
-    assert rec["body_text_preview"] == "body" and rec["body_text_length"] == 4
-    assert data["llm_model"] == "MiniMax-M2.7"
+    user_dir = out_dir / "u_001"
+    date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
+    assert len(date_dirs) == 1
+    target = date_dirs[0] / "recommendations.json"
+    assert target.exists()
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["user_id"] == "u_001"
+    assert data["input"]["track_1"] == "AI"
+    assert data["recommendations"][0]["title"] == "T"
+    assert data["recommendations"][0]["source"] == "juejin"
+    assert data["recommendations"][0]["body_text"] == "完整正文内容超过十个字"
+    assert "reason" not in data["recommendations"][0]
+    assert "topic_label" not in data["recommendations"][0]
+    assert "confidence" not in data["recommendations"][0]
