@@ -7,7 +7,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 from openbiliclaw.discovery.engine import DiscoveredContent
 from openbiliclaw.recommendation.engine import Recommendation
 

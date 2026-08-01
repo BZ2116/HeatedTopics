@@ -75,7 +75,7 @@ def score_article(
 
 async def embed_keywords(
     keywords: list[str],
-    embedding_service: "EmbeddingService",
+    embedding_service: EmbeddingService,
 ) -> list[list[float]]:
     """Embed each keyword once, in order. Empty results / exceptions dropped.
 
@@ -88,7 +88,7 @@ async def embed_keywords(
     for kw in keywords:
         try:
             vec = await embedding_service.embed(kw)
-        except Exception as exc:  # noqa: BLE001 — provider failures are non-fatal
+        except Exception as exc:
             logger.warning(
                 "keyword embedding failed for %r: %s", kw, exc,
             )

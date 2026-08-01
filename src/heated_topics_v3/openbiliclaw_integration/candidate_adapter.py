@@ -96,7 +96,7 @@ async def to_discovered(
             text = _article_text_for_embedding(raw)
             try:
                 article_vec = await embedding_service.embed(text)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning(
                     "candidate embedding failed for %r: %s",
                     raw.get("article_id"), exc,
