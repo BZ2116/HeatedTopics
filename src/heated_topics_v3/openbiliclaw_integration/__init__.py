@@ -9,6 +9,7 @@ __all__ = [
     "candidate_adapter",
     "cli",
     "exceptions",
+    "llm_refilter",
     "output",
     "recommender",
     "runtime",
