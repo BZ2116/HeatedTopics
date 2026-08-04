@@ -97,6 +97,38 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "per user under _keyword_cache/."
         ),
     )
+    p.add_argument(
+        "--min-view-count", type=int, default=0,
+        help=(
+            "Drop candidates whose heat.view is below this threshold "
+            "(default 0 = no filter). Useful for filtering low-engagement "
+            "long-tail picks from v3-hotlist or last30days."
+        ),
+    )
+    p.add_argument(
+        "--heat-source", choices=("rank", "view"), default="rank",
+        help=(
+            "Heat factor for relevance scoring: 'rank' uses 1/rank "
+            "(v2.1.2 default); 'view' uses log(view+1)/log(100001) and "
+            "falls back to rank when view_count is missing/zero."
+        ),
+    )
+    p.add_argument(
+        "--llm-refilter", dest="llm_refilter",
+        action="store_true", default=False,
+        help=(
+            "After the embedding pre-filter, ask the LLM to drop "
+            "candidates that look keyword-relevant but are off-persona. "
+            "Adds one LLM call per ~10 candidates. Off by default."
+        ),
+    )
+    p.add_argument(
+        "--refilter-batch-size", type=int, default=10,
+        help=(
+            "Candidates per LLM refilter batch "
+            "(default 10; smaller = more calls but tighter judgments)."
+        ),
+    )
     return p.parse_args(list(argv))
 
 
@@ -162,6 +194,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             last30days_config=last30days_config,
             use_keyword_extraction=args.keyword_extraction,
             keyword_cache_dir=args.output_dir / "_keyword_cache",
+            min_view_count=args.min_view_count,
+            heat_source=args.heat_source,
+            use_llm_refilter=args.llm_refilter,
+            refilter_batch_size=args.refilter_batch_size,
         )
     except Exception:
         logger.exception("fatal error in run_all_users")

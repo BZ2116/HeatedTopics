@@ -648,8 +648,21 @@ async def _run_one_user_async(
     last30days_config: dict[str, Any] | None = None,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    min_view_count: int = 0,
+    heat_source: str = "rank",
+    use_llm_refilter: bool = False,
+    refilter_batch_size: int = 10,
 ) -> dict[str, Any]:
-    """Async body of run_one_user."""
+    """Async body of run_one_user.
+
+    New v2.1.4 knobs (all default off / v2.1.2 behavior):
+    - ``min_view_count``: hard-drop candidates with view_count below this.
+    - ``heat_source``: ``"rank"`` (1/rank, default) or ``"view"``
+      (log-scaled real engagement; falls back to rank when view_count=0).
+    - ``use_llm_refilter``: after the embedding pre-filter, ask the LLM
+      to drop candidates that look keyword-relevant but are actually
+      off-persona.
+    """
     # 1) Extract (or load cached) hot keywords from the user's profile.
     keywords: list[str] | None = None
     if use_keyword_extraction and shared_runtime is not None:
@@ -713,6 +726,8 @@ async def _run_one_user_async(
         embedding_service=embedding_service,
         keyword_vectors=keyword_vectors,
         sim_threshold=0.5,
+        min_view_count=min_view_count,
+        heat_source=heat_source,
     )
     # If articles don't carry 'platform' per-item, attribute by provider list order.
     if not any(isinstance(a, dict) and "platform" in a for a in articles):
@@ -722,7 +737,41 @@ async def _run_one_user_async(
                 embedding_service=embedding_service,
                 keyword_vectors=keyword_vectors,
                 sim_threshold=0.5,
+                min_view_count=min_view_count,
+                heat_source=heat_source,
             )
+
+    # Optional LLM secondary filter: drop candidates that look
+    # keyword-relevant but are actually off-persona. Off by default.
+    if use_llm_refilter and shared_runtime is not None and candidates:
+        from heated_topics_v3.openbiliclaw_integration import llm_refilter
+
+        llm_service = shared_runtime.get("llm")
+        if llm_service is None:
+            logger.warning(
+                "user %s: --llm-refilter requested but no LLM service; "
+                "skipping",
+                spec.user_id,
+            )
+        else:
+            user_context = {
+                "track_1": spec.track_1 or "",
+                "track_2": spec.track_2 or "",
+                "persona": spec.persona or "",
+            }
+            try:
+                candidates = await llm_refilter.refilter_candidates(
+                    candidates,
+                    user_context=user_context,
+                    llm_service=llm_service,
+                    batch_size=refilter_batch_size,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "user %s: LLM refilter crashed (%s); "
+                    "keeping pre-filter candidates",
+                    spec.user_id, exc,
+                )
     profile = user_profile.build_onion_profile(spec)
     user_data_dir = user_profile.user_data_dir(data_dir, spec.user_id)
     engine = build_recommender(
@@ -784,6 +833,10 @@ def run_one_user(
     last30days_config: dict[str, Any] | None = None,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    min_view_count: int = 0,
+    heat_source: str = "rank",
+    use_llm_refilter: bool = False,
+    refilter_batch_size: int = 10,
 ) -> dict[str, Any]:
     """Synchronous wrapper around _run_one_user_async."""
     if use_keyword_extraction and shared_runtime is None:
@@ -808,6 +861,10 @@ def run_one_user(
             last30days_config=last30days_config,
             use_keyword_extraction=use_keyword_extraction,
             keyword_cache_dir=keyword_cache_dir,
+            min_view_count=min_view_count,
+            heat_source=heat_source,
+            use_llm_refilter=use_llm_refilter,
+            refilter_batch_size=refilter_batch_size,
         )
     )
 
@@ -832,6 +889,10 @@ async def run_all_users(
     last30days_config: dict[str, Any] | None = None,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    min_view_count: int = 0,
+    heat_source: str = "rank",
+    use_llm_refilter: bool = False,
+    refilter_batch_size: int = 10,
 ) -> dict[str, dict[str, Any]]:
     """Run recommendation for all users. Returns {user_id: payload}.
 
@@ -868,6 +929,10 @@ async def run_all_users(
                     last30days_config=last30days_config,
                     use_keyword_extraction=use_keyword_extraction,
                     keyword_cache_dir=keyword_cache_dir,
+                    min_view_count=min_view_count,
+                    heat_source=heat_source,
+                    use_llm_refilter=use_llm_refilter,
+                    refilter_batch_size=refilter_batch_size,
                 )
             except Exception as exc:
                 logger.exception("user %s unexpected error", spec.user_id)
