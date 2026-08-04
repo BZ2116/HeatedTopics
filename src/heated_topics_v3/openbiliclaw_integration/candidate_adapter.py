@@ -59,6 +59,8 @@ async def to_discovered(
     embedding_service: Any | None = None,
     keyword_vectors: list[list[float]] | None = None,
     sim_threshold: float = 0.5,
+    min_view_count: int = 0,
+    heat_source: str = "rank",
 ) -> list[DiscoveredContent]:
     """Convert a list of V3 Article dicts to DiscoveredContent.
 
@@ -66,7 +68,14 @@ async def to_discovered(
     provided, each article's title+summary is embedded and scored by max
     cosine similarity against the keyword vectors. Articles below
     ``sim_threshold`` are dropped. The final ``relevance_score`` is
-    ``max_sim * heat_factor(rank)``.
+    ``max_sim * heat_factor(rank, view_count, source=heat_source)``.
+
+    Optional hard filters:
+    - ``min_view_count``: drop candidates whose ``heat.view`` is below this
+      threshold. Default 0 (no filter) so existing callers see no change.
+    - ``heat_source``: ``"rank"`` (default, v2.1.2 behavior) uses
+      ``1/rank``; ``"view"`` uses ``log(view_count+1)/log(100001)`` and
+      falls back to rank when view_count is missing/zero.
 
     Falls back to ``1/rank`` (v2.1.1 behavior) when ``keyword_vectors`` is
     None / empty, when ``embedding_service`` is None, or when the per-article
@@ -91,6 +100,15 @@ async def to_discovered(
             continue
         heat = raw.get("heat") or {}
         rank = int(heat.get("rank", 0))
+        view_count = int(heat.get("view", 0))
+
+        # Hard filter on view count (opt-in; default off).
+        if min_view_count > 0 and view_count < min_view_count:
+            logger.debug(
+                "dropping %r: view_count=%d < min_view_count=%d",
+                raw.get("article_id"), view_count, min_view_count,
+            )
+            continue
 
         if use_embedding:
             text = _article_text_for_embedding(raw)
@@ -104,7 +122,8 @@ async def to_discovered(
                 article_vec = []
             score: float | None = score_article(
                 article_vec, keyword_vectors,
-                rank=rank, threshold=sim_threshold,
+                rank=rank, view_count=view_count,
+                threshold=sim_threshold, heat_source=heat_source,
             )
             if score is None:
                 continue
@@ -121,7 +140,7 @@ async def to_discovered(
             author_name=str(raw.get("author", "")),
             published_at=str(raw.get("published_at", "")),
             tags=list(raw.get("tags", [])),
-            view_count=int(heat.get("view", 0)),
+            view_count=view_count,
             like_count=int(heat.get("like", 0)),
             comment_count=int(heat.get("comment", 0)),
             favorite_count=int(heat.get("favorite", 0)),

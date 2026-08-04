@@ -270,3 +270,97 @@ async def test_to_discovered_skips_article_when_embed_returns_empty() -> None:
         sim_threshold=0.5,
     )
     assert items == []
+
+
+# --- v2.1.4: min_view_count hard filter + heat_source=view ---
+
+
+@pytest.mark.asyncio
+async def test_to_discovered_min_view_count_drops_low_engagement() -> None:
+    """min_view_count=1000 drops view_count=500, keeps view_count=5000."""
+    articles = [
+        {
+            "article_id": "low", "title": "低热度", "url": "https://x/1",
+            "body_text": "x", "heat": {"rank": 1, "view": 500},
+        },
+        {
+            "article_id": "high", "title": "高热度", "url": "https://x/2",
+            "body_text": "x", "heat": {"rank": 2, "view": 5_000},
+        },
+    ]
+    fake_emb = AsyncMock()
+    fake_emb.embed = AsyncMock(side_effect=[
+        [1.0, 0.0, 0.0],  # low: identical to kw
+        [1.0, 0.0, 0.0],  # high: identical to kw
+    ])
+    items = await candidate_adapter.to_discovered(
+        articles, platform="juejin",
+        embedding_service=fake_emb,
+        keyword_vectors=[[1.0, 0.0, 0.0]],
+        sim_threshold=0.5,
+        min_view_count=1000,
+    )
+    assert [it.content_id for it in items] == ["high"]
+
+
+@pytest.mark.asyncio
+async def test_to_discovered_min_view_count_default_zero_no_filter() -> None:
+    """min_view_count=0 (default) keeps all candidates regardless of view."""
+    articles = [
+        {
+            "article_id": "zero", "title": "零阅读", "url": "https://x/1",
+            "body_text": "x", "heat": {"rank": 1, "view": 0},
+        },
+    ]
+    items = await candidate_adapter.to_discovered(
+        articles, platform="juejin",
+    )
+    assert len(items) == 1
+    assert items[0].view_count == 0
+
+
+@pytest.mark.asyncio
+async def test_to_discovered_heat_source_view_uses_log_view() -> None:
+    """heat_source='view' swaps 1/rank for log(view+1)/log(100001)."""
+    # rank 1 → rank-based heat = 1.0; view 100k → view-based heat = 1.0 too.
+    # Difference shows up at rank 100 with view_count=100k:
+    #   rank-based: heat = 0.05 (floor)
+    #   view-based: heat = 1.0 (saturated)
+    articles = [
+        {
+            "article_id": "1", "title": "x", "url": "https://x/1",
+            "body_text": "x", "heat": {"rank": 100, "view": 100_000},
+        },
+    ]
+    fake_emb = AsyncMock()
+    fake_emb.embed = AsyncMock(return_value=[1.0, 0.0, 0.0])
+    items = await candidate_adapter.to_discovered(
+        articles, platform="juejin",
+        embedding_service=fake_emb,
+        keyword_vectors=[[1.0, 0.0, 0.0]],
+        sim_threshold=0.5,
+        heat_source="view",
+    )
+    assert items[0].relevance_score == pytest.approx(1.0, abs=1e-2)
+
+
+@pytest.mark.asyncio
+async def test_to_discovered_heat_source_view_falls_back_when_no_view() -> None:
+    """heat_source='view' with view_count=0 → rank-based fallback."""
+    articles = [
+        {
+            "article_id": "1", "title": "x", "url": "https://x/1",
+            "body_text": "x", "heat": {"rank": 4, "view": 0},
+        },
+    ]
+    fake_emb = AsyncMock()
+    fake_emb.embed = AsyncMock(return_value=[1.0, 0.0, 0.0])
+    items = await candidate_adapter.to_discovered(
+        articles, platform="juejin",
+        embedding_service=fake_emb,
+        keyword_vectors=[[1.0, 0.0, 0.0]],
+        sim_threshold=0.5,
+        heat_source="view",
+    )
+    # rank 4 → 1/4 = 0.25
+    assert items[0].relevance_score == pytest.approx(0.25, abs=1e-3)
