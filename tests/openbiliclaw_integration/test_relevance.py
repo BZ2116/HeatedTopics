@@ -11,29 +11,29 @@ from heated_topics_v3.openbiliclaw_integration import relevance
 
 
 def test_heat_factor_rank_1_is_1() -> None:
-    assert relevance._heat_factor(1) == 1.0
+    assert relevance._heat_factor_from_rank(1) == 1.0
 
 
 def test_heat_factor_rank_2_is_0_5() -> None:
-    assert relevance._heat_factor(2) == 0.5
+    assert relevance._heat_factor_from_rank(2) == 0.5
 
 
 def test_heat_factor_rank_30_floors_at_0_05() -> None:
     """rank 30 → 1/30 ≈ 0.033, which is below the 0.05 floor → clamped."""
-    assert relevance._heat_factor(30) == 0.05
+    assert relevance._heat_factor_from_rank(30) == 0.05
 
 
 def test_heat_factor_rank_200_floors_at_0_05() -> None:
     """Below 0.05 the heat signal is noise; clamp to floor."""
-    assert relevance._heat_factor(200) == 0.05
+    assert relevance._heat_factor_from_rank(200) == 0.05
 
 
 def test_heat_factor_rank_0_floors_at_0_05() -> None:
-    assert relevance._heat_factor(0) == 0.05
+    assert relevance._heat_factor_from_rank(0) == 0.05
 
 
 def test_heat_factor_negative_floors_at_0_05() -> None:
-    assert relevance._heat_factor(-5) == 0.05
+    assert relevance._heat_factor_from_rank(-5) == 0.05
 
 
 # --- score_article ---
@@ -160,3 +160,70 @@ async def test_embed_keywords_swallows_per_call_exceptions() -> None:
     ])
     vecs = await relevance.embed_keywords(["a", "b", "c"], fake_emb)
     assert vecs == [[1.0, 0.0], [0.0, 1.0]]
+
+
+# --- v2.1.4: view-based heat factor + heat_source switch ---
+
+
+def test_heat_factor_from_view_zero_floors() -> None:
+    """Missing view_count → floor (no signal)."""
+    assert relevance._heat_factor_from_view(0) == 0.05
+
+
+def test_heat_factor_from_view_negative_floors() -> None:
+    assert relevance._heat_factor_from_view(-100) == 0.05
+
+
+def test_heat_factor_from_view_saturates_at_100k() -> None:
+    """view_count ≥ 100k saturates at ~1.0."""
+    assert relevance._heat_factor_from_view(100_000) == pytest.approx(1.0, abs=1e-3)
+    assert relevance._heat_factor_from_view(1_000_000) == 1.0
+
+
+def test_heat_factor_from_view_mid_range_log_scaled() -> None:
+    """100 views → ~0.4, 1000 views → ~0.6, 10000 → ~0.8 (log-scaled)."""
+    assert relevance._heat_factor_from_view(100) == pytest.approx(0.40, abs=0.02)
+    assert relevance._heat_factor_from_view(1_000) == pytest.approx(0.60, abs=0.02)
+    assert relevance._heat_factor_from_view(10_000) == pytest.approx(0.80, abs=0.02)
+
+
+def test_heat_factor_switch_uses_rank_by_default() -> None:
+    """heat_source='rank' (default) → 1/rank behavior regardless of view."""
+    assert relevance.heat_factor(rank=2, view_count=1_000_000) == 0.5
+
+
+def test_heat_factor_switch_uses_view_when_requested() -> None:
+    """heat_source='view' with view_count > 0 → log(view+1)/log(100001)."""
+    val = relevance.heat_factor(
+        rank=2, view_count=1_000_000, source="view",
+    )
+    # 1M views saturates to 1.0, beats rank-based 0.5
+    assert val == pytest.approx(1.0, abs=1e-3)
+
+
+def test_heat_factor_switch_view_falls_back_to_rank_on_zero() -> None:
+    """heat_source='view' with view_count=0 → rank-based fallback."""
+    assert relevance.heat_factor(
+        rank=10, view_count=0, source="view",
+    ) == pytest.approx(0.1, abs=1e-3)
+
+
+def test_score_article_uses_view_heat_when_requested() -> None:
+    """score_article passes view_count + heat_source into the heat factor."""
+    article = _unit_vec(1.0, 0.0, 0.0)
+    kws = [_unit_vec(1.0, 0.0, 0.0)]
+    # sim 1.0 * heat_factor(view=100000, source=view) = 1.0 * 1.0 = 1.0
+    score = relevance.score_article(
+        article, kws, rank=100, view_count=100_000,
+        threshold=0.5, heat_source="view",
+    )
+    assert score == pytest.approx(1.0, abs=1e-3)
+
+
+def test_score_article_default_heat_source_is_rank() -> None:
+    """Backward compat: omitting heat_source keeps 1/rank behavior."""
+    article = _unit_vec(1.0, 0.0, 0.0)
+    kws = [_unit_vec(1.0, 0.0, 0.0)]
+    # sim 1.0 * heat_factor(rank=20) = 0.05 (rank 20 → 1/20 = 0.05, at floor)
+    score = relevance.score_article(article, kws, rank=20, threshold=0.5)
+    assert score == pytest.approx(0.05, abs=1e-3)
