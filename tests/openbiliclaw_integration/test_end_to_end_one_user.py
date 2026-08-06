@@ -1,4 +1,4 @@
-"""End-to-end one-user test (v2: per-user/date file output)."""
+"""End-to-end one-user test (v2.1.7: per-user dir layout)."""
 
 from __future__ import annotations
 
@@ -20,7 +20,20 @@ def _write_xlsx(path: Path, rows: list[list[str]]) -> None:
     wb.save(path)
 
 
-def test_end_to_end_one_user_writes_per_user_file(
+def _read_user_dir(out_dir: Path, user_id: str) -> dict:
+    user_dir = out_dir / "outputs" / user_id
+    text_dir = user_dir / "text"
+    return {
+        "input": json.loads((user_dir / "input.json").read_text(encoding="utf-8")),
+        "summary": (user_dir / "summary.txt").read_text(encoding="utf-8"),
+        "texts": {
+            path.name: path.read_text(encoding="utf-8")
+            for path in text_dir.iterdir()
+        },
+    }
+
+
+def test_end_to_end_one_user_writes_per_user_dir(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("OPENBILICLAW_LLM_API_KEY", "test-key")
@@ -62,20 +75,34 @@ def test_end_to_end_one_user_writes_per_user_file(
         ])
 
     assert code == 0
-    user_dir = out_dir / "u_001"
-    date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
-    assert len(date_dirs) == 1
-    target = date_dirs[0] / "recommendations.json"
-    assert target.exists()
-    data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["user_id"] == "u_001"
-    assert data["input"]["track_1"] == "AI"
-    assert data["recommendations"][0]["title"] == "T"
-    assert data["recommendations"][0]["source"] == "juejin"
-    assert data["recommendations"][0]["body_text"] == "完整正文内容超过十个字"
-    assert "reason" not in data["recommendations"][0]
-    assert "topic_label" not in data["recommendations"][0]
-    assert "confidence" not in data["recommendations"][0]
+
+    # inputs/users.json was written for this run.
+    registry = json.loads(
+        (out_dir / "inputs" / "users.json").read_text(encoding="utf-8")
+    )
+    assert "u_001" in registry
+
+    payload = _read_user_dir(out_dir, "u_001")
+
+    # input.json carries user metadata and the body-file article index.
+    assert payload["input"]["user_id"] == "u_001"
+    assert payload["input"]["track_1"] == "AI"
+    assert payload["input"]["track_2"] == "副业"
+    assert payload["input"]["persona"] == "博主"
+    assert payload["input"]["recommendation_count"] == 1
+    assert payload["input"]["summary_file"] == "summary.txt"
+
+    item_dict = payload["input"]["articles"][0]
+    assert item_dict["title"] == "T"
+    assert item_dict["platform"] == "juejin"
+    assert item_dict["body_file"] == "text/01.txt"
+    assert "body_text" not in item_dict
+    assert "reason" not in item_dict
+    assert "topic_label" not in item_dict
+    assert "confidence" not in item_dict
+
+    assert payload["summary"] == ""
+    assert payload["texts"]["01.txt"] == "完整正文内容超过十个字"
 
 
 def test_end_to_end_one_user_writes_keyword_cache(
@@ -113,8 +140,6 @@ def test_end_to_end_one_user_writes_keyword_cache(
         llm_called["n"] += 1
         return ["非遗手工艺", "传统节气", "老字号"]
 
-    # Patch the LLM call inside extract_or_load so the real cache-write
-    # path runs and the file actually appears on disk.
     with (
         patch.object(
             recommender.keyword_extractor, "_extract_via_llm",
@@ -138,11 +163,11 @@ def test_end_to_end_one_user_writes_keyword_cache(
 
     cache_file = out_dir / "_keyword_cache" / "wh_user_01" / "keyword_cache.json"
     assert cache_file.exists()
-    payload = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert payload["keywords"] == ["非遗手工艺", "传统节气", "老字号"]
-    assert payload["track_1"] == "文化生活"
-    assert payload["track_2"] == "非遗与民俗"
-    assert len(payload["spec_hash"]) == 64  # sha256 hex
+    cached = json.loads(cache_file.read_text(encoding="utf-8"))
+    assert cached["keywords"] == ["非遗手工艺", "传统节气", "老字号"]
+    assert cached["track_1"] == "文化生活"
+    assert cached["track_2"] == "非遗与民俗"
+    assert len(cached["spec_hash"]) == 64  # sha256 hex
 
 
 def test_end_to_end_no_keyword_extraction_skips_llm(
@@ -201,9 +226,8 @@ def test_end_to_end_no_keyword_extraction_skips_llm(
 def test_end_to_end_one_user_filters_offtopic_via_embedding(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """An off-topic article (low cosine sim to keywords) is dropped before
-    the engine, so it never appears in recommendations.json — even if it
-    ranks high in its provider's hotlist."""
+    """Off-topic articles (low cosine sim) are dropped before the engine,
+    so they never appear in the per-user queries/ files."""
     monkeypatch.setenv("OPENBILICLAW_LLM_API_KEY", "test-key")
     xlsx = tmp_path / "users.xlsx"
     _write_xlsx(xlsx, [["wh_user_01", "非遗", "民俗", "研究非遗"]])
@@ -235,7 +259,6 @@ def test_end_to_end_one_user_filters_offtopic_via_embedding(
     )
 
     fake_emb = AsyncMock()
-    # 3 keyword embeddings + 2 article embeddings (one filtered) = 5.
     fake_emb.embed = AsyncMock(side_effect=[
         [1.0, 0.0, 0.0],  # keyword 1 "非遗"
         [1.0, 0.0, 0.0],  # keyword 2 "民俗"
@@ -270,13 +293,8 @@ def test_end_to_end_one_user_filters_offtopic_via_embedding(
         ])
 
     assert code == 0
-    # CLI writes to today's date; find the file dynamically.
-    user_dir = out_dir / "wh_user_01"
-    date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
-    assert len(date_dirs) == 1
-    data = json.loads(
-        (date_dirs[0] / "recommendations.json").read_text(encoding="utf-8")
-    )
-    titles = [r["title"] for r in data["recommendations"]]
-    assert not any("Flutter" in t for t in titles), titles
-    assert any("非遗" in t for t in titles), titles
+    # The article index is the source for titles; Flutter should not appear.
+    payload = _read_user_dir(out_dir, "wh_user_01")
+    titles = [article["title"] for article in payload["input"]["articles"]]
+    assert not any("Flutter" in title for title in titles), titles
+    assert any("非遗" in title for title in titles), titles

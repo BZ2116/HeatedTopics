@@ -123,9 +123,11 @@ v2.1 起不需要 `--last30days-query`：CLI 内部对每个用户调用 last30d
 [复用] RecommendationEngine.serve_external_candidates(
            expression_mode="precomputed")   ← v2 跳过 LLM 写 reason
    ↓
-[复用] output.format_user_file() → JSON 单用户文件
+[复用] recommender._user_payload() → in-memory user payload
    ↓
-[CLI] 写到 {output_dir}/{user_id}/{today}/recommendations.json
+[CLI] report_writer.write_user_report() → outputs/{user_id}/
+      ├─ input.json + summary.txt
+      └─ text/NN.txt（完整正文）
 ```
 
 ## 8. 测试覆盖

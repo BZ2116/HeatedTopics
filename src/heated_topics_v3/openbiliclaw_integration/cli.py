@@ -6,18 +6,16 @@ Reads users from .xlsx, writes per-user/per-date files under --output-dir.
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from collections.abc import Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.openbiliclaw_integration import (
     excel_loader,
     recommender,
+    report_writer,
     runtime,
 )
 from heated_topics_v3.openbiliclaw_integration.exceptions import ProfileValidationError
@@ -41,8 +39,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument(
         "--output-dir", required=True, type=Path,
         help=(
-            "Per-user output root. CLI writes "
-            "{output-dir}/{user_id}/{YYYY-MM-DD}/recommendations.json"
+            "Per-run output root. CLI writes "
+            "{output-dir}/inputs/users.json and "
+            "{output-dir}/outputs/{user_id}/{input.json,queries/,summaries/,text/}"
         ),
     )
     p.add_argument("--limit", type=int, default=8, help="Top-N per user (default 8)")
@@ -171,7 +170,7 @@ def asyncio_run(coro: Any) -> Any:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """CLI entry. Writes one {user_id}/{date}/recommendations.json per user."""
+    """CLI entry. Writes inputs/users.json + outputs/{user_id}/{layout} per user."""
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
@@ -234,19 +233,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.exception("fatal error in run_all_users")
         return 4
 
-    today = datetime.now(SHANGHAI).strftime("%Y-%m-%d")
+    # Persist the inputs registry once for the whole run so a re-run with
+    # identical Excel produces a byte-identical inputs/users.json.
+    report_writer.write_inputs_registry(args.output_dir, specs)
+
     any_error = False
     for user_id, payload in results.items():
-        user_dir = args.output_dir / user_id / today
         try:
-            user_dir.mkdir(parents=True, exist_ok=True)
-            target = user_dir / "recommendations.json"
-            tmp = target.with_suffix(target.suffix + ".tmp")
-            tmp.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+            user_dir = args.output_dir / "outputs" / user_id
+            inp = payload.get("input", {}) or {}
+            report_writer.write_user_report(
+                user_dir,
+                user_id=user_id,
+                track_1=inp.get("track_1", ""),
+                track_2=inp.get("track_2", ""),
+                persona=inp.get("persona", ""),
+                recommendations=payload.get("recommendations") or [],
+                summary=payload.get("summary") or "",
+                body_max_chars=args.body_max_chars,
             )
-            tmp.replace(target)
         except OSError as exc:
             logger.error("failed to write %s: %s", user_dir, exc)
             any_error = True

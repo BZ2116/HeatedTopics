@@ -18,14 +18,13 @@ but off-topic terms (e.g. returning "赶集文化" when the spec keeps saying
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from heated_topics_v3.openbiliclaw_integration.user_profile import UserSpec
+from heated_topics_v3.openbiliclaw_integration.user_profile import UserSpec, _spec_hash
 
 if TYPE_CHECKING:
     from openbiliclaw.llm.service import LLMService
@@ -41,16 +40,6 @@ _ANCHOR_MIN_LEN = 2
 _ANCHOR_MAX_LEN = 6
 _ANCHOR_MAX = 6  # cap anchors in the prompt; LLM gets the top N most prominent
 _ANCHOR_SPLIT_RE = re.compile(r"[\s/&、，,+\-]+|与|和|及|之|的")
-
-
-def _spec_hash(spec: UserSpec) -> str:
-    """Stable sha256 of the spec fields that influence keyword extraction.
-
-    Changes here invalidate the per-user cache. user_id is intentionally
-    excluded: changing the ID means a new user, not an updated one.
-    """
-    blob = f"{spec.track_1}\x00{spec.track_2}\x00{spec.persona}"
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _fallback_keywords(spec: UserSpec) -> list[str]:

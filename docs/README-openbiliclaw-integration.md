@@ -1,20 +1,16 @@
-# HeatedTopics × OpenBiliClaw 多用户推荐（v2.1）
+# HeatedTopics × OpenBiliClaw 多用户推荐（v2.1.7）
 
-CLI 接受 Excel 用户画像（4 列），按 user / date 分层目录输出每个用户的 top-N 热点素材（带标题、出处、URL、完整正文、热度），下游创作者按目录取用。
+CLI 接受 Excel 用户画像，为每位用户生成独立目录：`input.json` 保存文章索引，`summary.txt` 汇总该用户的全部 query，`text/NN.txt` 保存每篇文章正文。
 
-## 设计要点（v2.1 相对 v2 的变化）
+## v2.1.7 设计要点
 
-- **LLM 关键词提取（v2.1 新增）**：每位用户首次运行时调 LLM，把 `{track_1, track_2, persona}` 提炼成 3 个精准中文搜索词，**替代** 原 `track_1/track_2` 作为 V3 search + last30days query。命中度比单赛道词好得多（窄众用户尤其明显）。
-- **关键词缓存（v2.1 新增）**：结果按 `sha256(track_1|track_2|persona)` 缓存在 `{output_dir}/_keyword_cache/{user_id}/keyword_cache.json`。老用户修改了 track_1/track_2/persona 自动失效重抽。
-- **可关闭（v2.1 新增）**：`--no-keyword-extraction` 回退到 v2 行为（直接用 `track_1/track_2`）。
-
-## v2 相对 v1 的变化（背景）
-
-- **输入**：Excel `.xlsx`，4 列 `user_id / track_1 / track_2 / persona`，真人填表成本极低
-- **输出**：`{output_dir}/{user_id}/{YYYY-MM-DD}/recommendations.json` 三层目录，每用户每天一个文件
-- **素材**：标题 / 出处 / URL / 完整正文（≤50000 字）/ 热度，**不含** LLM 写的 `reason`/`topic_label`/`confidence`（创作者要素材不要文案）
-- **数据源**：默认 `both`（V3 hotlist + last30days，URL 去重）
-- **配置**：CLI flag 大幅瘦身，移除 `--use-search`/`--prefer-search`/`--search-*`/`--providers`/`--config`/`--body-preview-chars`/`--data-dir` 等 V1 knob
+- **单份整体摘要**：每个用户只生成一个 `summary.txt`，综合该用户命中的多个 query，不再按 query 拆分摘要文件。
+- **正文独立落盘**：每篇文章正文写入 `text/01.txt`、`text/02.txt` 等文件，编号与推荐 rank 一致。
+- **轻量文章索引**：`input.json` 的 `articles` 只保存元数据、query 来源和 `body_file`，不重复正文。
+- **运行输入注册表**：`inputs/users.json` 记录本次运行的 `user_id → track_1/track_2/persona` 映射。
+- **稳定用户编号**：桌面三列 Excel runner 使用 `u_<sha256(track_1\0track_2\0persona)[:8]>`，Excel 行顺序变化不会导致编号漂移。
+- **LLM 关键词提取**：首次运行根据 `{track_1, track_2, persona}` 提炼查询词，并按 profile hash 缓存。
+- **可关闭关键词提取**：`--no-keyword-extraction` 回退到直接使用 `track_1/track_2`。
 
 ## 快速开始
 
@@ -61,48 +57,50 @@ python -m heated_topics_v3.openbiliclaw_integration.cli \
 ## 输出结构
 
 ```text
-recs/
-├── u_001/
-│   └── 2026-08-01/
-│       └── recommendations.json
-├── u_002/
-│   └── 2026-08-01/
-│       └── recommendations.json
-└── ...
+<output-dir>/
+├── inputs/
+│   └── users.json
+└── outputs/
+    ├── u_001/
+    │   ├── input.json
+    │   ├── summary.txt
+    │   └── text/
+    │       ├── 01.txt
+    │       └── 02.txt
+    └── u_002/
+        └── ...
 ```
 
-每份 `recommendations.json` 形状：
+`input.json` 示例：
 
 ```json
 {
   "user_id": "u_001",
-  "input": {"track_1": "AI 大模型", "track_2": "副业", "persona": "技术博主，35 岁"},
-  "generated_at": "2026-08-01T12:34:56+08:00",
-  "recommendations": [
+  "track_1": "AI 大模型",
+  "track_2": "副业",
+  "persona": "技术博主，35 岁",
+  "generated_at": "2026-08-06T12:34:56+08:00",
+  "recommendation_count": 1,
+  "summary_file": "summary.txt",
+  "articles": [
     {
       "rank": 1,
       "title": "...",
       "url": "https://...",
-      "source": "juejin",
+      "platform": "weibo",
+      "query": "大模型应用",
       "heat": {"view": 12345, "like": 678, "comment": 90, "favorite": 12, "share": 5, "rank": 1},
-      "body_text": "完整正文（≤50000 字）",
-      "body_text_length": 4321,
-      "body_truncated": false,
-      "published_at": "2026-07-31T10:00:00"
+      "published_at": "",
+      "body_file": "text/01.txt"
     }
   ]
 }
 ```
 
-失败时输出（替换上面 `recommendations` 数组）：
-
-```json
-{
-  "user_id": "u_001",
-  "error": "no_candidates",
-  "error_detail": "Fetched 0 articles from providers=['juejin']"
-}
-```
+- `summary.txt`：一段中文整体简报，综合该用户的全部 query。
+- `text/NN.txt`：对应 rank 文章的正文，最多 `--body-max-chars` 字符。
+- `input.json` 不包含 `body_text`、`reason`、`topic_label` 或 `confidence`。
+- 摘要失败时仍会创建空的 `summary.txt`，不影响正文消费。
 
 ## CLI 完整 flag 表
 
@@ -113,14 +111,19 @@ recs/
 | `--limit N` |  | 8 | 每用户返回 top-N |
 | `--max-parallel N` |  | 5 | 并发用户数；1 = 串行 |
 | `--per-user-timeout SEC` |  | 300 | 单用户超时 |
-| `--body-max-chars N` |  | 50000 | 正文截断阈值（超出标 `body_truncated: true`） |
+| `--body-max-chars N` |  | 50000 | 每个 `text/NN.txt` 的正文截断上限 |
 | `--source {v3-hotlist,last30days,both}` |  | both | 候选源选择 |
 | `--last30days-cli-path PATH` | source 含 last30days 时必填 | — | last30days `scripts/last30days.py` 路径 |
 | `--last30days-days N` |  | 30 | last30days 回溯天数 |
+| `--last30days-max-queries N` |  | 3 | 每用户最多运行的 last30days query 数 |
+| `--last30days-low-water-mark N` |  | 3 | 候选数超过该值时停止扩展 query |
 | `--last30days-fetch-bodies` |  | on | 启用 `--fetch-bodies` |
 | `--no-last30days-fetch-bodies` |  | — | 关闭 `--fetch-bodies` |
 | `--last30days-timeout SEC` |  | 120 | per-user last30days 子进程超时 |
-| `--no-keyword-extraction` |  | — | 关闭 LLM 关键词提取；回退到 `track_1/track_2` 作查询词。默认开启（抽 3 个词，按用户缓存） |
+| `--no-keyword-extraction` |  | — | 关闭 LLM 关键词提取；回退到 `track_1/track_2` 作查询词 |
+| `--min-view-count N` |  | 0 | 最低浏览量；0 表示不筛选 |
+| `--heat-source {rank,view}` |  | rank | 相关性分数中的热度来源 |
+| `--llm-refilter` |  | off | embedding 预筛后再做 LLM 人设相关性过滤 |
 
 ## 候选源（v3 / last30days / both）
 
@@ -159,7 +162,7 @@ LLM 抽出的关键词持久化在 `{output_dir}/_keyword_cache/{user_id}/keywor
 
 ```json
 {
-  "spec_hash": "sha256 hex（来自 track_1|track_2|persona）",
+  "spec_hash": "sha256 hex（来自 track_1\\0track_2\\0persona）",
   "keywords": ["非遗手工艺", "传统节气", "老字号"],
   "track_1": "文化生活",
   "track_2": "非遗与民俗",
@@ -190,7 +193,7 @@ LLM 抽出的关键词持久化在 `{output_dir}/_keyword_cache/{user_id}/keywor
 | 推荐全是空白 / top-8 少于 8 条 | sim threshold 把候选过滤光 | ① 检查关键词是否合理（看 `_keyword_cache/<user_id>/`）；② 删关键词缓存强制重抽；③ 临时把代码里 `sim_threshold=0.5` 调低 |
 | `Excel invalid: missing required columns` | xlsx 表头缺列 | 4 列都写上 |
 | `Excel has zero users` | xlsx 没数据行 | 至少 1 行用户 |
-| 退出码 1 | 部分用户失败 | 看每个 `recommendations.json` 的 `error` 字段 |
+| 退出码 1 | 部分用户失败 | 查看对应 `outputs/<user_id>/` 是否缺少推荐，结合 CLI 日志定位原因 |
 | 退出码 2 | 启动期配置错误 | 看 stderr（xlsx 缺失、env 缺失、`--source last30days/both` 但没 `--last30days-cli-path`） |
 | 退出码 4 | 致命异常 | 看 stderr 堆栈 |
 

@@ -1,4 +1,4 @@
-"""End-to-end last30days source pipeline test (v2 per-user/date files)."""
+"""End-to-end last30days source pipeline test (v2.1.7 per-user dir)."""
 
 from __future__ import annotations
 
@@ -78,8 +78,8 @@ def test_end_to_end_last30days_source(
 
     with (
         patch.object(
-            recommender, "_fetch_last30days_candidates",
-            return_value=_fake_l30_articles(),
+            recommender, "_fetch_last30days_candidates_async",
+            AsyncMock(return_value=_fake_l30_articles()),
         ),
         patch.object(
             recommender, "fetch_candidates",
@@ -100,13 +100,15 @@ def test_end_to_end_last30days_source(
         ])
 
     assert code == 0
-    user_dir = out_dir / "u_l30"
-    date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
-    assert len(date_dirs) == 1
-    target = date_dirs[0] / "recommendations.json"
-    data = json.loads(target.read_text(encoding="utf-8"))
-    assert data["user_id"] == "u_l30"
-    assert data["input"]["track_1"] == "AI 大模型"
-    assert data["recommendations"][0]["title"] == "AI 微博热议"
-    assert data["recommendations"][0]["source"] == "weibo"
-    assert "reason" not in data["recommendations"][0]
+    user_dir = out_dir / "outputs" / "u_l30"
+    assert user_dir.is_dir()
+    inp = json.loads((user_dir / "input.json").read_text(encoding="utf-8"))
+    assert inp["user_id"] == "u_l30"
+    assert inp["track_1"] == "AI 大模型"
+    articles = inp["articles"]
+    assert any(article["title"] == "AI 微博热议" for article in articles)
+    assert any(article["body_file"] == "text/01.txt" for article in articles)
+    assert (user_dir / "summary.txt").exists()
+    # body lives in text/NN.txt, not in input.json
+    body_texts = {p.read_text(encoding="utf-8") for p in (user_dir / "text").iterdir()}
+    assert "微博正文" in body_texts

@@ -1,4 +1,4 @@
-"""End-to-end multi-user test verifying per-user/date isolation (v2)."""
+"""End-to-end multi-user test verifying per-user dir isolation (v2.1.7)."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _fake_rec(user_id: str) -> Recommendation:
     )
 
 
-def test_end_to_end_three_users_independent_files(
+def test_end_to_end_three_users_independent_dirs(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("OPENBILICLAW_LLM_API_KEY", "test-key")
@@ -82,16 +82,28 @@ def test_end_to_end_three_users_independent_files(
         ])
 
     assert code == 0
-    # Each user has its own directory tree
+
+    # Top-level inputs registry covers all three users.
+    registry = json.loads(
+        (out_dir / "inputs" / "users.json").read_text(encoding="utf-8")
+    )
+    assert set(registry.keys()) == {"u_a", "u_b", "u_c"}
+
+    # Each user has their own outputs/<uid>/ directory with the layout.
     for uid in ("u_a", "u_b", "u_c"):
-        user_dir = out_dir / uid
+        user_dir = out_dir / "outputs" / uid
         assert user_dir.is_dir(), f"missing user dir: {user_dir}"
-        date_dirs = [d for d in user_dir.iterdir() if d.is_dir()]
-        assert len(date_dirs) == 1
-        target = date_dirs[0] / "recommendations.json"
-        assert target.exists()
-        data = json.loads(target.read_text(encoding="utf-8"))
-        assert data["user_id"] == uid
-        assert data["recommendations"][0]["title"] == f"T-{uid}"
-        assert "reason" not in data["recommendations"][0]
+        assert (user_dir / "input.json").exists()
+        assert (user_dir / "summary.txt").exists()
+        assert (user_dir / "text" / "01.txt").exists()
+        payload = json.loads((user_dir / "input.json").read_text(encoding="utf-8"))
+        article_item = payload["articles"][0]
+        assert article_item["title"] == f"T-{uid}"
+        assert article_item["body_file"] == "text/01.txt"
+        assert "reason" not in article_item
+        assert "topic_label" not in article_item
+        assert "confidence" not in article_item
+        assert "body_text" not in article_item
+        assert (user_dir / "text" / "01.txt").read_text(encoding="utf-8") == f"body-{uid}"
+
     assert len(engines) == 3

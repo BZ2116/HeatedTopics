@@ -148,21 +148,22 @@ platform.
 
 ## Multi-user OpenBiliClaw recommender
 
-A second pipeline on top of V3 hot-list providers: take a list of user profiles,
-let OpenBiliClaw rank and personalize the candidates, write a per-user
-top-N JSON. Lives at `src/heated_topics_v3/openbiliclaw_integration/`.
+This pipeline reads lightweight user profiles from Excel, obtains candidates from
+V3 hot lists and/or last30days, lets OpenBiliClaw rank them, and writes an
+isolated report directory for each user.
 
 ### What you get
 
-For each user, a list of up to `--limit` recommendations with:
+Each user report contains:
 
-- `title`, `url`, `source_platform` — what to read
-- `body_text_preview` — first 800 chars (configurable) of the article body, fetched via HTTP + GNE
-- `topic_label`, `reason` — LLM-generated (MiniMax-M2.7) one-line topic + friend-style explanation tuned to the user's interests
-- `confidence` — `1/rank` from the hot-list position, used by the engine's MMR diversifier
-- `heat.*` — view / like / comment / favorite / share / rank pulled from each provider's native metrics
+- `input.json` — user profile plus an article index with query provenance, heat,
+  publication time, and a pointer to the body file
+- `summary.txt` — one Chinese brief covering all queries for that user
+- `text/NN.txt` — one complete article body per recommendation, named by the
+  two-digit recommendation rank
 
-Failures are isolated per user: one user crashing does not affect the others; the failing user's entry has `error` + `error_detail` fields instead of `recommendations`.
+Article bodies are not duplicated in JSON. Failures are isolated per user, so
+one user failing does not stop the remaining users.
 
 ### Prerequisites
 
@@ -195,79 +196,59 @@ export DAILYHOT_CACHE_DIR=/path/to/data/cache/dailyhot
 ### Running
 
 ```bash
-source .venv/Scripts/activate        # Windows: adjust path
+source .venv/Scripts/activate
 export PYTHONPATH=src
 export OPENBILICLAW_LLM_API_KEY=sk-...
 
 python -m heated_topics_v3.openbiliclaw_integration.cli \
-    --users  config/profiles/users_demo.json \
-    --output data/recommendations.json \
-    --limit  5 \
-    --providers dailyhot:36kr,juejin,toutiao \
-    --data-dir data/runtime \
+    --users-excel users.xlsx \
+    --output-dir data/run_20260806 \
+    --source both \
+    --last30days-cli-path "E:/.code/My/last30days-skill-cn/scripts/last30days.py" \
+    --limit 8 \
     --max-parallel 5 \
     --per-user-timeout 300
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--users` | required | path to `users.json` (see schema below) |
-| `--output` | required | where to write the recommendations envelope |
-| `--limit` | `10` | top-N per user |
-| `--providers` | all | comma-separated; supports `dailyhot:<route>` (e.g. `dailyhot:36kr`, `dailyhot:zhihu`) |
-| `--max-parallel` | `5` | concurrent users; `1` = serial |
-| `--per-user-timeout` | `180` | seconds before a single user is marked `error: timeout` |
-| `--body-preview-chars` | `800` | truncation length of `body_text_preview` |
-| `--config` | `config/openbiliclaw.toml` | OpenBiliClaw config (see below) |
-| `--data-dir` | `data` | per-user state root; each user gets `data/users/<id>/openbiliclaw.db` |
+| `--users-excel` | required | Excel input with `user_id`, `track_1`, `track_2`, and `persona` |
+| `--output-dir` | required | per-run root containing `inputs/` and `outputs/` |
+| `--limit` | `8` | top-N recommendations per user |
+| `--source` | `both` | `v3-hotlist`, `last30days`, or both |
+| `--last30days-cli-path` | none | required when source includes last30days |
+| `--last30days-max-queries` | `3` | maximum last30days queries per user |
+| `--max-parallel` | `5` | concurrent users; `1` runs serially |
+| `--per-user-timeout` | `300` | timeout in seconds for one user |
+| `--body-max-chars` | `50000` | maximum characters written to each body file |
+| `--no-keyword-extraction` | off | use `track_1`/`track_2` directly instead of LLM keywords |
+| `--min-view-count` | `0` | minimum candidate view count; zero disables the filter |
+| `--heat-source` | `rank` | use source rank or view count as the heat factor |
+| `--llm-refilter` | off | enable a post-embedding LLM relevance filter |
 
-### Available providers
+### Excel input
 
-| Name | Source |
-|---|---|
-| `juejin`, `toutiao`, `baidu_hot`, `zhihu_hot`, `zhihu_daily`, `sina_news`, `thepaper`, `netease_news` | first-party V3 providers (HTTP) |
-| `dailyhot:<route>` | DailyHotApi cache reader — `route` is any of 40+ upstream platforms (`36kr`, `sspai`, `xiaohongshu`, `csdn`, `ithome`, `github`, `hellogithub`, `douyin`, `weibo`, `baidu`, `bilibili`, ...). Body is fetched per-URL via GNE with a `title_only` fallback. |
+The first worksheet must contain these four columns. Header matching is
+case-insensitive and accepts the listed Chinese aliases.
 
-To list the routes currently in your cache:
+| Field | Accepted aliases | Meaning |
+|---|---|---|
+| `user_id` | `用户ID`, `用户编号` | caller-supplied output key |
+| `track_1` | `第一赛道`, `赛道一` | primary content track |
+| `track_2` | `第二赛道`, `赛道二` | secondary content track |
+| `persona` | `人设`, `画像` | creator persona |
 
-```bash
-python -c "import json,pathlib; p=pathlib.Path('data/cache/dailyhot'); \
-  print(sorted({json.loads(f.read_text(encoding='utf-8')).get('key','').split(':')[1] \
-  for f in p.iterdir() if f.suffix=='.json'}))"
+Blank rows are skipped. Missing or empty required fields fail validation before
+any user is processed.
+
+For the desktop three-column workbook, `data/run_20260804/run_desktop_all.py`
+derives a stable ID from profile content:
+
+```text
+u_<sha256(track_1 + "\0" + track_2 + "\0" + persona)[:8]>
 ```
 
-### `users.json` schema
-
-```json
-{
-  "users": [
-    {
-      "user_id": "caifu_001",
-      "display_name": "普通人财富管理（学生/新人）",
-      "interests": [
-        {"name": "记账", "category": "理财", "weight": 0.85},
-        {"name": "基金",  "category": "理财", "weight": 0.75}
-      ],
-      "disliked_topics": ["杠杆炒股", "一夜暴富"],
-      "style": {"reading_depth": "medium", "tone_preference": "neutral"},
-      "context": {"primary_scene": "general", "device": "mobile"},
-      "exploration_openness": 0.4,
-      "core_traits": ["稳扎稳打"],
-      "deep_needs": ["可落地的实操内容"],
-      "values": ["稳健", "不焦虑"],
-      "life_stage": "大学 / 职场新人",
-      "current_phase": "刚开始学理财",
-      "cognitive_style": ["由表及里"],
-      "recent_awareness": [{"date": "2026-07-29", "observation": "...", "trend": "...", "emotion_guess": "..."}],
-      "active_insights":  [{"hypothesis": "...", "evidence": ["..."], "confidence": 0.7}],
-      "favorite_up_users": [],
-      "source_platform_mix": {}
-    }
-  ]
-}
-```
-
-Required: `user_id`, `interests` (≥ 1, each with `name` and `weight ∈ [0, 1]`). Everything else is optional and gets a sensible default. See `tests/openbiliclaw_integration/fixtures/users_valid_3users.json` for three complete examples.
+This ID remains stable when Excel row order changes.
 
 ### `config/openbiliclaw.toml`
 
@@ -292,51 +273,60 @@ output_dimensionality = 1024
 
 If the file is missing, the CLI falls back to the same defaults from env. If `OPENBILICLAW_LLM_API_KEY` is unset, the CLI exits with code 2 before running anything.
 
-### Output envelope
+### Output layout
+
+The CLI writes one registry for the run and one directory per user. It does not
+write a consolidated recommendation JSON file.
+
+```text
+<output-dir>/
+├── inputs/
+│   └── users.json
+└── outputs/
+    └── u_<user-id>/
+        ├── input.json
+        ├── summary.txt
+        └── text/
+            ├── 01.txt
+            ├── 02.txt
+            └── NN.txt
+```
+
+`inputs/users.json` maps each `user_id` to its three profile fields. A user
+report's `input.json` contains the metadata and an `articles` array. Each article
+entry includes `rank`, `title`, `url`, `platform`, `query`, `heat`,
+`published_at`, and `body_file`; the complete body is only in that referenced
+`text/NN.txt` file.
+
+Example `input.json`:
 
 ```json
 {
-  "generated_at": "2026-07-30T20:30:00Z",
-  "config_version": "0.3.186+mur.1",
-  "llm_model": "MiniMax-M2.7",
-  "embedding_model": "bge-m3",
-  "users": [
+  "user_id": "u_001",
+  "track_1": "AI 大模型",
+  "track_2": "副业",
+  "persona": "技术博主",
+  "generated_at": "2026-08-06T12:34:56+08:00",
+  "recommendation_count": 1,
+  "summary_file": "summary.txt",
+  "articles": [
     {
-      "user_id": "caifu_001",
-      "display_name": "...",
-      "input_profile_summary": {"interests_count": 9, "disliked_count": 3},
-      "pipeline": {
-        "candidates_fetched": 50,
-        "candidates_after_filter": 19,
-        "candidates_considered_by_engine": 19,
-        "embedding_degraded": false
-      },
-      "recommendations": [
-        {
-          "rank": 1,
-          "title": "...",
-          "url": "https://...",
-          "source_platform": "dailyhot:36kr",
-          "heat": {"view": 56641, "like": 0, "comment": 0, "favorite": 0, "share": 0, "rank": 1},
-          "body_text_preview": "...",
-          "body_text_length": 5336,
-          "topic_label": "大厂投资思路里的稳健逻辑",
-          "reason": "看了下腾讯这两年在AI上的投资版图...",
-          "confidence": 1.0,
-          "published_at": ""
-        }
-      ]
-    },
-    {
-      "user_id": "u_broken",
-      "error": "timeout",
-      "error_detail": "exceeded 300s"
+      "rank": 1,
+      "title": "...",
+      "url": "https://...",
+      "platform": "weibo",
+      "query": "大模型应用",
+      "heat": {"view": 12345, "like": 678, "comment": 90, "favorite": 12, "share": 5, "rank": 1},
+      "published_at": "",
+      "body_file": "text/01.txt"
     }
   ]
 }
 ```
 
-The envelope is written atomically (`<output>.tmp` then `os.replace`) — a partial file is never observed by readers.
+`summary.txt` is one Chinese content brief covering the user's query groups;
+it is not one file per query. Empty or failed summaries still produce an empty
+`summary.txt`, while article bodies remain available independently.
 
 ### Exit codes
 
@@ -344,7 +334,7 @@ The envelope is written atomically (`<output>.tmp` then `os.replace`) — a part
 |---|---|
 | `0` | All users produced recommendations |
 | `1` | At least one user errored (`error` field present) — others may have succeeded |
-| `2` | Bad CLI args, missing `OPENBILICLAW_LLM_API_KEY`, or `users.json` invalid |
+| `2` | Bad CLI args, missing `OPENBILICLAW_LLM_API_KEY`, or invalid Excel input |
 | `4` | Fatal error inside `run_all_users` or output write failed |
 | `130` | SIGINT (Ctrl-C) |
 
@@ -356,7 +346,9 @@ export PYTHONPATH=src
 python -m pytest tests/openbiliclaw_integration tests/providers -v
 ```
 
-The openbiliclaw_integration suite (57 tests) covers: schema validation, profile building, candidate adapter (rank → relevance mapping), per-user error isolation, parallel orchestration, the `serve_external_candidates` patch verification, and config loading.
+The openbiliclaw integration suite currently covers Excel validation, stable user
+IDs, keyword extraction, candidate adaptation, source dispatch, concurrency,
+overall summary generation, report writing, and end-to-end output isolation.
 
 The provider suite covers every V3 provider including the DailyHotApi adapter (6 tests for cache-scan lookup, fetch_detail title-only / full-text / HTTP-failure paths).
 
@@ -364,19 +356,22 @@ The provider suite covers every V3 provider including the DailyHotApi adapter (6
 
 ```text
 src/heated_topics_v3/openbiliclaw_integration/
-├── cli.py              # argparse entry; exit codes; atomic output write
-├── recommender.py      # fetch_candidates → candidate_adapter → engine.serve_external_candidates
-├── user_profile.py     # users.json schema + OnionProfile builder
-├── candidate_adapter.py # V3 HotItem → openbiliclaw DiscoveredContent
-├── output.py           # Recommendation → JSON dict + envelope builder
-├── runtime.py          # config loader, env check, patch verification
-└── exceptions.py       # IntegrationError hierarchy
+├── cli.py               # Excel input, orchestration, and per-user report writes
+├── recommender.py       # candidate collection, ranking, and in-memory payloads
+├── user_profile.py      # minimal UserSpec and stable profile hash IDs
+├── keyword_extractor.py # LLM query extraction and cache
+├── candidate_adapter.py # source records → OpenBiliClaw DiscoveredContent
+├── per_query_summary.py # one overall brief across all query groups
+├── report_writer.py     # input.json + summary.txt + text/NN.txt
+├── runtime.py           # runtime construction and environment checks
+└── exceptions.py        # integration error hierarchy
 ```
 
 ### Troubleshooting
 
-- **`RuntimeError: OpenBiliClaw patch missing`**: the `serve_external_candidates` method is not on `RecommendationEngine`. Re-install the patched openbiliclaw-sandbox (`pip install -e openbiliclaw-sandbox`) and rerun.
-- **Every recommendation has `confidence: 0.0`**: the candidate adapter is not setting `relevance_score`. Confirm you're on a build that includes `src/heated_topics_v3/openbiliclaw_integration/candidate_adapter.py` (rank → `1/rank` mapping).
-- **All users fail with `error: engine_error`**: usually the embedding service is unreachable. Check `curl http://127.0.0.1:11434/api/embeddings -d '{"model":"bge-m3","prompt":"test"}'`.
-- **A `--providers dailyhot:<route>` returns zero items**: no cache file with `key="dailyhot:<route>:today"` exists in `data/cache/dailyhot` (or `$DAILYHOT_CACHE_DIR`). Run the upstream dailyhot client to refresh, or remove the route from `--providers`.
-- **Body text is empty for an item**: GNE couldn't extract a usable body (`content_status: "title_only"`). The item still surfaces — the engine ranks by title — but personalization will be weaker.
+- **`RuntimeError: OpenBiliClaw patch missing`**: reinstall the patched OpenBiliClaw build that provides `RecommendationEngine.serve_external_candidates`.
+- **All users fail with `engine_error`**: verify that Ollama is running and the configured embedding model is available.
+- **A user gets too few recommendations**: inspect `_keyword_cache/<user_id>/keyword_cache.json`; regenerate weak keywords or adjust `--min-view-count` and the embedding threshold deliberately.
+- **last30days returns no candidates**: verify `--last30days-cli-path`, increase `--last30days-timeout`, and inspect `<output-dir>/last30days/`.
+- **`summary.txt` is empty**: the summary LLM call failed or no recommendation had query provenance; article metadata and `text/NN.txt` bodies remain usable.
+- **A body file is empty**: the upstream provider could not extract full text for that URL; check the corresponding article URL and source response.

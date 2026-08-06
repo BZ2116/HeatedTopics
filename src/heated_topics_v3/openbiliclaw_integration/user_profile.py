@@ -13,6 +13,7 @@ metadata for downstream consumers (engine currently ignores it).
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,29 @@ class UserSpec:
             raise ProfileValidationError("track_1 is required")
         if not self.display_name:
             object.__setattr__(self, "display_name", self.user_id)
+
+
+def _spec_hash(spec: UserSpec) -> str:
+    """Stable sha256 of the spec fields that influence ranking.
+
+    Used as both the per-user cache key (keyword_extractor) and the basis
+    for the cross-run stable ``user_id``. user_id is intentionally excluded:
+    changing the ID means a new user, not an updated one.
+    """
+    blob = f"{spec.track_1}\x00{spec.track_2}\x00{spec.persona}"
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def user_id_for_spec(spec: UserSpec) -> str:
+    """Return a cross-run-stable ``user_id`` derived from spec content.
+
+    Two specs with the same ``track_1`` / ``track_2`` / ``persona`` map to
+    the same id regardless of the caller's preferred display name; this
+    means re-running with the same Excel always groups under the same id
+    while a content change shifts the id. 8-hex truncation gives ~4.29B
+    space — collision-free at any realistic user scale.
+    """
+    return "u_" + _spec_hash(spec)[:8]
 
 
 def load_users(specs: list[dict[str, Any]]) -> list[UserSpec]:

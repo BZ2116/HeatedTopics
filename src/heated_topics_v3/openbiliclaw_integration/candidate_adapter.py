@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_FIELDS = ("article_id", "title", "url", "body_text")
 
+# Sources whose articles can't satisfy our "article body" contract: bilibili
+# and douyin only carry descriptions (video platforms — no full body text),
+# xiaohongshu needs login (public crawl returns nothing). This is a safety net
+# — callers should normally exclude these from the driver config; the filter
+# here protects against accidentally re-enabling them via `provider=` overrides.
+BLOCKED_SOURCES: frozenset[str] = frozenset({"bilibili", "douyin", "xiaohongshu"})
+
 # Floor mirrors the OpenBiliClaw engine: classification_failed rows use 0.01
 # so callers can distinguish "never evaluated" from "evaluated but low score".
 _RELEVANCE_FLOOR = 0.01
@@ -97,6 +104,13 @@ async def to_discovered(
             continue
         missing = [f for f in _REQUIRED_FIELDS if not raw.get(f)]
         if missing:
+            continue
+        raw_platform = raw.get("platform") or platform
+        if raw_platform in BLOCKED_SOURCES or platform in BLOCKED_SOURCES:
+            logger.debug(
+                "dropping %r: blocked platform=%r",
+                raw.get("article_id"), raw_platform,
+            )
             continue
         heat = raw.get("heat") or {}
         rank = int(heat.get("rank", 0))

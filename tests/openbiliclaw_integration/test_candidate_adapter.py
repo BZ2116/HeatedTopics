@@ -364,3 +364,72 @@ async def test_to_discovered_heat_source_view_falls_back_when_no_view() -> None:
     )
     # rank 4 → 1/4 = 0.25
     assert items[0].relevance_score == pytest.approx(0.25, abs=1e-3)
+
+
+# --- v2.1.6: source-level filter (video / login-gated platforms) ----------
+
+
+def test_to_discovered_drops_blocked_sources() -> None:
+    """bilibili / douyin / xiaohongshu items are dropped before embedding.
+
+    Acts as a safety net for the driver-level platforms list — if a caller
+    accidentally includes these via `provider=` overrides or per-platform
+    config, they still won't reach the engine.
+    """
+    articles = [
+        {
+            "article_id": "weibo:1", "title": "wb", "url": "https://w.com/1",
+            "body_text": "x", "platform": "weibo", "heat": {"rank": 1},
+        },
+        {
+            "article_id": "bili:1", "title": "bl", "url": "https://b.com/1",
+            "body_text": "x", "platform": "bilibili", "heat": {"rank": 1},
+        },
+        {
+            "article_id": "dy:1", "title": "dy", "url": "https://d.com/1",
+            "body_text": "x", "platform": "douyin", "heat": {"rank": 1},
+        },
+        {
+            "article_id": "xhs:1", "title": "xhs", "url": "https://x.com/1",
+            "body_text": "x", "platform": "xiaohongshu", "heat": {"rank": 1},
+        },
+        {
+            "article_id": "zhihu:1", "title": "zh", "url": "https://z.com/1",
+            "body_text": "x", "platform": "zhihu", "heat": {"rank": 1},
+        },
+    ]
+    items = asyncio_run(candidate_adapter.to_discovered(articles, platform="weibo"))
+    ids = {item.content_id for item in items}
+    assert "weibo:1" in ids
+    assert "zhihu:1" in ids
+    assert "bili:1" not in ids
+    assert "dy:1" not in ids
+    assert "xhs:1" not in ids
+
+
+def test_to_discovered_drops_blocked_platform_kwarg() -> None:
+    """If the caller-level platform= is in BLOCKED_SOURCES, every item is
+    dropped (defensive — avoids surprises if the orchestrator passes a
+    blocked source via the platform= default)."""
+    articles = [
+        {
+            "article_id": "1", "title": "t", "url": "https://x.com/1",
+            "body_text": "x", "heat": {"rank": 1},
+        },
+    ]
+    items = asyncio_run(
+        candidate_adapter.to_discovered(articles, platform="bilibili")
+    )
+    assert items == []
+
+
+def test_blocked_sources_constant_covers_video_platforms() -> None:
+    """Sanity check on the module-level constant — guards against typos
+    that would silently re-enable blocked platforms."""
+    assert "bilibili" in candidate_adapter.BLOCKED_SOURCES
+    assert "douyin" in candidate_adapter.BLOCKED_SOURCES
+    assert "xiaohongshu" in candidate_adapter.BLOCKED_SOURCES
+    # Article sources must NOT be in the block set.
+    assert "weibo" not in candidate_adapter.BLOCKED_SOURCES
+    assert "zhihu" not in candidate_adapter.BLOCKED_SOURCES
+    assert "juejin" not in candidate_adapter.BLOCKED_SOURCES

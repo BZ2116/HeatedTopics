@@ -70,7 +70,10 @@ def test_run_one_user_returns_recommendations(tmp_path: Path) -> None:
 
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
     ):
         result = recommender.run_one_user(
             spec,
@@ -95,7 +98,10 @@ def test_run_one_user_handles_no_candidates(tmp_path: Path) -> None:
 
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
-        patch.object(recommender, "fetch_candidates", return_value=[]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[]),
+        ),
     ):
         result = recommender.run_one_user(
             spec, data_dir=tmp_path / "runtime", limit=5,
@@ -112,7 +118,10 @@ def test_run_one_user_timeout_returns_error(tmp_path: Path) -> None:
 
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
     ):
         result = recommender.run_one_user(
             spec, data_dir=tmp_path / "runtime", limit=5, per_user_timeout=0.1,
@@ -136,7 +145,10 @@ def test_run_one_user_isolated_engine_per_user(tmp_path: Path) -> None:
         patch.object(
             recommender, "build_recommender", side_effect=fake_build_recommender
         ),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
     ):
         for spec in specs:
             recommender.run_one_user(
@@ -157,7 +169,10 @@ def test_run_one_user_engine_error_returns_error(tmp_path: Path) -> None:
     )
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
     ):
         result = recommender.run_one_user(
             spec, data_dir=tmp_path / "runtime", limit=5,
@@ -672,14 +687,14 @@ def test_run_one_user_extracts_keywords_when_enabled(tmp_path: Path) -> None:
         captured["extracted_user"] = s.user_id
         return ["非遗手工艺", "传统节气", "老字号"]
 
-    def fake_fetch(s, *, keywords=None, **kwargs):
+    async def fake_fetch(s, *, keywords=None, **kwargs):
         captured["v3_keywords"] = keywords
         return [_mock_article()]
 
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(recommender, "extract_or_load", fake_extract),
-        patch.object(recommender, "fetch_candidates", fake_fetch),
+        patch.object(recommender, "_fetch_candidates_for_user_async", fake_fetch),
     ):
         recommender.run_one_user(
             spec,
@@ -709,14 +724,14 @@ def test_run_one_user_skips_extraction_when_disabled(tmp_path: Path) -> None:
         called["extract"] = True
         return ["x", "y", "z"]
 
-    def fake_fetch(s, *, keywords=None, **kwargs):
+    async def fake_fetch(s, *, keywords=None, **kwargs):
         captured["v3_keywords"] = keywords
         return [_mock_article()]
 
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(recommender, "extract_or_load", fake_extract),
-        patch.object(recommender, "fetch_candidates", fake_fetch),
+        patch.object(recommender, "_fetch_candidates_for_user_async", fake_fetch),
     ):
         recommender.run_one_user(
             spec,
@@ -768,7 +783,10 @@ def test_run_one_user_passes_keyword_vectors_to_adapter(tmp_path: Path) -> None:
     with (
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(recommender, "extract_or_load", fake_extract),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
         patch.object(candidate_adapter, "to_discovered", spy_to_discovered),
     ):
         recommender.run_one_user(
@@ -889,7 +907,10 @@ def test_run_one_user_niche_persona_retries_with_zero_threshold(
             "extract_or_load",
             AsyncMock(return_value=["古典文学", "诗词", "古文"]),
         ),
-        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[_mock_article()]),
+        ),
         patch.object(candidate_adapter, "to_discovered", spy),
     ):
         result = recommender.run_one_user(
@@ -906,3 +927,164 @@ def test_run_one_user_niche_persona_retries_with_zero_threshold(
     # First strict attempt (0.5), then niche retry (0.0).
     assert calls == [pytest.approx(0.5), pytest.approx(0.0)]
 
+
+
+# --- search_query propagation + overall summary -----------------------------
+
+
+def test_run_one_user_propagates_search_query_to_recommendations(tmp_path: Path) -> None:
+    """When fetch articles carry ``search_query``, every recommendation whose
+    ``content_id`` matches an article must expose that query string."""
+    spec = _make_spec()
+
+    article_a = _mock_article(article_id="art-A", title="title A")
+    article_a["search_query"] = "夏日美食"
+    article_b = _mock_article(article_id="art-B", title="title B")
+    article_b["search_query"] = "面试技巧"
+
+    rec_a = _mock_recommendation(title="title A")
+    rec_a.content.content_id = "art-A"
+    rec_b = _mock_recommendation(title="title B")
+    rec_b.content.content_id = "art-B"
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[rec_a, rec_b]
+    )
+
+    fake_runtime = {"llm": MagicMock()}
+    # LLM returns empty so the overall summary uses its deterministic fallback;
+    # this test only cares about search_query propagation.
+    fake_runtime["llm"].complete_with_core_memory = AsyncMock(
+        return_value=MagicMock(content="")
+    )
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[article_a, article_b]),
+        ),
+    ):
+        result = recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=False,
+            shared_runtime=fake_runtime,
+        )
+
+    sq_by_rank = {r["rank"]: r["search_query"] for r in result["recommendations"]}
+    assert sq_by_rank[1] == "夏日美食"
+    assert sq_by_rank[2] == "面试技巧"
+
+
+def test_run_one_user_empty_search_query_for_hot_list_items(tmp_path: Path) -> None:
+    """Hot-list items have no search_query; recommendations sourced from
+    them get an empty string (preserves the field's contract)."""
+    spec = _make_spec()
+
+    article_hot = _mock_article(article_id="art-H", title="hot title")
+    # No search_query field — emulates V3 hot list (no specific query).
+    rec = _mock_recommendation(title="hot title")
+    rec.content.content_id = "art-H"
+
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(return_value=[rec])
+
+    fake_runtime = {"llm": MagicMock()}
+    fake_runtime["llm"].complete_with_core_memory = AsyncMock(
+        return_value=MagicMock(content="")
+    )
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[article_hot]),
+        ),
+    ):
+        result = recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=False,
+            shared_runtime=fake_runtime,
+        )
+
+    assert result["recommendations"][0]["search_query"] == ""
+
+
+def test_run_one_user_includes_overall_summary_in_output(tmp_path: Path) -> None:
+    """All matched query groups are summarized in one LLM call and one field."""
+    spec = _make_spec()
+
+    article_a = _mock_article(article_id="art-A", title="title A")
+    article_a["search_query"] = "夏日美食"
+    article_b = _mock_article(article_id="art-B", title="title B")
+    article_b["search_query"] = "面试技巧"
+
+    rec_a = _mock_recommendation(title="title A")
+    rec_a.content.content_id = "art-A"
+    rec_b = _mock_recommendation(title="title B")
+    rec_b.content.content_id = "art-B"
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[rec_a, rec_b]
+    )
+
+    fake_runtime = {"llm": MagicMock()}
+    fake_runtime["llm"].complete_with_core_memory = AsyncMock(
+        return_value=MagicMock(content="美食探店与面试准备构成两个内容方向")
+    )
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[article_a, article_b]),
+        ),
+    ):
+        result = recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=False,
+            shared_runtime=fake_runtime,
+        )
+
+    assert result["summary"] == "美食探店与面试准备构成两个内容方向"
+    assert fake_runtime["llm"].complete_with_core_memory.call_count == 1
+    prompt = fake_runtime["llm"].complete_with_core_memory.call_args.kwargs["user_input"]
+    assert "夏日美食" in prompt
+    assert "面试技巧" in prompt
+
+
+def test_run_one_user_has_empty_summary_when_no_search_query(tmp_path: Path) -> None:
+    """If no article has a search_query, no summary call is needed."""
+    spec = _make_spec()
+
+    article_hot = _mock_article(article_id="art-H", title="hot")
+    rec = _mock_recommendation(title="hot")
+    rec.content.content_id = "art-H"
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(return_value=[rec])
+
+    fake_runtime = {"llm": MagicMock()}
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(
+            recommender, "_fetch_candidates_for_user_async",
+            AsyncMock(return_value=[article_hot]),
+        ),
+    ):
+        result = recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            limit=5,
+            use_keyword_extraction=False,
+            shared_runtime=fake_runtime,
+        )
+
+    assert result["summary"] == ""
+    assert fake_runtime["llm"].complete_with_core_memory.call_count == 0

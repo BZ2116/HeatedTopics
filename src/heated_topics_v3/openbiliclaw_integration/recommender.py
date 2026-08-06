@@ -8,7 +8,7 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable
 
 from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
@@ -17,7 +17,6 @@ from heated_topics_v3.openbiliclaw_integration import (
     keyword_extractor,
     last30days_adapter,
     last30days_source,
-    output,
     runtime,
     user_profile,
 )
@@ -40,7 +39,6 @@ extract_or_load = keyword_extractor.extract_or_load
 _DEFAULT_PROVIDERS: tuple[str, ...] = (
     "juejin",
     "toutiao",
-    "baidu_hot",
     "zhihu_hot",
     "zhihu_daily",
     "sina_news",
@@ -53,6 +51,14 @@ _DEFAULT_PROVIDERS: tuple[str, ...] = (
 # slow and blocks the hot list. We only need bodies for the candidates the
 # engine actually considers.
 _DETAIL_FETCH_CAP = 20
+# Toutiao's detail fetcher runs Playwright to render article pages (each call
+# ~10s even with the renderer's internal 3-way concurrency). The cap of 3
+# keeps toutiao's wall time under ~35s; the remaining items still flow through
+# with title-only summaries and the relevance filter / engine picks them up
+# on the title signal alone.
+_DETAIL_FETCH_CAP_BY_PLATFORM: dict[str, int] = {
+    "toutiao": 3,
+}
 
 
 # Search-enabled providers (no API key required, returns content actually
@@ -234,6 +240,176 @@ def _call_provider_search(
     return provider.search(keyword, 1)
 
 
+# --- v2.1.6: per-provider sync helpers for the parallel fetch path --------
+# These are the building blocks for the async parallel pipeline
+# (``_fetch_v3_candidates_async`` / ``_fetch_last30days_candidates_async``).
+# Each helper is a pure sync function that owns its ``httpx.Client`` lifetime
+# (closed in ``finally``) and is safe to invoke via ``asyncio.to_thread``.
+# Keeping them sync (vs. rewriting providers as ``async def``) avoids touching
+# the per-provider contract — providers are sync by design across the board.
+
+
+def _fetch_provider_hot_list_sync(
+    platform: str,
+    collected_at: str,
+    *,
+    detail_cap: int | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch hot list + per-item detail for ONE platform (sync).
+
+    Safe to call from ``asyncio.to_thread``. Returns a list of article dicts
+    shaped like ``_hotitem_to_article`` output. Empty list on provider
+    build failure, collect_hot_list crash, or no items.
+    """
+    built = _build_provider(platform)
+    if built is None:
+        logger.warning(
+            "_fetch_provider_hot_list_sync: unknown platform '%s'", platform,
+        )
+        return []
+    provider, client = built
+    if detail_cap is None:
+        detail_cap = _DETAIL_FETCH_CAP_BY_PLATFORM.get(platform, _DETAIL_FETCH_CAP)
+    try:
+        try:
+            capture = provider.collect_hot_list(collected_at)
+            items: tuple[HotItem, ...] = capture.items
+        except Exception as exc:
+            logger.warning(
+                "provider %s.collect_hot_list failed: %s", platform, exc,
+            )
+            return []
+        out: list[dict[str, Any]] = []
+        cap_items = items[:detail_cap]
+        for item in cap_items:
+            try:
+                detail = provider.fetch_detail(item, collected_at)
+            except Exception as exc:
+                logger.debug(
+                    "provider %s.fetch_detail(%s) failed: %s",
+                    platform, item.item_id, exc,
+                )
+                detail = None
+            article = _hotitem_to_article(item, detail, platform)
+            if article is not None:
+                out.append(article)
+        for item in items[detail_cap:]:
+            article = _hotitem_to_article(item, None, platform)
+            if article is not None:
+                out.append(article)
+        return out
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _fetch_provider_search_sync(
+    platform: str,
+    track: str,
+    collected_at: str,
+    *,
+    results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    detail_cap_per_interest: int = _SEARCH_DETAIL_FETCH_CAP_PER_INTEREST,
+) -> list[dict[str, Any]]:
+    """Run ONE search query on ONE platform (sync).
+
+    Each (provider, track) pair becomes one ``asyncio.to_thread`` task —
+    that is the unit of parallelism for the search pass (3 providers × 3
+    tracks = up to 9 tasks instead of 9 sequential calls).
+    """
+    built = _build_provider(platform)
+    if built is None:
+        return []
+    provider, client = built
+    try:
+        try:
+            capture = _call_provider_search(
+                provider, platform, track, results_per_interest, collected_at,
+            )
+            items = capture.items[:results_per_interest]
+        except Exception as exc:
+            logger.warning(
+                "search %s(%s) failed: %s", platform, track, exc,
+            )
+            return []
+        if not items:
+            return []
+        out: list[dict[str, Any]] = []
+        cap_items = items[:detail_cap_per_interest]
+        for item in cap_items:
+            try:
+                detail = provider.fetch_detail(item, collected_at)
+            except Exception as exc:
+                logger.debug(
+                    "search %s.fetch_detail(%s) failed: %s",
+                    platform, item.item_id, exc,
+                )
+                detail = None
+            article = _hotitem_to_article(item, detail, platform)
+            if article is not None:
+                article["search_query"] = track
+                out.append(article)
+        for item in items[detail_cap_per_interest:]:
+            article = _hotitem_to_article(item, None, platform)
+            if article is not None:
+                article["search_query"] = track
+                out.append(article)
+        return out
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                pass
+
+
+def _fetch_one_last30days_query_sync(
+    spec: user_profile.UserSpec,
+    cfg: dict[str, Any],
+    query: str,
+    base_save_dir: Path,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run ONE last30days CLI invocation for one query (sync).
+
+    Returns ``(query, articles)`` so the orchestrator can log per-query
+    yields. Failures yield ``(query, [])`` so ``asyncio.gather`` doesn't
+    poison sibling tasks.
+    """
+    cli_path = Path(cfg["cli_path"])
+    save_dir = base_save_dir / _safe_query_dirname(query)
+    try:
+        report_path = last30days_source.run(
+            cli_path=cli_path,
+            query=query,
+            days=int(cfg.get("days", 30)),
+            save_dir=save_dir,
+            fetch_bodies=bool(cfg.get("fetch_bodies", True)),
+            platforms=tuple(cfg.get("platforms") or ()),
+            timeout=float(cfg.get("timeout", 120.0)),
+        )
+        report = last30days_source.parse_report(report_path)
+    except Exception as exc:
+        logger.warning(
+            "user %s: last30days fetch for query %r failed: %s",
+            spec.user_id, query, exc,
+        )
+        return (query, [])
+    items, details = last30days_adapter.to_hot_items(report)
+    articles: list[dict[str, Any]] = []
+    for item, detail in zip(items, details):
+        article = _hotitem_to_article(item, detail, item.platform)
+        if article is None:
+            continue
+        article["search_query"] = query
+        articles.append(article)
+    return (query, articles)
+
+
 def _is_hot_relevant(article: dict[str, Any], tracks: list[str]) -> bool:
     """Loose relevance: any track name appears in title/body/summary.
 
@@ -348,7 +524,8 @@ def fetch_candidates(
             except Exception as exc:
                 logger.warning("provider %s.collect_hot_list failed: %s", platform, exc)
                 continue
-            cap_items = items[:_DETAIL_FETCH_CAP]
+            cap_items = items[:_DETAIL_FETCH_CAP_BY_PLATFORM.get(
+                platform, _DETAIL_FETCH_CAP)]
             for item in cap_items:
                 try:
                     detail = provider.fetch_detail(item, collected_at)
@@ -672,6 +849,257 @@ def _fetch_candidates_for_user(
     return articles
 
 
+# --- v2.1.6: async parallel fetch pipeline ---------------------------------
+# Replaces the synchronous ``fetch_candidates`` / ``_fetch_last30days_candidates``
+# / ``_fetch_candidates_for_user`` calls inside ``_run_one_user_async``.
+# Each provider / search pair / last30days query runs as its own
+# ``asyncio.to_thread`` task and is gathered with ``asyncio.gather`` —
+# wall-clock time drops from sum(providers) to max(providers), and from
+# sum(queries) to max(queries). The legacy low_water_mark early-exit on
+# last30days is removed because parallelism and early-exit are mutually
+# exclusive (skipping subsequent queries defeats the purpose of running
+# them concurrently). URL dedup is preserved across sources.
+
+
+async def _fetch_v3_candidates_async(
+    spec: user_profile.UserSpec,
+    *,
+    providers: list[str] | None = None,
+    use_search: bool = True,
+    prefer_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    target_limit: int = 10,
+    keywords: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Parallel async version of ``fetch_candidates``.
+
+    Same return shape as the sync version. Pass 1 (hot list) and Pass 2
+    (search) both gather ``asyncio.to_thread`` tasks — providers run in
+    their own threads so their blocking ``httpx`` I/O doesn't stall the
+    event loop or each other. URL dedup and rebalance rules are identical.
+    """
+    enabled = list(providers) if providers else list(_DEFAULT_PROVIDERS)
+    collected_at = datetime.now(SHANGHAI).isoformat()
+    seen_urls: set[str] = set()
+    hot_articles: list[dict[str, Any]] = []
+    search_articles: list[dict[str, Any]] = []
+
+    def _add_to(bucket: list[dict[str, Any]], article: dict[str, Any] | None) -> None:
+        if article is None:
+            return
+        url = article.get("url") or ""
+        if url and url in seen_urls:
+            return
+        if url:
+            seen_urls.add(url)
+        bucket.append(article)
+
+    # Pass 1: hot list — one to_thread task per provider.
+    results = await asyncio.gather(
+        *[
+            asyncio.to_thread(
+                _fetch_provider_hot_list_sync, p, collected_at,
+            )
+            for p in enabled
+        ],
+        return_exceptions=True,
+    )
+    for platform, result in zip(enabled, results):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "user %s: provider %s raised in parallel hot-list: %s",
+                spec.user_id, platform, result,
+            )
+            continue
+        for article in result:
+            _add_to(hot_articles, article)
+
+    tracks: list[str] = []
+    if use_search:
+        if keywords:
+            tracks = [k for k in keywords if k and k.strip()]
+        else:
+            tracks = _spec_tracks(spec)
+        if tracks:
+            search_enabled = [
+                p
+                for p in (
+                    list(search_providers)
+                    if search_providers
+                    else list(_SEARCH_PROVIDERS)
+                )
+                if p in enabled
+            ]
+            if search_enabled:
+                top_tracks = tracks[:search_top_k]
+                keys = [
+                    (p, t)
+                    for p in search_enabled
+                    for t in top_tracks
+                ]
+                tasks = [
+                    asyncio.to_thread(
+                        _fetch_provider_search_sync,
+                        p, t, collected_at,
+                        results_per_interest=search_results_per_interest,
+                    )
+                    for p, t in keys
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for (platform, track), result in zip(keys, results):
+                    if isinstance(result, BaseException):
+                        logger.warning(
+                            "user %s: search %s(%s) raised in parallel: %s",
+                            spec.user_id, platform, track, result,
+                        )
+                        continue
+                    for article in result:
+                        _add_to(search_articles, article)
+
+    if use_search:
+        return _rebalance_pool(
+            hot_articles,
+            search_articles,
+            tracks,
+            target_limit=target_limit,
+            prefer_search=prefer_search,
+        )
+    return hot_articles
+
+
+async def _fetch_last30days_candidates_async(
+    spec: user_profile.UserSpec,
+    cfg: dict[str, Any],
+    *,
+    keywords: list[str] | None = None,
+    max_queries: int = 3,
+) -> list[dict[str, Any]]:
+    """Parallel async version: every resolved query runs concurrently.
+
+    Drops the legacy ``low_water_mark`` early-exit (mutually exclusive with
+    parallelism). URL dedup across queries is preserved (first-seen wins).
+    Per-query failures are logged and skipped — sibling queries are unaffected.
+    """
+    queries = _resolve_last30days_queries(
+        cfg, keywords=keywords, spec=spec, max_queries=max_queries,
+    )
+    if not queries:
+        logger.warning(
+            "user %s: no query for last30days, skipping", spec.user_id,
+        )
+        return []
+    base_save_dir = Path(cfg.get("save_dir", "data/last30days")) / spec.user_id
+    pairs = await asyncio.gather(
+        *[
+            asyncio.to_thread(
+                _fetch_one_last30days_query_sync,
+                spec, cfg, q, base_save_dir,
+            )
+            for q in queries
+        ],
+        return_exceptions=True,
+    )
+    seen_urls: set[str] = set()
+    articles: list[dict[str, Any]] = []
+    for query, result in zip(queries, pairs):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "user %s: last30days query %r failed: %s",
+                spec.user_id, query, result,
+            )
+            continue
+        q, q_articles = result
+        n_before = len(articles)
+        for article in q_articles:
+            url = article.get("url") or ""
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            articles.append(article)
+        logger.info(
+            "user %s: last30days query=%r kept %d/%d items (cumulative=%d)",
+            spec.user_id, q, len(articles) - n_before, len(q_articles),
+            len(articles),
+        )
+    return articles
+
+
+async def _fetch_candidates_for_user_async(
+    spec: user_profile.UserSpec,
+    *,
+    source: str,
+    last30days_config: dict[str, Any] | None,
+    target_limit: int = 10,
+    v3_providers: list[str] | None = None,
+    use_search: bool = True,
+    prefer_search: bool = True,
+    search_providers: list[str] | None = None,
+    search_top_k: int = _SEARCH_TOP_K_INTERESTS,
+    search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
+    keywords: list[str] | None = None,
+    last30days_max_queries: int = 3,
+) -> list[dict[str, Any]]:
+    """Parallel async dispatch: V3 and last30days both run concurrently.
+
+    Equivalent to ``_fetch_candidates_for_user`` (sync) but each source is
+    a single ``await``. Used by ``_run_one_user_async`` instead of the sync
+    function so the event loop can multiplex LLM / embedding / fetch I/O.
+    """
+    if source not in ("v3-hotlist", "last30days", "both"):
+        raise ValueError(f"unknown source={source!r}")
+
+    tasks: list[Awaitable[list[dict[str, Any]]]] = []
+    keys: list[str] = []
+    if source in ("v3-hotlist", "both"):
+        tasks.append(
+            _fetch_v3_candidates_async(
+                spec,
+                providers=v3_providers,
+                use_search=use_search,
+                prefer_search=prefer_search,
+                search_providers=search_providers,
+                search_top_k=search_top_k,
+                search_results_per_interest=search_results_per_interest,
+                target_limit=target_limit,
+                keywords=keywords,
+            )
+        )
+        keys.append("v3")
+    if source in ("last30days", "both"):
+        if last30days_config is None:
+            if source == "last30days":
+                logger.warning(
+                    "user %s: source=last30days but no config; returning []",
+                    spec.user_id,
+                )
+                return []
+        else:
+            tasks.append(
+                _fetch_last30days_candidates_async(
+                    spec, last30days_config,
+                    keywords=keywords, max_queries=last30days_max_queries,
+                )
+            )
+            keys.append("l30")
+
+    if not tasks:
+        return []
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    articles: list[dict[str, Any]] = []
+    for key, result in zip(keys, results):
+        if isinstance(result, BaseException):
+            logger.warning(
+                "user %s: %s fetch raised: %s", spec.user_id, key, result,
+            )
+            continue
+        articles.extend(result)
+    return articles
+
+
 def _build_shared_runtime(
     shared_data_dir: Path | None = None,
     config_path: Path | None = None,
@@ -831,7 +1259,10 @@ async def _run_one_user_async(
                 )
 
     # 2) Fetch candidates using keywords (or track fallback).
-    articles = _fetch_candidates_for_user(
+    # v2.1.6: async parallel path — providers / last30days queries run
+    # concurrently inside the orchestrator (vs. the legacy sequential
+    # ``_fetch_candidates_for_user``). See ``_fetch_candidates_for_user_async``.
+    articles = await _fetch_candidates_for_user_async(
         spec,
         source=source,
         last30days_config=last30days_config,
@@ -846,7 +1277,7 @@ async def _run_one_user_async(
         keywords=keywords,
     )
     if not articles:
-        return output.format_user_failure(
+        return _user_failure(
             user_id=spec.user_id,
             error_code="no_candidates",
             error_detail=f"Fetched 0 articles from providers={providers or 'all'}",
@@ -959,31 +1390,71 @@ async def _run_one_user_async(
                 expression_mode="precomputed",
             )
     except TimeoutError:
-        return output.format_user_failure(
+        return _user_failure(
             user_id=spec.user_id,
             error_code="timeout",
             error_detail=f"exceeded {per_user_timeout}s",
         )
     except Exception as exc:
         logger.exception("user %s: engine failed", spec.user_id)
-        return output.format_user_failure(
+        return _user_failure(
             user_id=spec.user_id,
             error_code="engine_error",
             error_detail=f"{type(exc).__name__}: {exc}",
         )
     if not recommendations:
-        return output.format_user_failure(
+        return _user_failure(
             user_id=spec.user_id,
             error_code="no_recommendations",
             error_detail="Engine returned 0 recommendations",
         )
-    return output.format_user_file(
+
+    # Build the query groups for one user-level content brief.
+    from heated_topics_v3.openbiliclaw_integration import per_query_summary
+
+    search_query_map: dict[str, str] = {}
+    for art in articles:
+        if isinstance(art, dict) and art.get("article_id"):
+            sq = art.get("search_query") or ""
+            if sq:
+                search_query_map[str(art["article_id"])] = sq
+
+    summary = ""
+    if search_query_map and shared_runtime is not None:
+        llm_service = shared_runtime.get("llm")
+        if llm_service is not None:
+            user_context = {
+                "track_1": spec.track_1 or "",
+                "track_2": spec.track_2 or "",
+                "persona": spec.persona or "",
+            }
+            groups: dict[str, list[Any]] = {}
+            for rec in recommendations:
+                q = search_query_map.get(rec.content.content_id, "")
+                if q:
+                    groups.setdefault(q, []).append(rec)
+            if groups:
+                try:
+                    summary = await per_query_summary.summarize_overall(
+                        query_groups=list(groups.items()),
+                        user_context=user_context,
+                        llm_service=llm_service,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "user %s: overall summary failed (%s); using empty summary",
+                        spec.user_id, exc,
+                    )
+
+    return _user_payload(
         user_id=spec.user_id,
         track_1=spec.track_1,
         track_2=spec.track_2,
         persona=spec.persona,
         recommendations=recommendations,
         body_max_chars=body_max_chars,
+        search_query_map=search_query_map,
+        summary=summary,
     )
 
 
@@ -1112,7 +1583,7 @@ async def run_all_users(
                 )
             except Exception as exc:
                 logger.exception("user %s unexpected error", spec.user_id)
-                return output.format_user_failure(
+                return _user_failure(
                     user_id=spec.user_id,
                     error_code="internal",
                     error_detail=f"{type(exc).__name__}: {exc}",
@@ -1120,3 +1591,56 @@ async def run_all_users(
 
     results = await asyncio.gather(*[_one(s) for s in specs])
     return {r["user_id"]: r for r in results}
+
+
+def _user_failure(
+    *, user_id: str, error_code: str, error_detail: str
+) -> dict[str, Any]:
+    """In-memory failure payload for ``run_one_user`` / ``run_all_users``."""
+    return {"user_id": user_id, "error": error_code, "error_detail": error_detail}
+
+
+def _user_payload(
+    *,
+    user_id: str,
+    track_1: str,
+    track_2: str,
+    persona: str,
+    recommendations: list,
+    body_max_chars: int,
+    search_query_map: dict[str, str],
+    summary: str,
+) -> dict[str, Any]:
+    """Build the in-memory success payload for ``run_one_user``.
+
+    Kept as a dict so the CLI and desktop runner can persist the report layout
+    from the same in-memory source of truth.
+    """
+    return {
+        "user_id": user_id,
+        "input": {"track_1": track_1, "track_2": track_2, "persona": persona},
+        "generated_at": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
+        "recommendations": [
+            {
+                "rank": i + 1,
+                "title": r.content.title,
+                "url": r.content.content_url,
+                "source": r.content.source_platform,
+                "search_query": search_query_map.get(r.content.content_id, ""),
+                "heat": {
+                    "view": int(r.content.view_count),
+                    "like": int(r.content.like_count),
+                    "comment": int(r.content.comment_count),
+                    "favorite": int(r.content.favorite_count),
+                    "share": int(r.content.share_count),
+                    "rank": int(r.content.source_rank),
+                },
+                "body_text": (r.content.body_text or "")[:body_max_chars],
+                "body_text_length": len(r.content.body_text or ""),
+                "body_truncated": len(r.content.body_text or "") > body_max_chars,
+                "published_at": r.content.published_at or "",
+            }
+            for i, r in enumerate(recommendations)
+        ],
+        "summary": summary,
+    }
