@@ -57,24 +57,23 @@ _DETAIL_FETCH_CAP = 20
 
 # Search-enabled providers (no API key required, returns content actually
 # matching a keyword — not just whatever is on the hot board today). Order
-# matters only for tie-breaks. ``baidu_hot`` and ``zhihu_hot`` are excluded
-# because they need credentials / return captcha-blocked pages.
+# matters only for tie-breaks. ``baidu_hot``, ``zhihu_hot`` need credentials;
+# ``sina_news`` returns malformed search payloads and was removed (v2.1.4).
 _SEARCH_PROVIDERS: tuple[str, ...] = (
     "toutiao",
-    "sina_news",
     "thepaper",
     "zhihu_daily",
 )
 
 # Per user: take the top-K interests (by weight) and search each on each
-# search-enabled provider. 3 × 4 = 12 (provider, interest) pairs; with
-# 5 results each = up to 60 search candidates per user. After URL-dedup
-# against ~250 hot-list candidates this typically lands around 80-100
+# search-enabled provider. 3 × 3 = 9 (provider, interest) pairs; with
+# 5 results each = up to 45 search candidates per user. After URL-dedup
+# against ~250 hot-list candidates this typically lands around 60-90
 # unique items, well within the engine's filter budget.
 _SEARCH_TOP_K_INTERESTS = 3
 _SEARCH_RESULTS_PER_INTEREST = 5
 # Full-body fetches are slow (HTTP + GNE per article). Cap per
-# (provider, interest) pair so total stays bounded: 3 × 4 × 3 = 36 fetches
+# (provider, interest) pair so total stays bounded: 3 × 3 × 3 = 27 fetches
 # per user worst case.
 _SEARCH_DETAIL_FETCH_CAP_PER_INTEREST = 3
 
