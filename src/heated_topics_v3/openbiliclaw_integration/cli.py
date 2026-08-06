@@ -88,6 +88,33 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Per-user last30days subprocess timeout (default 120)",
     )
     p.add_argument(
+        "--last30days-max-queries", type=int, default=3,
+        help=(
+            "Max number of last30days queries per user (default 3). "
+            "Each LLM-extracted keyword becomes one CLI query; this caps "
+            "the total. Set to 1 to restore single-query behaviour. "
+            "Ignored when --last30days-query is supplied multiple times."
+        ),
+    )
+    p.add_argument(
+        "--last30days-low-water-mark", type=int, default=3,
+        help=(
+            "Adaptive escalation threshold (default 3). After each "
+            "query, if article count exceeds this the pipeline stops "
+            "early; otherwise the next query is tried. Set high to "
+            "always run --last30days-max-queries queries."
+        ),
+    )
+    p.add_argument(
+        "--last30days-query", dest="last30days_queries", action="append",
+        default=None,
+        help=(
+            "Explicit last30days query (repeatable). Overrides the "
+            "LLM-extracted keyword list when supplied. Example: "
+            "--last30days-query 古典文学 --last30days-query 诗词"
+        ),
+    )
+    p.add_argument(
         "--no-keyword-extraction", dest="keyword_extraction",
         action="store_false", default=True,
         help=(
@@ -180,7 +207,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "timeout": args.last30days_timeout,
             "save_dir": str(args.output_dir / "last30days"),
             "platforms": (),
+            "low_water_mark": args.last30days_low_water_mark,
         }
+        if args.last30days_queries:
+            last30days_config["queries"] = list(args.last30days_queries)
 
     try:
         results = run_all_users_sync(
@@ -192,6 +222,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             per_user_timeout=args.per_user_timeout,
             source=args.source,
             last30days_config=last30days_config,
+            last30days_max_queries=args.last30days_max_queries,
             use_keyword_extraction=args.keyword_extraction,
             keyword_cache_dir=args.output_dir / "_keyword_cache",
             min_view_count=args.min_view_count,

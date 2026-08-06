@@ -471,51 +471,137 @@ def _first_track(spec: user_profile.UserSpec) -> str:
     return (spec.track_1 or spec.track_2 or "").strip()
 
 
+def _safe_query_dirname(query: str) -> str:
+    """Filesystem-safe slug for a query string (sub-dir per query)."""
+    safe = re.sub(r"[\\/:*?\"<>|\s]+", "_", query).strip("_")
+    return safe or "q"
+
+
+def _resolve_last30days_queries(
+    cfg: dict[str, Any],
+    *,
+    keywords: list[str] | None,
+    spec: user_profile.UserSpec,
+    max_queries: int,
+) -> list[str]:
+    """Resolve the list of last30days queries for one user.
+
+    Resolution order (highest priority first):
+    1. ``cfg['queries']`` — explicit list of queries in caller config.
+    2. ``cfg['query']`` — legacy single query in caller config.
+    3. ``keywords[:max_queries]`` — LLM-extracted keywords (3 by default).
+    4. ``[spec.track_1, spec.track_2]`` — fallback to raw tracks.
+
+    Returns an empty list if no resolvable queries remain.
+    """
+    if cfg.get("queries"):
+        return [q for q in cfg["queries"] if q and q.strip()][:max_queries]
+    if cfg.get("query"):
+        return [cfg["query"]]
+    if keywords:
+        return [k for k in keywords if k and k.strip()][:max_queries]
+    tracks = _spec_tracks(spec)
+    return tracks[:max_queries] if tracks else []
+
+
 def _fetch_last30days_candidates(
     spec: user_profile.UserSpec,
     cfg: dict[str, Any],
     *,
-    primary_keyword: str | None = None,
+    keywords: list[str] | None = None,
+    max_queries: int = 3,
 ) -> list[dict[str, Any]]:
     """Invoke last30days CLI for one user; return V3 article dicts.
 
-    Pipeline: subprocess → parse JSON → adapter (Item → HotItem/ItemDetail)
-    → ``_hotitem_to_article`` (existing V3 internal mapper). The returned
-    list is in the same shape as ``fetch_candidates``, so downstream code
-    needs no awareness of which source produced each article.
+    Pipeline: per-query subprocess → parse JSON → adapter (Item →
+    HotItem/ItemDetail) → ``_hotitem_to_article``. The returned list is
+    in the same shape as ``fetch_candidates``, so downstream code needs
+    no awareness of which source produced each article.
 
-    Query resolution: ``cfg['query']`` > ``primary_keyword`` (LLM-extracted
-    first keyword) > ``_first_track(spec)``. This lets the LLM keyword
-    extractor override the raw track when enabled.
+    Multi-query mode (v2.1.5): runs the CLI for the first resolved
+    query. If the cumulative unique-article count is at or below
+    ``cfg['low_water_mark']`` (default 3), the next resolved query is
+    tried as well; this escalates up to ``max_queries`` total. Stop
+    early as soon as the threshold is exceeded — niche personas that
+    produce a thin result from one angle still get coverage, but
+    mainstream personas don't pay for redundant subprocesses.
+
+    Each query gets its own sub-dir under ``<save_dir>/<user_id>/`` so
+    per-query ``report.json`` files don't clobber each other. URL dedup
+    spans queries so a popular URL appearing under multiple angles is
+    only kept once (first-seen wins).
+
+    Query resolution: see ``_resolve_last30days_queries``.
     """
     cli_path = Path(cfg["cli_path"])
-    query = cfg.get("query") or primary_keyword or _first_track(spec)
-    if not query:
+    queries = _resolve_last30days_queries(
+        cfg, keywords=keywords, spec=spec, max_queries=max_queries,
+    )
+    if not queries:
         logger.warning("user %s: no query for last30days, skipping", spec.user_id)
         return []
 
-    save_dir = Path(cfg.get("save_dir", "data/last30days")) / spec.user_id
-    try:
-        report_path = last30days_source.run(
-            cli_path=cli_path,
-            query=query,
-            days=int(cfg.get("days", 30)),
-            save_dir=save_dir,
-            fetch_bodies=bool(cfg.get("fetch_bodies", True)),
-            platforms=tuple(cfg.get("platforms") or ()),
-            timeout=float(cfg.get("timeout", 120.0)),
-        )
-        report = last30days_source.parse_report(report_path)
-    except Exception as exc:
-        logger.warning("user %s: last30days fetch failed: %s", spec.user_id, exc)
-        return []
+    low_water_mark = max(1, int(cfg.get("low_water_mark", 3)))
 
-    items, details = last30days_adapter.to_hot_items(report)
+    base_save_dir = Path(cfg.get("save_dir", "data/last30days")) / spec.user_id
+    seen_urls: set[str] = set()
     articles: list[dict[str, Any]] = []
-    for item, detail in zip(items, details):
-        article = _hotitem_to_article(item, detail, item.platform)
-        if article is not None:
+    queries_used: list[str] = []
+
+    for q in queries:
+        save_dir = base_save_dir / _safe_query_dirname(q)
+        try:
+            report_path = last30days_source.run(
+                cli_path=cli_path,
+                query=q,
+                days=int(cfg.get("days", 30)),
+                save_dir=save_dir,
+                fetch_bodies=bool(cfg.get("fetch_bodies", True)),
+                platforms=tuple(cfg.get("platforms") or ()),
+                timeout=float(cfg.get("timeout", 120.0)),
+            )
+            report = last30days_source.parse_report(report_path)
+        except Exception as exc:
+            logger.warning(
+                "user %s: last30days fetch for query %r failed: %s",
+                spec.user_id, q, exc,
+            )
+            # Treat a failed query as if it returned 0 — keeps the
+            # escalation logic well-defined (we may still try the next).
+            queries_used.append(q)
+            continue
+
+        items, details = last30days_adapter.to_hot_items(report)
+        n_before = len(articles)
+        for item, detail in zip(items, details):
+            article = _hotitem_to_article(item, detail, item.platform)
+            if article is None:
+                continue
+            url = article.get("url") or ""
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            article["search_query"] = q
             articles.append(article)
+        queries_used.append(q)
+        logger.info(
+            "user %s: last30days query=%r kept %d/%d items (cumulative=%d)",
+            spec.user_id, q, len(articles) - n_before, len(items), len(articles),
+        )
+
+        # Adaptive escalation: stop as soon as we exceed the low-water
+        # mark. Otherwise loop continues to the next query.
+        if len(articles) > low_water_mark:
+            break
+
+    if len(queries_used) < len(queries):
+        logger.info(
+            "user %s: last30days low-water reached after %d query(ies) "
+            "(%d articles > threshold=%d); skipping remaining %d query(ies)",
+            spec.user_id, len(queries_used), len(articles), low_water_mark,
+            len(queries) - len(queries_used),
+        )
     return articles
 
 
@@ -532,6 +618,7 @@ def _fetch_candidates_for_user(
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     keywords: list[str] | None = None,
+    last30days_max_queries: int = 3,
 ) -> list[dict[str, Any]]:
     """Dispatch candidate fetching based on ``source``.
 
@@ -540,7 +627,9 @@ def _fetch_candidates_for_user(
     - ``both``: V3 first, last30days second with URL dedup (V3 wins ties).
 
     ``keywords`` (LLM-extracted) override track_1/track_2 for both V3 search
-    queries and the last30days primary query (keywords[0]).
+    queries and the last30days query list (top ``last30days_max_queries``
+    keywords feed the CLI — each one becomes a separate query that gets its
+    own subprocess + report).
     """
     articles: list[dict[str, Any]] = []
     if source in ("v3-hotlist", "both"):
@@ -566,9 +655,9 @@ def _fetch_candidates_for_user(
                 )
                 return []
         else:
-            primary_keyword = keywords[0] if keywords else None
             l30 = _fetch_last30days_candidates(
-                spec, last30days_config, primary_keyword=primary_keyword,
+                spec, last30days_config,
+                keywords=keywords, max_queries=last30days_max_queries,
             )
             if source == "both":
                 seen = {a.get("url") for a in articles if a.get("url")}
@@ -684,6 +773,7 @@ async def _run_one_user_async(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
     min_view_count: int = 0,
@@ -700,6 +790,13 @@ async def _run_one_user_async(
     - ``use_llm_refilter``: after the embedding pre-filter, ask the LLM
       to drop candidates that look keyword-relevant but are actually
       off-persona.
+
+    v2.1.5 knob:
+    - ``last30days_max_queries``: cap on how many of the LLM-extracted
+      keywords become separate last30days CLI queries (default 3, set
+      to 1 to restore the legacy single-query behaviour). Resolution
+      is centralised in ``_resolve_last30days_queries``; caller-supplied
+      ``last30days_config['queries']`` always wins.
     """
     # 1) Extract (or load cached) hot keywords from the user's profile.
     keywords: list[str] | None = None
@@ -738,6 +835,7 @@ async def _run_one_user_async(
         spec,
         source=source,
         last30days_config=last30days_config,
+        last30days_max_queries=last30days_max_queries,
         target_limit=limit,
         v3_providers=providers,
         use_search=use_search,
@@ -905,6 +1003,7 @@ def run_one_user(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
     min_view_count: int = 0,
@@ -933,6 +1032,7 @@ def run_one_user(
             search_results_per_interest=search_results_per_interest,
             source=source,
             last30days_config=last30days_config,
+            last30days_max_queries=last30days_max_queries,
             use_keyword_extraction=use_keyword_extraction,
             keyword_cache_dir=keyword_cache_dir,
             min_view_count=min_view_count,
@@ -961,6 +1061,7 @@ async def run_all_users(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     source: str = "v3-hotlist",
     last30days_config: dict[str, Any] | None = None,
+    last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
     min_view_count: int = 0,
@@ -1001,6 +1102,7 @@ async def run_all_users(
                     search_results_per_interest=search_results_per_interest,
                     source=source,
                     last30days_config=last30days_config,
+                    last30days_max_queries=last30days_max_queries,
                     use_keyword_extraction=use_keyword_extraction,
                     keyword_cache_dir=keyword_cache_dir,
                     min_view_count=min_view_count,

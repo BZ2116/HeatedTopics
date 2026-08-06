@@ -152,3 +152,406 @@ def test_first_track_returns_track_1_when_set() -> None:
 def test_first_track_returns_track_1_even_when_track_2_empty() -> None:
     spec = UserSpec(user_id="u", track_1="AI", track_2="", persona="")
     assert recommender._first_track(spec) == "AI"
+
+
+# ---- multi-query (v2.1.5) --------------------------------------------------
+
+
+def test_resolve_last30days_queries_cfg_queries_wins(monkeypatch) -> None:
+    """Explicit cfg['queries'] always wins over LLM keywords or single query."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": Path("/fake"),
+        "queries": ["A", "B"],
+        "query": "X",
+    }
+    queries = recommender._resolve_last30days_queries(
+        cfg, keywords=["K1", "K2", "K3"], spec=spec, max_queries=3,
+    )
+    assert queries == ["A", "B"]
+
+
+def test_resolve_last30days_queries_cfg_query_legacy(monkeypatch) -> None:
+    """Legacy cfg['query'] becomes a single-query list."""
+    spec = _make_spec()
+    cfg = {"cli_path": Path("/fake"), "query": "X"}
+    queries = recommender._resolve_last30days_queries(
+        cfg, keywords=["K1", "K2", "K3"], spec=spec, max_queries=3,
+    )
+    assert queries == ["X"]
+
+
+def test_resolve_last30days_queries_keywords_when_no_cfg_override(monkeypatch) -> None:
+    """LLM-extracted keywords feed in when no cfg override."""
+    spec = _make_spec()
+    cfg = {"cli_path": Path("/fake")}
+    queries = recommender._resolve_last30days_queries(
+        cfg, keywords=["K1", "K2", "K3", "K4"], spec=spec, max_queries=3,
+    )
+    assert queries == ["K1", "K2", "K3"]
+
+
+def test_resolve_last30days_queries_falls_back_to_tracks(monkeypatch) -> None:
+    """When keywords is empty, fall back to spec tracks."""
+    spec = _make_spec()
+    cfg = {"cli_path": Path("/fake")}
+    queries = recommender._resolve_last30days_queries(
+        cfg, keywords=None, spec=spec, max_queries=3,
+    )
+    assert queries == ["AI", "副业"]
+
+
+def test_fetch_last30days_runs_one_subprocess_per_query(monkeypatch, tmp_path) -> None:
+    """Each resolved query becomes one CLI invocation."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["古典文学", "古文", "诗词"],
+        "days": 30,
+        "fetch_bodies": True,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+
+    calls: list[str] = []
+    report_template = {"weibo": [], "zhihu": [], "topic": "x"}
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        calls.append(query)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        out.write_text(json.dumps({**report_template, "topic": query}), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    out = recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["古典文学", "古文", "诗词"]
+    assert out == []
+
+
+def test_fetch_last30days_dedups_urls_across_queries(monkeypatch, tmp_path) -> None:
+    """Same URL appearing in two query results is kept once."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["古典文学", "诗词"],
+        "days": 30,
+        "fetch_bodies": True,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+    shared_url = "https://weibo.com/dup"
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        save_dir.mkdir(parents=True, exist_ok=True)
+        if query == "古典文学":
+            payload = {
+                "weibo": [
+                    {"id": "1", "text": "Q1 item", "url": shared_url,
+                     "engagement": {"views": 100, "likes": 5}},
+                    {"id": "2", "text": "Q1 unique", "url": "https://weibo.com/q1u",
+                     "engagement": {"views": 200, "likes": 10}},
+                ],
+                "topic": query,
+            }
+        else:
+            payload = {
+                "weibo": [
+                    {"id": "1", "text": "Q2 dup", "url": shared_url,
+                     "engagement": {"views": 999, "likes": 99}},
+                    {"id": "3", "text": "Q2 unique", "url": "https://weibo.com/q2u",
+                     "engagement": {"views": 50, "likes": 1}},
+                ],
+                "topic": query,
+            }
+        out = save_dir / "report.json"
+        out.write_text(json.dumps(payload), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    urls = [a["url"] for a in articles]
+    assert urls.count(shared_url) == 1, urls
+    assert len(urls) == 3  # shared + 2 unique
+    # The winning version is the first query that surfaced it (古典文学).
+    for a in articles:
+        if a["url"] == shared_url:
+            assert a["search_query"] == "古典文学"
+            assert a["heat"]["view"] == 100
+
+
+def test_fetch_last30days_max_queries_caps(monkeypatch, tmp_path) -> None:
+    """max_queries caps the total CLI invocations."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["a", "b", "c", "d", "e"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+    calls: list[str] = []
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        calls.append(query)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        out.write_text(json.dumps({"weibo": [], "topic": query}), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    recommender._fetch_last30days_candidates(spec, cfg, max_queries=2)
+    assert calls == ["a", "b"]
+
+
+def test_fetch_last30days_uses_keywords_when_no_cfg_override(
+    monkeypatch, tmp_path
+) -> None:
+    """Without cfg['queries']/['query'], LLM keywords drive the queries."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+    calls: list[str] = []
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        calls.append(query)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        out.write_text(json.dumps({"weibo": [], "topic": query}), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    recommender._fetch_last30days_candidates(
+        spec, cfg, keywords=["古文", "诗词", "唐诗"],
+    )
+    assert calls == ["古文", "诗词", "唐诗"]
+
+
+def test_fetch_last30days_continues_after_one_query_fails(
+    monkeypatch, tmp_path
+) -> None:
+    """Failure in one query doesn't poison the rest."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["good", "bad", "good2"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        if query == "bad":
+            raise RuntimeError("synthetic subprocess crash")
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        out.write_text(json.dumps({"weibo": [], "topic": query}), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    # bad query is silently skipped; the other two return empty arrays.
+    assert articles == []
+
+
+# ---- adaptive escalation (v2.1.5) ------------------------------------------
+
+
+def _make_qn_runner(per_query_items: dict[str, list[dict]]) -> callable:
+    """Build a fake last30days_source.run that returns a different report per
+    query. ``per_query_items`` maps query → list of raw weibo item dicts.
+    Queries not in the map return empty reports.
+    """
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        payload = {"weibo": per_query_items.get(query, []), "topic": query}
+        out.write_text(json.dumps(payload), encoding="utf-8")
+        return out
+    return fake_run
+
+
+def test_fetch_last30days_stops_early_when_first_query_yields_enough(
+    monkeypatch, tmp_path
+) -> None:
+    """When the first query already exceeds low_water_mark, subsequent
+    queries are skipped (no redundant subprocess)."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["q1", "q2", "q3"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+        "low_water_mark": 3,
+    }
+    # q1 returns 5 items — enough on its own.
+    q1_items = [
+        {"id": str(i), "text": f"item {i}", "url": f"https://w.com/{i}",
+         "engagement": {"views": 100, "likes": 1}}
+        for i in range(5)
+    ]
+    calls: list[str] = []
+    real_runner = _make_qn_runner({"q1": q1_items})
+
+    def spy_run(*, cli_path, query, **kwargs):
+        calls.append(query)
+        return real_runner(cli_path=cli_path, query=query, **kwargs)
+
+    monkeypatch.setattr(recommender.last30days_source, "run", spy_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["q1"], f"expected only q1 to run, got {calls}"
+    assert len(articles) == 5
+
+
+def test_fetch_last30days_escalates_when_first_query_is_thin(
+    monkeypatch, tmp_path
+) -> None:
+    """If the first query yields <= low_water_mark, the next query is
+    tried. If cumulative now exceeds threshold, stop."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["q1", "q2", "q3"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+        "low_water_mark": 3,
+    }
+    # q1 returns 1 item (≤ 3), q2 returns 4 unique items (cumulative 5 > 3).
+    q1_items = [
+        {"id": "a", "text": "a", "url": "https://w.com/a",
+         "engagement": {"views": 10, "likes": 1}},
+    ]
+    q2_items = [
+        {"id": f"b{i}", "text": f"b{i}", "url": f"https://w.com/b{i}",
+         "engagement": {"views": 10, "likes": 1}}
+        for i in range(4)
+    ]
+    calls: list[str] = []
+    real_runner = _make_qn_runner({"q1": q1_items, "q2": q2_items})
+
+    def spy_run(*, cli_path, query, **kwargs):
+        calls.append(query)
+        return real_runner(cli_path=cli_path, query=query, **kwargs)
+
+    monkeypatch.setattr(recommender.last30days_source, "run", spy_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["q1", "q2"], f"expected escalation to q2 only, got {calls}"
+    assert len(articles) == 5  # 1 + 4 unique
+
+
+def test_fetch_last30days_runs_all_when_all_queries_are_thin(
+    monkeypatch, tmp_path
+) -> None:
+    """If cumulative never exceeds low_water_mark, all queries run."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["q1", "q2", "q3"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+        "low_water_mark": 10,
+    }
+    calls: list[str] = []
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        calls.append(query)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        # Each query returns 1 item — cumulative stays below threshold.
+        out.write_text(json.dumps({
+            "weibo": [
+                {"id": f"{query}-1", "text": "x", "url": f"https://w.com/{query}",
+                 "engagement": {"views": 1}},
+            ],
+            "topic": query,
+        }), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["q1", "q2", "q3"]
+    assert len(articles) == 3
+
+
+def test_fetch_last30days_default_low_water_mark_is_three(
+    monkeypatch, tmp_path
+) -> None:
+    """Without cfg['low_water_mark'], the default of 3 applies."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["q1", "q2"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+    }
+    # q1 returns exactly 4 items — 4 > 3 default → stop.
+    q1_items = [
+        {"id": str(i), "text": f"x{i}", "url": f"https://w.com/{i}",
+         "engagement": {"views": 1}}
+        for i in range(4)
+    ]
+    calls: list[str] = []
+    real_runner = _make_qn_runner({"q1": q1_items})
+
+    def spy_run(*, cli_path, query, **kwargs):
+        calls.append(query)
+        return real_runner(cli_path=cli_path, query=query, **kwargs)
+
+    monkeypatch.setattr(recommender.last30days_source, "run", spy_run)
+    recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["q1"]
+
+
+def test_fetch_last30days_failed_query_counts_as_zero_for_escalation(
+    monkeypatch, tmp_path
+) -> None:
+    """A failed query still escalates to the next, since it returns 0."""
+    spec = _make_spec()
+    cfg = {
+        "cli_path": tmp_path / "last30days.py",
+        "queries": ["good", "bad", "good2"],
+        "days": 30,
+        "platforms": (),
+        "timeout": 30.0,
+        "save_dir": tmp_path / "out",
+        "low_water_mark": 3,
+    }
+    # good returns 5 (exceeds threshold, should stop after this).
+    good_items = [
+        {"id": str(i), "text": "x", "url": f"https://w.com/{i}",
+         "engagement": {"views": 1}}
+        for i in range(5)
+    ]
+    calls: list[str] = []
+
+    def fake_run(*, cli_path, query, days, save_dir, fetch_bodies, platforms, timeout):
+        calls.append(query)
+        if query == "bad":
+            raise RuntimeError("synthetic crash")
+        save_dir.mkdir(parents=True, exist_ok=True)
+        out = save_dir / "report.json"
+        items = good_items if query == "good" else []
+        out.write_text(json.dumps({"weibo": items, "topic": query}), encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(recommender.last30days_source, "run", fake_run)
+    articles = recommender._fetch_last30days_candidates(spec, cfg)
+    assert calls == ["good"], f"early-stop on good should skip bad/good2, got {calls}"
+    assert len(articles) == 5
