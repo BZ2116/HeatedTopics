@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,50 @@ def _build_provider(platform: str) -> Any | None:
     return None
 
 
+# Alias raw provider metric names -> adapter keys (view/like/comment/favorite/share).
+# Providers use varying names: juejin emits "views"/"likes"/"collects"/"comments",
+# toutiao search uses "reads"/"comments", thepaper uses "praise_times", etc.
+# Composite scores ("hot"/"hot_value"/"hot_score"/"engagement"/"search_rank") are
+# platform ranking signals, NOT user engagement metrics — they pass through
+# unmodified so to_discovered ignores them rather than mis-attributing as views.
+_METRIC_ALIASES: dict[str, str] = {
+    "view_count": "view",
+    "views": "view",
+    "reads": "view",
+    "voteups": "like",
+    "like_count": "like",
+    "likes": "like",
+    "praise_times": "like",
+    "comment_count": "comment",
+    "comments": "comment",
+    "favorite_count": "favorite",
+    "collects": "favorite",
+    "share_count": "share",
+    "shares": "share",
+    # Pass-through (intentionally not aliased):
+    #   hot / hot_value / hot_score / engagement / search_rank / interaction_num
+}
+
+
+def _normalize_heat_metrics(heat: Any) -> dict[str, Any]:
+    """Build the heat dict consumed by ``candidate_adapter.to_discovered``.
+
+    Real platform metrics (e.g. juejin ``views``) populate ``view/like/comment
+    /favorite/share`` with provider-aliased names. Composite scores (heat.value,
+    ``hot``/``hot_score``/etc.) are NOT mapped to ``view``: they're platform
+    ranking signals, not engagement data. Without a real view metric, ``view``
+    stays unset so downstream ``min_view_count`` filtering works honestly.
+    """
+    out: dict[str, Any] = {}
+    for raw_k, v in (heat.metrics or {}).items():
+        key = _METRIC_ALIASES.get(raw_k, raw_k)
+        try:
+            out.setdefault(key, int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _hotitem_to_article(
     item: HotItem, detail: ItemDetail | None, platform: str
 ) -> dict[str, Any] | None:
@@ -147,13 +192,7 @@ def _hotitem_to_article(
         body_text = detail.content
     elif item.summary:
         body_text = item.summary
-    heat_dict: dict[str, Any] = {}
-    if item.heat.value is not None:
-        # Map the native metric to a "view"-like key for adapter visibility.
-        heat_dict["view"] = int(item.heat.value)
-    if item.heat.metrics:
-        for k, v in item.heat.metrics.items():
-            heat_dict.setdefault(k, int(v))
+    heat_dict = _normalize_heat_metrics(item.heat)
     heat_dict["rank"] = item.rank or 0
     return {
         "article_id": item.item_id,
