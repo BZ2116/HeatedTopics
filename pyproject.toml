@@ -41,6 +41,7 @@ dev = [
 markers = [
     "requires_llm: requires real MiniMax API + Ollama",
     "requires_ollama: requires Ollama with bge-m3",
+    "sanity: environment self-check; failures tell a new agent what to fix",
 ]
 asyncio_mode = "auto"
 
