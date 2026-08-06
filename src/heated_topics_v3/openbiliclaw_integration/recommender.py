@@ -779,6 +779,42 @@ async def _run_one_user_async(
                 heat_source=heat_source,
             )
 
+    # Niche-persona fallback: when the strict sim pre-filter empties the pool,
+    # retry once with sim_threshold=0 so any keyword-adjacent article survives.
+    # Rank-based scoring still ranks them; we just stop pre-filtering by
+    # embedding similarity. Skipped when embedding pass wasn't taken (no
+    # keyword_vectors) or when use_search=False.
+    if use_search and keyword_vectors and not candidates:
+        logger.info(
+            "user %s: niche persona, strict sim pre-filter dropped all %d "
+            "articles; retrying with sim_threshold=0",
+            spec.user_id, len(articles),
+        )
+        niche_platform = (
+            articles[0].get("platform", "juejin")
+            if isinstance(articles[0], dict) and "platform" in articles[0]
+            else "juejin"
+        )
+        candidates = await candidate_adapter.to_discovered(
+            articles,
+            platform=niche_platform,
+            embedding_service=embedding_service,
+            keyword_vectors=keyword_vectors,
+            sim_threshold=0.0,
+            min_view_count=0,
+            heat_source=heat_source,
+        )
+        if not any(isinstance(a, dict) and "platform" in a for a in articles):
+            if providers and len(providers) == 1:
+                candidates = await candidate_adapter.to_discovered(
+                    articles, platform=providers[0],
+                    embedding_service=embedding_service,
+                    keyword_vectors=keyword_vectors,
+                    sim_threshold=0.0,
+                    min_view_count=0,
+                    heat_source=heat_source,
+                )
+
     # Optional LLM secondary filter: drop candidates that look
     # keyword-relevant but are actually off-persona. Off by default.
     if use_llm_refilter and shared_runtime is not None and candidates:

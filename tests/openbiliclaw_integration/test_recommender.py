@@ -745,6 +745,9 @@ def test_run_one_user_passes_keyword_vectors_to_adapter(tmp_path: Path) -> None:
         [1.0, 0.0, 0.0],  # keyword 1
         [0.0, 1.0, 0.0],  # keyword 2
         [0.0, 0.0, 1.0],  # keyword 3
+        [0.5, 0.5, 0.0],  # article (niche fallback may invoke embed again)
+        [0.5, 0.5, 0.0],  # spare
+        [0.5, 0.5, 0.0],  # spare
     ])
     fake_runtime = {"llm": MagicMock(), "embedding": fake_emb}
 
@@ -787,4 +790,119 @@ def test_run_one_user_passes_keyword_vectors_to_adapter(tmp_path: Path) -> None:
     ]
     # 3 keyword embeddings + 1 article embedding (to_discovered) = 4 total.
     assert fake_emb.embed.call_count == 4
+
+
+# --- v2.1.4: heat metric normalization + niche fallback ---
+
+
+def test_normalize_heat_metrics_real_metrics_win_over_composite() -> None:
+    """When HeatMetrics carries real view/like/comment metrics alongside a
+    composite ``value``, the real metrics populate the heat dict and the
+    composite is dropped — fixing the long-standing setdefault bug that
+    made ``min_view_count`` filtering useless."""
+    from heated_topics_v3.contracts import HeatMetrics
+
+    heat = HeatMetrics(
+        value=100,  # composite hot_rank score
+        label="100",
+        metric_name="hot_rank",
+        metrics={"views": 5, "likes": 3, "collects": 1, "comments": 2},
+    )
+    out = recommender._normalize_heat_metrics(heat)
+    assert out["view"] == 5        # NOT 100 (composite)
+    assert out["like"] == 3
+    assert out["favorite"] == 1    # collects → favorite
+    assert out["comment"] == 2
+
+
+def test_normalize_heat_metrics_composite_only_does_not_set_view() -> None:
+    """When only a composite score is available (baidu_hot, zhihu_hot, etc.),
+    the composite is left as-is and no synthetic view is invented from it —
+    downstream readers won't mistake a platform hot-score for user engagement."""
+    from heated_topics_v3.contracts import HeatMetrics
+
+    heat = HeatMetrics(
+        value=999, label="999", metric_name="hot_score",
+        metrics={"hot_score": 999},
+    )
+    out = recommender._normalize_heat_metrics(heat)
+    assert "view" not in out
+    assert out["hot_score"] == 999
+
+
+def test_normalize_heat_metrics_aliases_per_provider_names() -> None:
+    """toutiao search emits 'reads' (→ view), thepaper emits 'praise_times'
+    (→ like). Names that map to the same adapter key are de-duped via
+    setdefault — first wins."""
+    from heated_topics_v3.contracts import HeatMetrics
+
+    heat = HeatMetrics(
+        value=None, label="", metric_name="",
+        metrics={
+            "reads": 1234,
+            "praise_times": 56,
+            "comments": 7,
+            "interaction_num": 200,
+        },
+    )
+    out = recommender._normalize_heat_metrics(heat)
+    assert out["view"] == 1234         # reads → view
+    assert out["like"] == 56           # praise_times → like
+    assert out["comment"] == 7         # comments → comment
+    assert out["interaction_num"] == 200  # pass-through
+
+
+def test_run_one_user_niche_persona_retries_with_zero_threshold(
+    tmp_path: Path,
+) -> None:
+    """When the strict sim_threshold pre-filter empties the candidate pool
+    (niche persona, off-keyword embeddings), the recommender retries once
+    with sim_threshold=0 so any keyword-adjacent article can survive the
+    final engine filter."""
+    from heated_topics_v3.openbiliclaw_integration import candidate_adapter
+
+    spec = _make_spec(track_1="古典文学", track_2="诗词鉴赏")
+    mock_engine = MagicMock()
+    mock_engine.serve_external_candidates = AsyncMock(
+        return_value=[_mock_recommendation("古典文学相关")]
+    )
+
+    # Embedding service that returns a vector on every call.
+    fake_emb = AsyncMock()
+    fake_emb.embed = AsyncMock(return_value=[0.1, 0.2, 0.3])
+
+    # Patch to_discovered: first call returns [] (strict filter emptied
+    # the pool), second call returns one candidate.
+    calls: list[float] = []
+    real_to_discovered = candidate_adapter.to_discovered
+
+    async def spy(articles, *, platform, **kwargs):
+        calls.append(kwargs.get("sim_threshold"))
+        if len(calls) == 1:
+            return []
+        return [_mock_article()]
+
+    with (
+        patch.object(recommender, "build_recommender", return_value=mock_engine),
+        patch.object(
+            recommender,
+            "extract_or_load",
+            AsyncMock(return_value=["古典文学", "诗词", "古文"]),
+        ),
+        patch.object(recommender, "fetch_candidates", return_value=[_mock_article()]),
+        patch.object(candidate_adapter, "to_discovered", spy),
+    ):
+        result = recommender.run_one_user(
+            spec,
+            data_dir=tmp_path / "runtime",
+            keyword_cache_dir=tmp_path / "_kw_cache",
+            limit=5,
+            use_keyword_extraction=True,
+            shared_runtime={"llm": MagicMock(), "embedding": fake_emb},
+        )
+
+    assert "error" not in result, f"expected recommendations, got error: {result}"
+    assert len(result["recommendations"]) == 1
+    # First strict attempt (0.5), then niche retry (0.0).
+    assert calls == [pytest.approx(0.5), pytest.approx(0.0)]
 
