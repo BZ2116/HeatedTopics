@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -35,6 +36,22 @@ def _next_round_name(user_dir: Path) -> str:
                 except ValueError:
                     pass
     return f"round_{max(numbers, default=0) + 1:03d}"
+
+
+def _default_last30days_cli_path() -> Path | None:
+    """Find the sibling last30days checkout without OS-specific paths."""
+    configured = os.getenv("LAST30DAYS_CLI_PATH", "").strip()
+    candidates = [Path(configured)] if configured else []
+    project_root = Path(__file__).resolve().parents[3]
+    candidates.append(project_root / "last30days-skill-cn" / "scripts" / "last30days.py")
+    candidates.extend(
+        parent / "last30days-skill-cn" / "scripts" / "last30days.py"
+        for parent in project_root.parents
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
 
 
 def _limit_1_15(value: str) -> int:
@@ -200,6 +217,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
     args = parse_args(argv if argv is not None else sys.argv[1:])
+    if args.last30days_cli_path is None:
+        args.last30days_cli_path = _default_last30days_cli_path()
 
     # Fail-fast
     runtime.verify_patch()

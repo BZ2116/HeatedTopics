@@ -28,6 +28,12 @@
 uv sync
 ```
 
+`openbiliclaw` 已配置为从 heatedTopics 专用 GitHub 分支安装，不依赖开发者电脑上的本地绝对路径。首次安装会自动拉取包含 `serve_external_candidates()` 补丁的 OpenBiliClaw；如果使用 pip，则先执行：
+
+```bash
+pip install "git+https://github.com/BZ2116/OpenBiliClaw.git@feature/heatedtopics-external-candidates"
+```
+
 复制 `.env.example` 为 `.env`，配置必要的模型和平台信息：
 
 ```env
@@ -41,7 +47,25 @@ ZHIHU_COOKIE=你的知乎Cookie
 ollama pull bge-m3
 ```
 
-`last30days` 是外部数据项目，需要通过 `--last30days-cli-path` 指向它的脚本。
+`last30days` 是独立的外部仓库，需要先下载：
+
+请从公开仓库 [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn) 下载代码，并确保目录中存在：
+
+```bash
+git clone https://github.com/Jesseovo/last30days-skill-cn.git ../last30days-skill-cn
+```
+
+```text
+last30days-skill-cn/scripts/last30days.py
+```
+
+推荐把它放在 heatedTopics 的同级目录；如果放在其他位置，则配置：
+
+```env
+LAST30DAYS_CLI_PATH=/your/path/last30days-skill-cn/scripts/last30days.py
+```
+
+程序会自动查找同级目录下的 `last30days-skill-cn/scripts/last30days.py`。也可以通过环境变量 `LAST30DAYS_CLI_PATH` 或命令行参数显式指定路径。路径使用 `/` 或 Python `Path` 规则，不要写死其他电脑的盘符。
 
 ## 三、终端运行方式
 
@@ -67,7 +91,6 @@ uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
   --users-excel data/users.xlsx `
   --output-dir data/run_20260808 `
   --source both `
-  --last30days-cli-path E:\.code\My\last30days-skill-cn\scripts\last30days.py `
   --last30days-days 30 `
   --last30days-max-queries 3 `
   --max-parallel 3 `
@@ -127,7 +150,7 @@ result = recommend_user(
     limit=15,
     source="both",
     last30days_config={
-        "cli_path": r"E:\.code\My\last30days-skill-cn\scripts\last30days.py",
+        "cli_path": "../last30days-skill-cn/scripts/last30days.py",
         "days": 30,
         "fetch_bodies": True,
     },

@@ -5,19 +5,13 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "gne>=0.4.3",
-    "openbiliclaw",
+    "openbiliclaw @ git+https://github.com/BZ2116/OpenBiliClaw.git@feature/heatedtopics-external-candidates",
     "openpyxl>=3.1.0",
     "playwright>=1.59.0",
     "httpx>=0.27.0",
     "python-dotenv>=1.0",
     "tzdata>=2025.2",
 ]
-
-# Local sandbox clone of OpenBiliClaw (v0.3.186+mur.1) providing
-# RecommendationEngine.serve_external_candidates. The clone lives outside the
-# heatedTopics tree, so an absolute path is used here.
-[tool.uv.sources]
-openbiliclaw = { path = "E:/code/My/openbiliclaw-sandbox" }
 
 [project.scripts]
 heated-topics = "heated_topics_v3.cli:main"
@@ -28,6 +22,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/heated_topics_v3"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [dependency-groups]
 dev = [

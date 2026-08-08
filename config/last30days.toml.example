@@ -3,9 +3,10 @@
 # CLI flags override anything set here.
 
 [last30days]
-# Path to last30days's scripts/last30days.py. REQUIRED when --source is
-# last30days or both.
-cli_path = "E:/.code/My/last30days-skill-cn/scripts/last30days.py"
+# Path to last30days's scripts/last30days.py. Use a path valid on the current
+# machine, or set LAST30DAYS_CLI_PATH in .env. The CLI also auto-detects a
+# sibling checkout at ../last30days-skill-cn/scripts/last30days.py.
+# cli_path = "../last30days-skill-cn/scripts/last30days.py"
 
 # Default query (per-user override via --last30days-query).
 # If unset, each user's top-weighted interest name is used.
