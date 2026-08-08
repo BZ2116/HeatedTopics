@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import unescape
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
@@ -344,7 +345,21 @@ def _search_cards(raw: str) -> list[dict]:
         return []
     parser = _SearchCardParser()
     parser.feed(raw)
-    return parser.cards
+    if parser.cards:
+        return parser.cards
+    # NetEase changed the search page markup from ``li.keyword_new_list``
+    # to article anchors. Keep a conservative fallback for canonical docs.
+    cards: list[dict] = []
+    pattern = re.compile(
+        r'<a[^>]+href=["\'](?P<href>https?://(?:www\.)?163\.com/dy/article/[^"\']+)["\'][^>]*title=["\'](?P<title>.*?)["\']',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for match in pattern.finditer(raw):
+        href = unescape(match.group("href"))
+        title = re.sub(r"\s+", " ", unescape(match.group("title"))).strip()
+        if title and _is_netease_article(href):
+            cards.append({"title": title, "href": href, "source": "", "time": "", "comments": ""})
+    return cards
 
 
 def _strip_em(text: str) -> str:

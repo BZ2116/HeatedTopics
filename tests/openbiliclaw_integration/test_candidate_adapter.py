@@ -369,8 +369,8 @@ async def test_to_discovered_heat_source_view_falls_back_when_no_view() -> None:
 # --- v2.1.6: source-level filter (video / login-gated platforms) ----------
 
 
-def test_to_discovered_drops_blocked_sources() -> None:
-    """bilibili / douyin / xiaohongshu items are dropped before embedding.
+def test_to_discovered_drops_unusable_sources() -> None:
+    """douyin / xiaohongshu items are dropped before embedding.
 
     Acts as a safety net for the driver-level platforms list — if a caller
     accidentally includes these via `provider=` overrides or per-platform
@@ -402,15 +402,13 @@ def test_to_discovered_drops_blocked_sources() -> None:
     ids = {item.content_id for item in items}
     assert "weibo:1" in ids
     assert "zhihu:1" in ids
-    assert "bili:1" not in ids
+    assert "bili:1" in ids
     assert "dy:1" not in ids
     assert "xhs:1" not in ids
 
 
-def test_to_discovered_drops_blocked_platform_kwarg() -> None:
-    """If the caller-level platform= is in BLOCKED_SOURCES, every item is
-    dropped (defensive — avoids surprises if the orchestrator passes a
-    blocked source via the platform= default)."""
+def test_to_discovered_allows_bilibili_platform_kwarg() -> None:
+    """Bilibili is a supported last30days reference source."""
     articles = [
         {
             "article_id": "1", "title": "t", "url": "https://x.com/1",
@@ -420,16 +418,46 @@ def test_to_discovered_drops_blocked_platform_kwarg() -> None:
     items = asyncio_run(
         candidate_adapter.to_discovered(articles, platform="bilibili")
     )
-    assert items == []
+    assert [item.content_id for item in items] == ["1"]
 
 
 def test_blocked_sources_constant_covers_video_platforms() -> None:
     """Sanity check on the module-level constant — guards against typos
     that would silently re-enable blocked platforms."""
-    assert "bilibili" in candidate_adapter.BLOCKED_SOURCES
+    assert "bilibili" not in candidate_adapter.BLOCKED_SOURCES
     assert "douyin" in candidate_adapter.BLOCKED_SOURCES
     assert "xiaohongshu" in candidate_adapter.BLOCKED_SOURCES
     # Article sources must NOT be in the block set.
     assert "weibo" not in candidate_adapter.BLOCKED_SOURCES
     assert "zhihu" not in candidate_adapter.BLOCKED_SOURCES
     assert "juejin" not in candidate_adapter.BLOCKED_SOURCES
+
+
+def test_to_discovered_drops_resource_and_discussion_posts() -> None:
+    articles = [
+        {"article_id": "resource", "title": "AI 资料分享和网盘链接", "url": "https://x/1", "body_text": "正文", "heat": {"rank": 1}},
+        {"article_id": "discussion", "title": "大家怎么看这个 AI 话题讨论", "url": "https://x/2", "body_text": "正文", "heat": {"rank": 2}},
+        {"article_id": "article", "title": "AI 推理性能优化实践", "url": "https://x/3", "body_text": "正文", "heat": {"rank": 3}},
+    ]
+    items = asyncio_run(candidate_adapter.to_discovered(articles, platform="weibo"))
+    assert [item.content_id for item in items] == ["article"]
+
+
+def test_to_discovered_keeps_weak_reference_with_lower_score() -> None:
+    articles = [
+        {
+            "article_id": "weak", "title": "非遗短内容",
+            "url": "https://x/weak", "body_text": "这是一段很短的内容说明",
+            "heat": {"rank": 1},
+        },
+        {
+            "article_id": "strong", "title": "非遗传承实践分析",
+            "url": "https://x/strong",
+            "body_text": "第一段介绍背景和问题。\n第二段分析传承方法与生活场景。\n第三段总结实践经验。",
+            "heat": {"rank": 1},
+        },
+    ]
+    items = asyncio_run(candidate_adapter.to_discovered(articles, platform="weibo"))
+    by_id = {item.content_id: item for item in items}
+    assert set(by_id) == {"weak", "strong"}
+    assert by_id["weak"].relevance_score < by_id["strong"].relevance_score

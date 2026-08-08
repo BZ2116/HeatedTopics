@@ -170,6 +170,26 @@ def test_collect_uses_api_when_contract_is_valid():
     assert len(calls) == 1
 
 
+def test_api_parser_accepts_current_scalar_target_shape():
+    from heated_topics_v3.providers.zhihu_hot import parse_api_hot_list
+
+    raw = json.dumps({
+        "data": [{
+            "target": {
+                "id": 2069064416709063399,
+                "title": "heritage and local life",
+                "url": "https://api.zhihu.com/questions/2069064416709063399",
+                "excerpt": "local customs and traditional crafts",
+            },
+            "detail_text": "1183 热度",
+        }]
+    })
+    items = parse_api_hot_list(raw, NOW)
+    assert len(items) == 1
+    assert items[0].title == "heritage and local life"
+    assert items[0].heat.value == 1183
+
+
 def test_collect_falls_back_to_html_only_on_api_contract_change():
     from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
 

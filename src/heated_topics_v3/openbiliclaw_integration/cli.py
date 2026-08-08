@@ -6,6 +6,7 @@ Reads users from .xlsx, writes per-user/per-date files under --output-dir.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from collections.abc import Sequence
@@ -21,6 +22,26 @@ from heated_topics_v3.openbiliclaw_integration import (
 from heated_topics_v3.openbiliclaw_integration.exceptions import ProfileValidationError
 
 logger = logging.getLogger(__name__)
+
+
+def _next_round_name(user_dir: Path) -> str:
+    """Return the next round name without touching existing run artifacts."""
+    numbers = []
+    if user_dir.exists():
+        for child in user_dir.iterdir():
+            if child.is_dir() and child.name.startswith("round_"):
+                try:
+                    numbers.append(int(child.name.removeprefix("round_")))
+                except ValueError:
+                    pass
+    return f"round_{max(numbers, default=0) + 1:03d}"
+
+
+def _limit_1_15(value: str) -> int:
+    parsed = int(value)
+    if not 1 <= parsed <= 15:
+        raise argparse.ArgumentTypeError("limit must be between 1 and 15")
+    return parsed
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -44,10 +65,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "{output-dir}/outputs/{user_id}/{input.json,queries/,summaries/,text/}"
         ),
     )
-    p.add_argument("--limit", type=int, default=8, help="Top-N per user (default 8)")
+    p.add_argument("--limit", type=_limit_1_15, default=15, help="Top-N per user (default 15, maximum 15)")
     p.add_argument(
-        "--max-parallel", type=int, default=5,
-        help="Max concurrent users (default 5; 1 = serial)",
+        "--max-parallel", type=int, choices=range(1, 4), default=3,
+        help="Max concurrent users (1-3, default 3)",
     )
     p.add_argument(
         "--per-user-timeout", type=float, default=300.0,
@@ -171,6 +192,10 @@ def asyncio_run(coro: Any) -> Any:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry. Writes inputs/users.json + outputs/{user_id}/{layout} per user."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
@@ -223,7 +248,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             last30days_config=last30days_config,
             last30days_max_queries=args.last30days_max_queries,
             use_keyword_extraction=args.keyword_extraction,
-            keyword_cache_dir=args.output_dir / "_keyword_cache",
+            keyword_cache_dir=None,
+            user_cache_root=args.output_dir,
+            hot_cache_dir=args.output_dir / "hot_cache",
             min_view_count=args.min_view_count,
             heat_source=args.heat_source,
             use_llm_refilter=args.llm_refilter,
@@ -240,17 +267,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     any_error = False
     for user_id, payload in results.items():
         try:
-            user_dir = args.output_dir / "outputs" / user_id
+            user_dir = args.output_dir / user_id
+            round_root = user_dir / _next_round_name(user_dir)
             inp = payload.get("input", {}) or {}
             report_writer.write_user_report(
-                user_dir,
+                round_root / "outputs",
                 user_id=user_id,
                 track_1=inp.get("track_1", ""),
                 track_2=inp.get("track_2", ""),
                 persona=inp.get("persona", ""),
                 recommendations=payload.get("recommendations") or [],
+                searched_articles=payload.get("searched_articles") or [],
                 summary=payload.get("summary") or "",
                 body_max_chars=args.body_max_chars,
+            )
+            input_dir = round_root / "input"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            (input_dir / "input.json").write_text(
+                json.dumps(inp, ensure_ascii=False, indent=2), encoding="utf-8"
             )
         except OSError as exc:
             logger.error("failed to write %s: %s", user_dir, exc)

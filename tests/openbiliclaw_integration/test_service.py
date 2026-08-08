@@ -1,0 +1,56 @@
+import asyncio
+import json
+from pathlib import Path
+
+from heated_topics_v3.openbiliclaw_integration import service
+
+
+def test_recommend_user_writes_round_layout(tmp_path, monkeypatch):
+    def fake_run(spec, **kwargs):
+        return {
+            "user_id": spec.user_id,
+            "input": {"track_1": spec.track_1, "track_2": spec.track_2, "persona": spec.persona},
+            "recommendations": [{"rank": 1, "title": "测试文章", "source": "toutiao", "body_text": "正文"}],
+            "searched_articles": [], "summary": "",
+        }
+    monkeypatch.setattr(service.recommender, "run_one_user", fake_run)
+    result = service.recommend_user(
+        user_id="u_1", track_1="文化", track_2="非遗", persona="记录者",
+        run_dir=tmp_path,
+    )
+    assert Path(result["round_dir"]).joinpath("input/input.json").exists()
+    assert Path(result["round_dir"]).joinpath("outputs/recommended").exists()
+
+
+def test_service_serializes_same_user_and_caps_concurrency(monkeypatch, tmp_path):
+    active = 0
+    peak = 0
+
+    async def fake_to_thread(fn, **kwargs):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return {"user_id": kwargs["user_id"]}
+
+    monkeypatch.setattr(service.asyncio, "to_thread", fake_to_thread)
+    svc = service.RecommendationService(max_concurrency=20)
+
+    async def run():
+        return await asyncio.gather(*[
+            svc.recommend_user(user_id=f"u_{i}", run_dir=tmp_path)
+            for i in range(8)
+        ])
+
+    asyncio.run(run())
+    assert peak <= 3
+
+
+def test_daily_hot_summary_reads_shared_cache(tmp_path):
+    cache = tmp_path / "hot_cache" / "toutiao"
+    cache.mkdir(parents=True)
+    (cache / "items.json").write_text(json.dumps([{"title": "热榜"}]), encoding="utf-8")
+    result = service.summarize_daily_hot(run_dir=tmp_path)
+    assert result["count"] == 1
+    assert (tmp_path / "daily_summary/summary.json").exists()

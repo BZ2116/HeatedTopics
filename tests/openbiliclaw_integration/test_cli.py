@@ -42,11 +42,11 @@ def test_parse_args_default_source_is_both() -> None:
     assert args.source == "both"
 
 
-def test_parse_args_default_limit_is_8() -> None:
+def test_parse_args_default_limit_is_15() -> None:
     args = cli.parse_args(
         ["--users-excel", "users.xlsx", "--output-dir", "recs/"]
     )
-    assert args.limit == 8
+    assert args.limit == 15
 
 
 def test_parse_args_keyword_extraction_defaults_to_true() -> None:

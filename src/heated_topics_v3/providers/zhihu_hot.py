@@ -142,6 +142,19 @@ def parse_api_hot_list(raw: str, collected_at: str) -> tuple[HotItem, ...]:
             isinstance(value, dict)
             for value in (title_area, excerpt_area, metrics_area, link)
         ):
+            # Current Zhihu API shape uses scalar target fields and puts the
+            # heat label on the feed row itself.
+            item = _hot_item(
+                question_id=target.get("id"),
+                title=target.get("title"),
+                summary=target.get("excerpt"),
+                url=target.get("url"),
+                heat_label=row.get("detail_text"),
+                rank=len(items) + 1,
+                collected_at=collected_at,
+            )
+            if item is not None:
+                items.append(item)
             continue
         item = _hot_item(
             question_id=target.get("id"),

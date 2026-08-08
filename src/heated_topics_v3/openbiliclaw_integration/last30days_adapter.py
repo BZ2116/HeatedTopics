@@ -189,7 +189,7 @@ def _extract_wechat(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | Non
     if not title:
         return None
     rid = str(raw.get("id") or "").strip()
-    body = str(raw.get("content") or raw.get("summary") or "")
+    body = str(raw.get("content") or "")
     summary = str(raw.get("summary") or title)
     author = str(raw.get("author") or raw.get("account_name") or "")
     return (f"wechat:{rid}", title, body, summary, author)
@@ -200,7 +200,7 @@ def _extract_baidu(raw: dict[str, Any]) -> tuple[str, str, str, str, str] | None
     if not title:
         return None
     rid = str(raw.get("id") or "").strip()
-    body = str(raw.get("abstract") or raw.get("content") or "")
+    body = str(raw.get("content") or "")
     summary = str(raw.get("abstract") or title)
     author = str(raw.get("source") or raw.get("source_domain") or "")
     return (f"baidu:{rid}", title, body, summary, author)

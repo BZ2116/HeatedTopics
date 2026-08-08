@@ -1,0 +1,16 @@
+{
+  "last_verified_at": "2026-08-08",
+  "sources": {
+    "toutiao": {"hot_list": true, "search": true, "body": true, "stability": "stable"},
+    "juejin": {"hot_list": true, "search": false, "body": true, "stability": "hot_list_and_detail_stable"},
+    "zhihu_daily": {"hot_list": true, "search": true, "body": true, "stability": "stable"},
+    "netease_news": {"hot_list": true, "search": true, "body": true, "stability": "search_markup_fallback_added"},
+    "sina_news": {"hot_list": true, "search": true, "body": true, "stability": "search_endpoint_can_return_empty"},
+    "thepaper": {"hot_list": false, "search": true, "body": true, "stability": "hot_list_data_inconsistent"},
+    "zhihu_hot": {"hot_list": true, "search": false, "body": "requires_valid_cookie", "stability": "cookie_dependent"},
+    "weibo": {"hot_list": false, "search": true, "body": "long_text_only", "stability": "post_or_long_text"},
+    "bilibili": {"hot_list": false, "search": true, "body": false, "stability": "video_source"},
+    "wechat": {"hot_list": false, "search": true, "body": "redirect_dependent", "stability": "search_result_dependent"},
+    "baidu": {"hot_list": false, "search": true, "body": "redirect_dependent", "stability": "redirect_dependent"}
+  }
+}

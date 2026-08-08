@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable
+
+from dotenv import load_dotenv
 
 from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
@@ -17,6 +20,7 @@ from heated_topics_v3.openbiliclaw_integration import (
     keyword_extractor,
     last30days_adapter,
     last30days_source,
+    body_enricher,
     runtime,
     user_profile,
 )
@@ -37,13 +41,13 @@ extract_or_load = keyword_extractor.extract_or_load
 # comes from data/cache/dailyhot/*.json (written by the upstream dailyhot
 # client); article bodies are fetched per-URL via GNE.
 _DEFAULT_PROVIDERS: tuple[str, ...] = (
-    "juejin",
     "toutiao",
-    "zhihu_hot",
+    "juejin",
     "zhihu_daily",
+    "netease_news",
     "sina_news",
     "thepaper",
-    "netease_news",
+    "zhihu_hot",
 )
 
 
@@ -51,13 +55,11 @@ _DEFAULT_PROVIDERS: tuple[str, ...] = (
 # slow and blocks the hot list. We only need bodies for the candidates the
 # engine actually considers.
 _DETAIL_FETCH_CAP = 20
-# Toutiao's detail fetcher runs Playwright to render article pages (each call
-# ~10s even with the renderer's internal 3-way concurrency). The cap of 3
-# keeps toutiao's wall time under ~35s; the remaining items still flow through
-# with title-only summaries and the relevance filter / engine picks them up
-# on the title signal alone.
+# Toutiao's detail fetcher runs Playwright to render article pages. Fetch the
+# complete hot board (normally 50 items) so hot-list matching has real article
+# text instead of only title/summary fallbacks.
 _DETAIL_FETCH_CAP_BY_PLATFORM: dict[str, int] = {
-    "toutiao": 3,
+    "toutiao": 50,
 }
 
 
@@ -67,9 +69,26 @@ _DETAIL_FETCH_CAP_BY_PLATFORM: dict[str, int] = {
 # ``sina_news`` returns malformed search payloads and was removed (v2.1.4).
 _SEARCH_PROVIDERS: tuple[str, ...] = (
     "toutiao",
+    "netease_news",
+    "sina_news",
     "thepaper",
     "zhihu_daily",
 )
+
+# Prefer sources that consistently expose article bodies. Fallback sources
+# remain eligible, but are appended after stable article providers.
+_ARTICLE_SOURCE_PRIORITY: dict[str, int] = {
+    "toutiao": 0,
+    "juejin": 1,
+    "zhihu_daily": 2,
+    "netease_news": 3,
+    "sina_news": 4,
+    "thepaper": 5,
+    "zhihu_hot": 10,
+    "baidu": 20,
+    "wechat": 21,
+}
+_NON_ARTICLE_SOURCES = frozenset({"bilibili", "douyin", "weibo"})
 
 # Per user: take the top-K interests (by weight) and search each on each
 # search-enabled provider. 3 × 3 = 9 (provider, interest) pairs; with
@@ -90,6 +109,8 @@ def _build_provider(platform: str) -> Any | None:
     Returns None if the platform name is unknown so the caller can skip it.
     """
     import httpx as _httpx
+
+    load_dotenv()
 
     client = _httpx.Client(
         follow_redirects=True,
@@ -116,7 +137,7 @@ def _build_provider(platform: str) -> Any | None:
     if platform == "zhihu_hot":
         from heated_topics_v3.providers.zhihu_hot import ZhihuHotProvider
 
-        return ZhihuHotProvider(client, ""), client
+        return ZhihuHotProvider(client, os.getenv("ZHIHU_COOKIE", "")), client
     if platform == "zhihu_daily":
         from heated_topics_v3.providers.zhihu_daily import ZhihuDailyProvider
 
@@ -195,17 +216,28 @@ def _hotitem_to_article(
     body_text = ""
     if detail is not None and detail.content_status == "full_text" and detail.content:
         body_text = detail.content
-    elif item.summary:
-        body_text = item.summary
     heat_dict = _normalize_heat_metrics(item.heat)
     heat_dict["rank"] = item.rank or 0
     return {
         "article_id": item.item_id,
         "title": item.title,
         "url": item.url,
+        "source_url": item.url,
+        "canonical_url": detail.source_url if detail is not None and detail.source_url != item.url else "",
         "body_text": body_text,
         "summary": item.summary or "",
-        "author": "",
+        "author": str(
+            item.raw_payload.get("author")
+            or item.raw_payload.get("author_name")
+            or item.raw_payload.get("author_handle")
+            or item.raw_payload.get("account_name")
+            or item.raw_payload.get("source_name")
+            or ""
+        ),
+        "content_type": str(
+            item.raw_payload.get("content_type")
+            or ("article" if "zhuanlan.zhihu.com" in item.url else "question_answer" if "zhihu.com/question" in item.url else "")
+        ),
         "published_at": item.publication_time or "",
         "tags": [],
         "heat": heat_dict,
@@ -254,6 +286,7 @@ def _fetch_provider_hot_list_sync(
     collected_at: str,
     *,
     detail_cap: int | None = None,
+    hot_cache_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch hot list + per-item detail for ONE platform (sync).
 
@@ -270,6 +303,17 @@ def _fetch_provider_hot_list_sync(
     provider, client = built
     if detail_cap is None:
         detail_cap = _DETAIL_FETCH_CAP_BY_PLATFORM.get(platform, _DETAIL_FETCH_CAP)
+    cache_path = None
+    if hot_cache_dir is not None:
+        cache_path = hot_cache_dir / collected_at[:10] / f"{platform}.json"
+        try:
+            if cache_path.is_file():
+                cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(cached, list):
+                    logger.info("hot cache hit: %s", cache_path)
+                    return cached
+        except (OSError, ValueError, TypeError):
+            logger.warning("invalid hot cache, refetching: %s", cache_path)
     try:
         try:
             capture = provider.collect_hot_list(collected_at)
@@ -297,6 +341,12 @@ def _fetch_provider_hot_list_sync(
             article = _hotitem_to_article(item, None, platform)
             if article is not None:
                 out.append(article)
+        if cache_path is not None:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            except OSError as exc:
+                logger.warning("failed to write hot cache %s: %s", cache_path, exc)
         return out
     finally:
         close = getattr(client, "close", None)
@@ -405,6 +455,7 @@ def _fetch_one_last30days_query_sync(
         article = _hotitem_to_article(item, detail, item.platform)
         if article is None:
             continue
+        article = body_enricher.enrich_article(article)
         article["search_query"] = query
         articles.append(article)
     return (query, articles)
@@ -428,6 +479,40 @@ def _is_hot_relevant(article: dict[str, Any], tracks: list[str]) -> bool:
     if not haystack.strip():
         return False
     return any(t.lower() in haystack for t in tracks if t.strip())
+
+
+def _is_article_candidate(article: dict[str, Any]) -> bool:
+    """Keep article-like sources only; reject videos and social posts."""
+    platform = str(article.get("platform") or "").casefold()
+    if platform in _NON_ARTICLE_SOURCES:
+        return False
+    if platform == "xiaohongshu":
+        content_type = str(article.get("content_type") or "").casefold()
+        title = str(article.get("title") or "").casefold()
+        video_markers = ("视频", "video", "直播", "vlog")
+        return not any(marker in content_type or marker in title for marker in video_markers)
+    return True
+
+
+def _sort_article_sources(articles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable article providers first, while preserving source-local order."""
+    def priority(article: dict[str, Any]) -> tuple[int, int]:
+        platform = str(article.get("platform") or "").casefold()
+        if platform == "zhihu":
+            content_type = str(article.get("content_type") or "").casefold()
+            url = str(article.get("url") or "").casefold()
+            # Prefer Zhihu column articles; question/answer items are the
+            # explicit fallback because their body is answer-dependent.
+            if "zhuanlan.zhihu.com" in url or content_type in {"article", "column"}:
+                return (9, 0)
+            return (11, 0)
+        return (_ARTICLE_SOURCE_PRIORITY.get(platform, 50), 0)
+    return [
+        article for _, article in sorted(
+            enumerate(articles),
+            key=lambda pair: (*priority(pair[1]), pair[0]),
+        )
+    ]
 
 
 def _rebalance_pool(
@@ -476,7 +561,7 @@ def fetch_candidates(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
-    target_limit: int = 10,
+    target_limit: int = 15,
     keywords: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch hot articles for one user from V3 providers.
@@ -557,7 +642,13 @@ def fetch_candidates(
         tracks = [k for k in keywords if k and k.strip()]
     else:
         tracks = _spec_tracks(spec)
-    if use_search and tracks:
+    # Hot list is the primary source. Search is only a backfill when the
+    # relevant hot-list pool is smaller than the requested recommendation
+    # count; this prevents search results from replacing today's hot topics.
+    relevant_hot_count = sum(
+        1 for article in hot_articles if _is_hot_relevant(article, tracks)
+    )
+    if use_search and tracks and relevant_hot_count < target_limit:
         search_enabled = [
             p
             for p in (
@@ -635,7 +726,7 @@ def fetch_candidates(
             search_articles,
             tracks,
             target_limit=target_limit,
-            prefer_search=prefer_search,
+            prefer_search=False,
         )
     return hot_articles
 
@@ -754,6 +845,7 @@ def _fetch_last30days_candidates(
             article = _hotitem_to_article(item, detail, item.platform)
             if article is None:
                 continue
+            article = body_enricher.enrich_article(article)
             url = article.get("url") or ""
             if url and url in seen_urls:
                 continue
@@ -787,7 +879,7 @@ def _fetch_candidates_for_user(
     *,
     source: str,
     last30days_config: dict[str, Any] | None,
-    target_limit: int = 10,
+    target_limit: int = 15,
     v3_providers: list[str] | None = None,
     use_search: bool = True,
     prefer_search: bool = True,
@@ -870,8 +962,9 @@ async def _fetch_v3_candidates_async(
     search_providers: list[str] | None = None,
     search_top_k: int = _SEARCH_TOP_K_INTERESTS,
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
-    target_limit: int = 10,
+    target_limit: int = 15,
     keywords: list[str] | None = None,
+    hot_cache_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Parallel async version of ``fetch_candidates``.
 
@@ -901,6 +994,7 @@ async def _fetch_v3_candidates_async(
         *[
             asyncio.to_thread(
                 _fetch_provider_hot_list_sync, p, collected_at,
+                hot_cache_dir=hot_cache_dir,
             )
             for p in enabled
         ],
@@ -916,12 +1010,13 @@ async def _fetch_v3_candidates_async(
         for article in result:
             _add_to(hot_articles, article)
 
-    tracks: list[str] = []
-    if use_search:
-        if keywords:
-            tracks = [k for k in keywords if k and k.strip()]
-        else:
-            tracks = _spec_tracks(spec)
+    tracks = [k for k in (keywords or []) if k and k.strip()]
+    if not tracks:
+        tracks = _spec_tracks(spec)
+    relevant_hot_count = sum(
+        1 for article in hot_articles if _is_hot_relevant(article, tracks)
+    )
+    if use_search and tracks and relevant_hot_count < target_limit:
         if tracks:
             search_enabled = [
                 p
@@ -964,7 +1059,7 @@ async def _fetch_v3_candidates_async(
             search_articles,
             tracks,
             target_limit=target_limit,
-            prefer_search=prefer_search,
+            prefer_search=False,
         )
     return hot_articles
 
@@ -1032,7 +1127,7 @@ async def _fetch_candidates_for_user_async(
     *,
     source: str,
     last30days_config: dict[str, Any] | None,
-    target_limit: int = 10,
+    target_limit: int = 15,
     v3_providers: list[str] | None = None,
     use_search: bool = True,
     prefer_search: bool = True,
@@ -1041,6 +1136,7 @@ async def _fetch_candidates_for_user_async(
     search_results_per_interest: int = _SEARCH_RESULTS_PER_INTEREST,
     keywords: list[str] | None = None,
     last30days_max_queries: int = 3,
+    hot_cache_dir: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Parallel async dispatch: V3 and last30days both run concurrently.
 
@@ -1065,6 +1161,7 @@ async def _fetch_candidates_for_user_async(
                 search_results_per_interest=search_results_per_interest,
                 target_limit=target_limit,
                 keywords=keywords,
+                hot_cache_dir=hot_cache_dir,
             )
         )
         keys.append("v3")
@@ -1204,6 +1301,9 @@ async def _run_one_user_async(
     last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    user_cache_root: Path | None = None,
+    hard_cache_dir: Path | None = None,
+    hot_cache_dir: Path | None = None,
     min_view_count: int = 0,
     heat_source: str = "rank",
     use_llm_refilter: bool = False,
@@ -1275,12 +1375,39 @@ async def _run_one_user_async(
         search_top_k=search_top_k,
         search_results_per_interest=search_results_per_interest,
         keywords=keywords,
+        hot_cache_dir=hot_cache_dir or data_dir.parent / "hot_cache",
     )
     if not articles:
         return _user_failure(
             user_id=spec.user_id,
             error_code="no_candidates",
             error_detail=f"Fetched 0 articles from providers={providers or 'all'}",
+        )
+    # Some providers return only a card excerpt even after their detail call.
+    # Give every short candidate one final platform-page enrichment attempt
+    # before embeddings/filtering; long bodies are left untouched.
+    enriched = await asyncio.gather(
+        *[asyncio.to_thread(body_enricher.enrich_article, article) for article in articles],
+        return_exceptions=True,
+    )
+    articles = [
+        result if isinstance(result, dict) else article
+        for article, result in zip(articles, enriched)
+    ]
+    searched_articles = list(articles)
+    before_article_filter = len(articles)
+    articles = _sort_article_sources(
+        [article for article in articles if _is_article_candidate(article)]
+    )
+    logger.info(
+        "user %s: article-only source filter kept %d/%d candidates",
+        spec.user_id, len(articles), before_article_filter,
+    )
+    if not articles:
+        return _user_failure(
+            user_id=spec.user_id,
+            error_code="no_article_candidates",
+            error_detail="Fetched candidates, but none came from article sources",
         )
     embedding_service = (
         shared_runtime.get("embedding") if shared_runtime else None
@@ -1308,16 +1435,28 @@ async def _run_one_user_async(
                 heat_source=heat_source,
             )
 
-    # Niche-persona fallback: when the strict sim pre-filter empties the pool,
-    # retry once with sim_threshold=0 so any keyword-adjacent article survives.
-    # Rank-based scoring still ranks them; we just stop pre-filtering by
-    # embedding similarity. Skipped when embedding pass wasn't taken (no
-    # keyword_vectors) or when use_search=False.
+    # Niche fallback is lexical-only: never turn an empty semantic match into
+    # an arbitrary hot-list recommendation. This keeps recall for embedding
+    # edge cases while preventing unrelated trending content from leaking in.
     if use_search and keyword_vectors and not candidates:
+        fallback_tracks = keywords or _spec_tracks(spec)
+        fallback_articles = [
+            article for article in articles
+            if _is_hot_relevant(article, fallback_tracks)
+        ]
+        if not fallback_articles:
+            return _user_failure(
+                user_id=spec.user_id,
+                error_code="no_relevant_candidates",
+                error_detail=(
+                    f"Fetched {len(articles)} articles but none matched "
+                    "the user interests"
+                ),
+            )
         logger.info(
-            "user %s: niche persona, strict sim pre-filter dropped all %d "
-            "articles; retrying with sim_threshold=0",
-            spec.user_id, len(articles),
+            "user %s: strict sim pre-filter dropped all %d articles; "
+            "retrying with %d lexical matches",
+            spec.user_id, len(articles), len(fallback_articles),
         )
         niche_platform = (
             articles[0].get("platform", "juejin")
@@ -1325,7 +1464,7 @@ async def _run_one_user_async(
             else "juejin"
         )
         candidates = await candidate_adapter.to_discovered(
-            articles,
+            fallback_articles,
             platform=niche_platform,
             embedding_service=embedding_service,
             keyword_vectors=keyword_vectors,
@@ -1336,7 +1475,7 @@ async def _run_one_user_async(
         if not any(isinstance(a, dict) and "platform" in a for a in articles):
             if providers and len(providers) == 1:
                 candidates = await candidate_adapter.to_discovered(
-                    articles, platform=providers[0],
+                    fallback_articles, platform=providers[0],
                     embedding_service=embedding_service,
                     keyword_vectors=keyword_vectors,
                     sim_threshold=0.0,
@@ -1452,6 +1591,7 @@ async def _run_one_user_async(
         track_2=spec.track_2,
         persona=spec.persona,
         recommendations=recommendations,
+        searched_articles=searched_articles,
         body_max_chars=body_max_chars,
         search_query_map=search_query_map,
         summary=summary,
@@ -1462,7 +1602,7 @@ def run_one_user(
     spec: user_profile.UserSpec,
     *,
     data_dir: Path,
-    limit: int = 5,
+    limit: int = 15,
     body_max_chars: int = 50_000,
     per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
@@ -1477,6 +1617,9 @@ def run_one_user(
     last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    user_cache_root: Path | None = None,
+    hard_cache_dir: Path | None = None,
+    hot_cache_dir: Path | None = None,
     min_view_count: int = 0,
     heat_source: str = "rank",
     use_llm_refilter: bool = False,
@@ -1490,7 +1633,7 @@ def run_one_user(
     return asyncio.run(
         _run_one_user_async(
             spec,
-            data_dir=data_dir,
+            data_dir=(user_cache_root / spec.user_id / "hard_cache") if user_cache_root else (hard_cache_dir or data_dir),
             limit=limit,
             body_max_chars=body_max_chars,
             per_user_timeout=per_user_timeout,
@@ -1505,7 +1648,9 @@ def run_one_user(
             last30days_config=last30days_config,
             last30days_max_queries=last30days_max_queries,
             use_keyword_extraction=use_keyword_extraction,
-            keyword_cache_dir=keyword_cache_dir,
+            keyword_cache_dir=(user_cache_root / spec.user_id / "keyword_cache") if user_cache_root else keyword_cache_dir,
+            hard_cache_dir=hard_cache_dir,
+            hot_cache_dir=hot_cache_dir,
             min_view_count=min_view_count,
             heat_source=heat_source,
             use_llm_refilter=use_llm_refilter,
@@ -1518,8 +1663,8 @@ async def run_all_users(
     *,
     specs: list[user_profile.UserSpec],
     data_dir: Path,
-    max_parallel: int = 5,
-    limit: int = 5,
+    max_parallel: int = 3,
+    limit: int = 15,
     body_max_chars: int = 50_000,
     per_user_timeout: float = 180.0,
     providers: list[str] | None = None,
@@ -1535,6 +1680,9 @@ async def run_all_users(
     last30days_max_queries: int = 3,
     use_keyword_extraction: bool = True,
     keyword_cache_dir: Path | None = None,
+    user_cache_root: Path | None = None,
+    user_round_dirs: dict[str, Path] | None = None,
+    hot_cache_dir: Path | None = None,
     min_view_count: int = 0,
     heat_source: str = "rank",
     use_llm_refilter: bool = False,
@@ -1553,14 +1701,15 @@ async def run_all_users(
             shared_data_dir=data_dir,
             config_path=config_path,
         )
-    sem = asyncio.Semaphore(max_parallel)
+    sem = asyncio.Semaphore(min(max(1, max_parallel), 3))
 
     async def _one(spec: user_profile.UserSpec) -> dict[str, Any]:
         async with sem:
             try:
+                user_root = user_cache_root / spec.user_id if user_cache_root else None
                 return await _run_one_user_async(
                     spec,
-                    data_dir=data_dir,
+                    data_dir=(user_root / "hard_cache") if user_root else data_dir,
                     limit=limit,
                     body_max_chars=body_max_chars,
                     per_user_timeout=per_user_timeout,
@@ -1575,7 +1724,8 @@ async def run_all_users(
                     last30days_config=last30days_config,
                     last30days_max_queries=last30days_max_queries,
                     use_keyword_extraction=use_keyword_extraction,
-                    keyword_cache_dir=keyword_cache_dir,
+                    keyword_cache_dir=(user_root / "keyword_cache") if user_root else keyword_cache_dir,
+                    hot_cache_dir=hot_cache_dir,
                     min_view_count=min_view_count,
                     heat_source=heat_source,
                     use_llm_refilter=use_llm_refilter,
@@ -1607,6 +1757,7 @@ def _user_payload(
     track_2: str,
     persona: str,
     recommendations: list,
+    searched_articles: list[dict[str, Any]],
     body_max_chars: int,
     search_query_map: dict[str, str],
     summary: str,
@@ -1625,7 +1776,9 @@ def _user_payload(
                 "rank": i + 1,
                 "title": r.content.title,
                 "url": r.content.content_url,
+                "source_url": r.content.content_url,
                 "source": r.content.source_platform,
+                "author": r.content.author_name or "",
                 "search_query": search_query_map.get(r.content.content_id, ""),
                 "heat": {
                     "view": int(r.content.view_count),
@@ -1636,11 +1789,32 @@ def _user_payload(
                     "rank": int(r.content.source_rank),
                 },
                 "body_text": (r.content.body_text or "")[:body_max_chars],
+                "body_text_full": r.content.body_text or "",
                 "body_text_length": len(r.content.body_text or ""),
                 "body_truncated": len(r.content.body_text or "") > body_max_chars,
                 "published_at": r.content.published_at or "",
+                "fetched_at": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
             }
             for i, r in enumerate(recommendations)
+        ],
+        "searched_articles": [
+            {
+                "rank": i + 1,
+                "article_id": str(article.get("article_id") or ""),
+                "title": str(article.get("title") or ""),
+                "url": str(article.get("url") or ""),
+                "source_url": str(article.get("source_url") or article.get("url") or ""),
+                "platform": str(article.get("platform") or ""),
+                "author": str(article.get("author") or ""),
+                "body": str(article.get("body_text") or ""),
+                "body_chars": len(str(article.get("body_text") or "")),
+                "body_fetch_status": str(article.get("body_fetch_status") or ""),
+                "content_type": str(article.get("content_type") or ""),
+                "search_query": str(article.get("search_query") or ""),
+                "published_at": str(article.get("published_at") or ""),
+                "heat": article.get("heat") or {},
+            }
+            for i, article in enumerate(searched_articles)
         ],
         "summary": summary,
     }

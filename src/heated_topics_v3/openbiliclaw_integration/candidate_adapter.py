@@ -13,12 +13,43 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_FIELDS = ("article_id", "title", "url", "body_text")
 
-# Sources whose articles can't satisfy our "article body" contract: bilibili
-# and douyin only carry descriptions (video platforms — no full body text),
-# xiaohongshu needs login (public crawl returns nothing). This is a safety net
+# Sources whose items can't satisfy our "article body" contract. Bilibili is
+# intentionally allowed: last30days supplies a stable Bilibili source and its
+# fetched description is useful creator reference material. Douyin and XHS
+# remain blocked because they do not reliably expose usable public text.
 # — callers should normally exclude these from the driver config; the filter
 # here protects against accidentally re-enabling them via `provider=` overrides.
-BLOCKED_SOURCES: frozenset[str] = frozenset({"bilibili", "douyin", "xiaohongshu"})
+BLOCKED_SOURCES: frozenset[str] = frozenset({"douyin", "xiaohongshu"})
+
+_NON_REFERENCE_MARKERS = (
+    "资源分享", "资料分享", "网盘", "百度网盘", "夸克网盘", "下载链接",
+    "提取码", "合集分享", "求资源", "求推荐", "讨论帖", "话题讨论",
+    "大家怎么看", "你怎么看", "欢迎讨论", "评论区讨论", "投票",
+)
+
+
+def _is_reference_article(raw: dict[str, Any]) -> bool:
+    """Reject obvious sharing/discussion posts before embedding and ranking.
+
+    This is deliberately conservative and title-led: a single marker in the
+    title is enough, while body-only mentions are ignored to avoid dropping a
+    genuine article that discusses a resource or public reaction.
+    """
+    title = str(raw.get("title") or "").strip().casefold()
+    return not any(marker.casefold() in title for marker in _NON_REFERENCE_MARKERS)
+
+
+def _reference_quality_factor(raw: dict[str, Any]) -> float:
+    """Soft-demote thin content while keeping it available as a fallback."""
+    body = str(raw.get("body_text") or "").strip()
+    compact = "".join(body.split())
+    paragraphs = [part for part in body.splitlines() if part.strip()]
+    # Tiny fixture/title-only fallbacks retain the legacy rank score so the
+    # adapter remains backward-compatible; real but thin text is demoted.
+    has_sentence_boundary = any(mark in body for mark in "。！？.!?")
+    if 8 < len(compact) < 80 and len(paragraphs) < 2 and not has_sentence_boundary:
+        return 0.35
+    return 1.0
 
 # Floor mirrors the OpenBiliClaw engine: classification_failed rows use 0.01
 # so callers can distinguish "never evaluated" from "evaluated but low score".
@@ -105,6 +136,14 @@ async def to_discovered(
         missing = [f for f in _REQUIRED_FIELDS if not raw.get(f)]
         if missing:
             continue
+        title_compact = "".join(str(raw.get("title") or "").split()).casefold()
+        body_compact = "".join(str(raw.get("body_text") or "").split()).casefold()
+        if len(title_compact) >= 2 and title_compact and body_compact == title_compact:
+            logger.debug("dropping %r: body is title-only", raw.get("article_id"))
+            continue
+        if not _is_reference_article(raw):
+            logger.debug("dropping %r: non-reference title", raw.get("article_id"))
+            continue
         raw_platform = raw.get("platform") or platform
         if raw_platform in BLOCKED_SOURCES or platform in BLOCKED_SOURCES:
             logger.debug(
@@ -143,6 +182,7 @@ async def to_discovered(
                 continue
         else:
             score = _rank_to_relevance(rank)
+        score *= _reference_quality_factor(raw)
 
         item = DiscoveredContent(
             title=str(raw["title"]),

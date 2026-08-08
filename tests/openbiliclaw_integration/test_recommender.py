@@ -72,7 +72,7 @@ def test_run_one_user_returns_recommendations(tmp_path: Path) -> None:
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(
             recommender, "_fetch_candidates_for_user_async",
-            AsyncMock(return_value=[_mock_article()]),
+            AsyncMock(return_value=[_mock_article(title="鍙ゅ吀鏂囧鐩稿叧")]),
         ),
     ):
         result = recommender.run_one_user(
@@ -120,7 +120,7 @@ def test_run_one_user_timeout_returns_error(tmp_path: Path) -> None:
         patch.object(recommender, "build_recommender", return_value=mock_engine),
         patch.object(
             recommender, "_fetch_candidates_for_user_async",
-            AsyncMock(return_value=[_mock_article()]),
+            AsyncMock(return_value=[_mock_article(title="鍙ゅ吀文學相关")]),
         ),
     ):
         result = recommender.run_one_user(
@@ -512,10 +512,8 @@ def test_is_hot_relevant_keyword_match() -> None:
     )
 
 
-def test_fetch_candidates_prefer_search_drops_irrelevant_hot_when_search_yields_plenty() -> None:
-    """When search produces many items (>= target_limit * 4), prefer_search
-    drops ALL hot items regardless of relevance.
-    """
+def test_fetch_candidates_keeps_hot_before_search_backfill() -> None:
+    """Search supplements the hot list instead of replacing it."""
     spec = _build_search_spec()
 
     class ManySearchProvider:
@@ -562,13 +560,10 @@ def test_fetch_candidates_prefer_search_drops_irrelevant_hot_when_search_yields_
             search_top_k=2, target_limit=5, prefer_search=True,
         )
     urls = [a["url"] for a in articles]
-    assert all("hot.com" not in u for u in urls), urls
-    assert all(a.get("search_query") for a in articles)
-    # 2 tracks x 5 (capped by search_results_per_interest) = 10 search
-    # < plenty (20), so the "enough" branch runs. None of the hot items
-    # mention either "AI" or "副业", so relevant_hot = [] and only the 10
-    # search items remain.
-    assert len(articles) == 10
+    assert urls[:3] == [
+        "https://hot.com/h1", "https://hot.com/h2", "https://hot.com/h3",
+    ]
+    assert any(a.get("search_query") for a in articles[3:])
 
 
 def test_fetch_candidates_prefer_search_backfills_when_search_is_thin() -> None:
@@ -620,11 +615,11 @@ def test_fetch_candidates_prefer_search_backfills_when_search_is_thin() -> None:
     search_urls = [u for u in urls if "search.com" in u]
     relevant_hot_urls = [u for u in urls if "r.com" in u]
     other_hot_urls = [u for u in urls if "o.com" in u]
-    # 1 search + 2 relevant_hot + ≥1 other_hot
+    # Hot list is first; search is appended only to supplement it.
     assert len(search_urls) == 1
     assert len(relevant_hot_urls) == 2
     assert len(other_hot_urls) >= 1
-    assert urls[0].endswith("/search.com/1")
+    assert urls[0].endswith("/r.com/1")
 
 
 def test_fetch_candidates_no_prefer_search_keeps_all_hot() -> None:
@@ -909,7 +904,7 @@ def test_run_one_user_niche_persona_retries_with_zero_threshold(
         ),
         patch.object(
             recommender, "_fetch_candidates_for_user_async",
-            AsyncMock(return_value=[_mock_article()]),
+            AsyncMock(return_value=[_mock_article(title="古典文学相关")]),
         ),
         patch.object(candidate_adapter, "to_discovered", spy),
     ):
@@ -1088,3 +1083,10 @@ def test_run_one_user_has_empty_summary_when_no_search_query(tmp_path: Path) -> 
 
     assert result["summary"] == ""
     assert fake_runtime["llm"].complete_with_core_memory.call_count == 0
+def test_article_source_filter_keeps_xiaohongshu_text_and_drops_video() -> None:
+    assert recommender._is_article_candidate(
+        {"platform": "xiaohongshu", "content_type": "note", "title": "非遗手艺", "body_text": "正文"}
+    )
+    assert not recommender._is_article_candidate(
+        {"platform": "xiaohongshu", "content_type": "video", "title": "非遗手艺", "body_text": "正文"}
+    )

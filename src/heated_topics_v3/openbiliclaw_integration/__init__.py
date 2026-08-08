@@ -13,5 +13,6 @@ __all__ = [
     "output",
     "recommender",
     "runtime",
+    "service",
     "user_profile",
 ]

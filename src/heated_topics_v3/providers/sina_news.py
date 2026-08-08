@@ -152,8 +152,15 @@ class SinaNewsProvider:
             raise ProviderContractError("sina search response must be a JSON object")
         result = payload.get("result")
         rows = result.get("data") if isinstance(result, dict) else payload.get("data")
+        if isinstance(rows, dict):
+            rows = rows.get("list") or rows.get("data") or rows.get("items")
+        if rows is None and isinstance(payload.get("data"), dict):
+            data = payload["data"]
+            rows = data.get("list") or data.get("data") or data.get("items")
         if not isinstance(rows, list):
-            raise ProviderContractError("invalid sina search response")
+            # The live endpoint legitimately returns ``list: null`` when
+            # there are no matches or the query is temporarily throttled.
+            return ()
         items = []
         for row in rows:
             if not isinstance(row, dict):
