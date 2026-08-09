@@ -45,6 +45,24 @@ def recommend_user(
         user_id=user_id, track_1=track_1, track_2=track_2, persona=persona,
     )
     root = Path(run_dir)
+    source = str(options.get("source", "v3-hotlist"))
+    if source in ("last30days", "both") and not options.get("last30days_config"):
+        from .cli import _default_last30days_cli_path
+
+        cli_path = _default_last30days_cli_path()
+        if cli_path is None:
+            raise FileNotFoundError(
+                "last30days is enabled but scripts/last30days.py was not found. "
+                "Set LAST30DAYS_CLI_PATH or pass last30days_config explicitly."
+            )
+        options["last30days_config"] = {
+            "cli_path": str(cli_path),
+            "days": int(options.pop("last30days_days", 30)),
+            "fetch_bodies": bool(options.pop("last30days_fetch_bodies", True)),
+            "timeout": float(options.pop("last30days_timeout", 120.0)),
+            "save_dir": str(root / "last30days"),
+            "platforms": (),
+        }
     user_dir = root / user_id
     round_dir = _next_round(user_dir)
     payload = recommender.run_one_user(

@@ -51,6 +51,28 @@ def test_recommendation_service_interface_contract(tmp_path, monkeypatch):
     assert Path(result["round_dir"]).joinpath("outputs/input.json").exists()
 
 
+def test_recommend_user_auto_configures_last30days(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(spec, **kwargs):
+        captured.update(kwargs)
+        return {
+            "user_id": spec.user_id,
+            "input": {"track_1": spec.track_1, "track_2": spec.track_2, "persona": spec.persona},
+            "recommendations": [], "searched_articles": [], "summary": "",
+        }
+
+    monkeypatch.setattr(service.recommender, "run_one_user", fake_run)
+    monkeypatch.setattr(
+        "heated_topics_v3.openbiliclaw_integration.cli._default_last30days_cli_path",
+        lambda: Path("C:/tmp/last30days.py"),
+    )
+    service.recommend_user(
+        user_id="u_l30", track_1="旅行", run_dir=tmp_path, source="both",
+    )
+    assert captured["last30days_config"]["cli_path"] == "C:\\tmp\\last30days.py"
+
+
 def test_service_serializes_same_user_and_caps_concurrency(monkeypatch, tmp_path):
     active = 0
     peak = 0
