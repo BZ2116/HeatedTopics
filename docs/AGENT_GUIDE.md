@@ -141,12 +141,20 @@ Copy-Item .env.example .env
 最小配置示例：
 
 ```env
-OPENBILICLAW_LLM_API_KEY=your-key
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=your-llm-key
+HT_LLM_BASE_URL=https://your-llm-provider.example/v1
+HT_LLM_MODEL=your-chat-model
+
+HT_EMBEDDING_PROVIDER=ollama
+HT_EMBEDDING_MODEL=bge-m3
 ZHIHU_COOKIE=your-zhihu-cookie
 LAST30DAYS_CLI_PATH=
 ```
 
-更推荐使用通用模型配置：
+用户只需要填写一个 LLM 和一个 embedding。平台 Cookie、last30days 路径以及其他搜索平台 key 按实际启用的数据源填写。
+
+通用模型配置：
 
 ```env
 HT_LLM_PROVIDER=openai_compatible
@@ -158,7 +166,7 @@ HT_EMBEDDING_PROVIDER=ollama
 HT_EMBEDDING_MODEL=bge-m3
 ```
 
-优先级：`HT_*` 环境变量高于 `LLM_*` / `EMBEDDING_*` 别名，也高于配置文件中对应字段。
+优先级：`HT_*` 环境变量高于配置文件中对应字段。旧的 `MINIMAX_*`、`OPENAI_*` 变量仅为历史兼容，不应再加入新的部署配置。
 
 绝对禁止把 `.env`、Cookie、API key、运行缓存和用户推荐结果提交到 Git。
 

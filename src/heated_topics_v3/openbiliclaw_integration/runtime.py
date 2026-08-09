@@ -128,8 +128,17 @@ def verify_patch() -> None:
 def check_env() -> list[str]:
     """Check required environment variables. Returns list of missing names."""
     missing: list[str] = []
-    if not os.environ.get("OPENBILICLAW_LLM_API_KEY"):
-        missing.append("OPENBILICLAW_LLM_API_KEY")
+    if not any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "HT_LLM_API_KEY",
+            "LLM_API_KEY",
+            "OPENBILICLAW_LLM_API_KEY",
+            "OPENAI_API_KEY",
+            "MINIMAX_API_KEY",
+        )
+    ):
+        missing.append("HT_LLM_API_KEY (or a compatible legacy LLM API key)")
     return missing
 
 
