@@ -10,6 +10,47 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+def configure_model_env(config: Any) -> Any:
+    """Apply provider-neutral model environment variables to an OpenBiliClaw config.
+
+    ``HT_*`` names are preferred; common ``LLM_*`` / ``EMBEDDING_*`` aliases
+    are accepted for easy integration with existing deployments. Explicit
+    TOML values remain valid and are only replaced when an environment value
+    is present.
+    """
+    llm_provider = os.getenv("HT_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "")).strip().lower()
+    llm_key = os.getenv("HT_LLM_API_KEY", os.getenv("LLM_API_KEY", os.getenv("OPENBILICLAW_LLM_API_KEY", ""))).strip()
+    llm_model = os.getenv("HT_LLM_MODEL", os.getenv("LLM_MODEL", "")).strip()
+    llm_base = os.getenv("HT_LLM_BASE_URL", os.getenv("LLM_BASE_URL", "")).strip()
+    if llm_provider or llm_key or llm_model or llm_base:
+        provider = llm_provider or str(config.llm.default_provider or "openai_compatible").lower()
+        if provider not in {"openai", "claude", "gemini", "deepseek", "ollama", "openrouter", "openai_compatible"}:
+            provider = "openai_compatible"
+        config.llm.default_provider = provider
+        provider_cfg = getattr(config.llm, provider)
+        if llm_key:
+            provider_cfg.api_key = llm_key
+        if llm_model:
+            provider_cfg.model = llm_model
+        if llm_base:
+            provider_cfg.base_url = llm_base
+
+    emb_provider = os.getenv("HT_EMBEDDING_PROVIDER", os.getenv("EMBEDDING_PROVIDER", "")).strip().lower()
+    emb_key = os.getenv("HT_EMBEDDING_API_KEY", os.getenv("EMBEDDING_API_KEY", "")).strip()
+    emb_model = os.getenv("HT_EMBEDDING_MODEL", os.getenv("EMBEDDING_MODEL", "")).strip()
+    emb_base = os.getenv("HT_EMBEDDING_BASE_URL", os.getenv("EMBEDDING_BASE_URL", "")).strip()
+    if emb_provider or emb_key or emb_model or emb_base:
+        if emb_provider:
+            config.llm.embedding.provider = emb_provider
+        if emb_key:
+            config.llm.embedding.api_key = emb_key
+        if emb_model:
+            config.llm.embedding.model = emb_model
+        if emb_base:
+            config.llm.embedding.base_url = emb_base
+    return config
+
+
 def load_openbiliclaw_config(path: str | Path) -> Any | None:
     """Load an OpenBiliClaw config.toml. Returns None on missing file.
 
@@ -60,7 +101,7 @@ def load_openbiliclaw_config(path: str | Path) -> Any | None:
     if not config.llm.embedding.provider.strip():
         config.llm.embedding.provider = "ollama"
         config.llm.embedding.model = "bge-m3"
-    return config
+    return configure_model_env(config)
 
 
 def verify_patch() -> None:

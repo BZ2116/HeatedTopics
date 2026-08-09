@@ -24,6 +24,30 @@ def test_load_openbiliclaw_config_returns_none_on_missing(tmp_path: Path) -> Non
     assert runtime.load_openbiliclaw_config(tmp_path / "nope.toml") is None
 
 
+def test_configure_model_env_supports_generic_llm_and_embedding(monkeypatch) -> None:
+    from openbiliclaw.config import Config
+    from heated_topics_v3.openbiliclaw_integration import runtime
+
+    monkeypatch.setenv("HT_LLM_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("HT_LLM_API_KEY", "llm-key")
+    monkeypatch.setenv("HT_LLM_BASE_URL", "https://llm.example/v1")
+    monkeypatch.setenv("HT_LLM_MODEL", "chat-model")
+    monkeypatch.setenv("HT_EMBEDDING_PROVIDER", "openai_compatible")
+    monkeypatch.setenv("HT_EMBEDDING_API_KEY", "emb-key")
+    monkeypatch.setenv("HT_EMBEDDING_BASE_URL", "https://emb.example/v1")
+    monkeypatch.setenv("HT_EMBEDDING_MODEL", "embed-model")
+
+    cfg = runtime.configure_model_env(Config())
+    assert cfg.llm.default_provider == "openai_compatible"
+    assert cfg.llm.openai_compatible.api_key == "llm-key"
+    assert cfg.llm.openai_compatible.base_url == "https://llm.example/v1"
+    assert cfg.llm.openai_compatible.model == "chat-model"
+    assert cfg.llm.embedding.provider == "openai_compatible"
+    assert cfg.llm.embedding.api_key == "emb-key"
+    assert cfg.llm.embedding.base_url == "https://emb.example/v1"
+    assert cfg.llm.embedding.model == "embed-model"
+
+
 def test_load_openbiliclaw_config_normalizes_instance_keys_to_lowercase(
     tmp_path: Path, monkeypatch
 ) -> None:

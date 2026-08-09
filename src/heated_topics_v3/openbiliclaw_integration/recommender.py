@@ -1222,15 +1222,17 @@ def _build_shared_runtime(
         config = Config()
         config.llm.default_provider = "openai_compatible"
         config.llm.openai_compatible = LLMProviderConfig(
-            api_key=os.environ["OPENBILICLAW_LLM_API_KEY"],
+            api_key=os.environ.get("OPENBILICLAW_LLM_API_KEY", ""),
             model="MiniMax-M2.7",
             base_url="https://api.minimaxi.com/v1",
         )
         config.llm.embedding.provider = "ollama"
         config.llm.embedding.model = "bge-m3"
+        runtime.configure_model_env(config)
     elif not config.llm.embedding.provider.strip():
         config.llm.embedding.provider = "ollama"
         config.llm.embedding.model = "bge-m3"
+        runtime.configure_model_env(config)
 
     registry = build_llm_registry(config)
     llm_service = LLMService(registry=registry, memory=memory_manager)

@@ -41,6 +41,20 @@ OPENBILICLAW_LLM_API_KEY=你的模型API_KEY
 ZHIHU_COOKIE=你的知乎Cookie
 ```
 
+LLM 和 embedding 不再绑定 MiniMax 与 Ollama。可以使用统一环境变量适配不同厂商：
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=你的LLM_KEY
+HT_LLM_BASE_URL=https://你的兼容接口/v1
+HT_LLM_MODEL=你的模型名
+
+HT_EMBEDDING_PROVIDER=ollama
+HT_EMBEDDING_MODEL=bge-m3
+```
+
+支持的 embedding provider 由当前 OpenBiliClaw 版本决定，通常包括 `ollama`、`openai`、`openai_compatible`、`gemini`、`openrouter` 和 `dashscope`。也可以直接在 `config/openbiliclaw.toml` 中配置；环境变量只覆盖对应字段。
+
 正文和搜索能力依赖各平台的网络可访问性。使用关键词提取和相关性排序时，还需要保证 Ollama 正常运行，并准备配置文件中的 embedding 模型，例如：
 
 ```powershell
