@@ -10,12 +10,13 @@ from unittest.mock import patch
 from heated_topics_v3.openbiliclaw_integration import last30days_source
 
 
-def test_run_invokes_cli_with_expected_flags(tmp_path: Path) -> None:
+def test_run_invokes_cli_with_expected_flags(tmp_path: Path, monkeypatch) -> None:
     fake_stdout = json.dumps({"topic": "测试", "weibo": []})
     fake_json_path = tmp_path / "report.json"
     fake_json_path.write_text(fake_stdout, encoding="utf-8")
 
     fake_cli = tmp_path / "last30days.py"
+    monkeypatch.setattr(last30days_source, "_cli_supports_flag", lambda *a, **k: True)
     with patch.object(last30days_source, "_run_subprocess") as mock_run:
         mock_run.return_value = fake_json_path
         out = last30days_source.run(
@@ -40,6 +41,19 @@ def test_run_invokes_cli_with_expected_flags(tmp_path: Path) -> None:
     assert "--emit" in cmd and "json" in cmd
     assert "--save-dir" in cmd and str(tmp_path) in cmd
     assert "--timeout" in cmd
+
+
+def test_run_skips_fetch_bodies_for_older_cli(tmp_path: Path, monkeypatch) -> None:
+    report = tmp_path / "report.json"
+    report.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(last30days_source, "_cli_supports_flag", lambda *a, **k: False)
+    with patch.object(last30days_source, "_run_subprocess") as mock_run:
+        mock_run.return_value = report
+        last30days_source.run(
+            cli_path=tmp_path / "last30days.py", query="test", days=30,
+            save_dir=tmp_path, fetch_bodies=True, platforms=(), timeout=30,
+        )
+        assert "--fetch-bodies" not in mock_run.call_args.args[0]
 
 
 def test_run_raises_on_missing_output(tmp_path: Path) -> None:

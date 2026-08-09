@@ -29,6 +29,20 @@ logger = logging.getLogger(__name__)
 _REPORT_FILENAME = "report.json"
 
 
+def _cli_supports_flag(cli_path: Path, flag: str, *, timeout: float = 10.0) -> bool:
+    """Check an external CLI flag so older last30days checkouts remain usable."""
+    try:
+        result = subprocess.run(
+            [sys.executable, str(cli_path), "--help"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=timeout, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("cannot inspect last30days CLI capabilities: %s", exc)
+        return False
+    return flag in f"{result.stdout}\n{result.stderr}"
+
+
 def run(
     *,
     cli_path: Path,
@@ -54,8 +68,13 @@ def run(
         "--save-dir", str(save_dir),
         "--timeout", str(int(timeout)),
     ]
-    if fetch_bodies:
+    if fetch_bodies and _cli_supports_flag(cli_path, "--fetch-bodies"):
         cmd.append("--fetch-bodies")
+    elif fetch_bodies:
+        logger.warning(
+            "last30days CLI %s does not support --fetch-bodies; continuing without body fetching",
+            cli_path,
+        )
     if platforms:
         cmd.extend(["--search", ",".join(platforms)])
 
