@@ -16,10 +16,8 @@ _REQUIRED_FIELDS = ("article_id", "title", "url", "body_text")
 # Sources whose items can't satisfy our "article body" contract. Bilibili is
 # intentionally allowed: last30days supplies a stable Bilibili source and its
 # fetched description is useful creator reference material. Douyin and XHS
-# remain blocked because they do not reliably expose usable public text.
-# — callers should normally exclude these from the driver config; the filter
-# here protects against accidentally re-enabling them via `provider=` overrides.
-BLOCKED_SOURCES: frozenset[str] = frozenset({"douyin", "xiaohongshu"})
+# Some platforms expose mixed item types. Platform support is retained here;
+# article-type filtering happens after normalization in the recommender.
 
 _NON_REFERENCE_MARKERS = (
     "资源分享", "资料分享", "网盘", "百度网盘", "夸克网盘", "下载链接",
@@ -144,13 +142,9 @@ async def to_discovered(
         if not _is_reference_article(raw):
             logger.debug("dropping %r: non-reference title", raw.get("article_id"))
             continue
-        raw_platform = raw.get("platform") or platform
-        if raw_platform in BLOCKED_SOURCES or platform in BLOCKED_SOURCES:
-            logger.debug(
-                "dropping %r: blocked platform=%r",
-                raw.get("article_id"), raw_platform,
-            )
-            continue
+        # Platform availability is not an article-type decision. A platform
+        # may contain both articles and videos/posts; item-type filtering is
+        # handled by the recommender before this adapter is called.
         heat = raw.get("heat") or {}
         rank = int(heat.get("rank", 0))
         view_count = int(heat.get("view", 0))

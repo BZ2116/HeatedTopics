@@ -88,7 +88,10 @@ _ARTICLE_SOURCE_PRIORITY: dict[str, int] = {
     "baidu": 20,
     "wechat": 21,
 }
-_NON_ARTICLE_SOURCES = frozenset({"bilibili", "douyin", "weibo"})
+_NON_ARTICLE_TYPES = frozenset({
+    "video", "short_video", "live", "post", "discussion", "question",
+    "social_post", "动态",
+})
 
 # Per user: take the top-K interests (by weight) and search each on each
 # search-enabled provider. 3 × 3 = 9 (provider, interest) pairs; with
@@ -482,15 +485,23 @@ def _is_hot_relevant(article: dict[str, Any], tracks: list[str]) -> bool:
 
 
 def _is_article_candidate(article: dict[str, Any]) -> bool:
-    """Keep article-like sources only; reject videos and social posts."""
+    return _is_article_item_candidate(article)
+
+def _is_article_item_candidate(article: dict[str, Any]) -> bool:
+    """Filter item types, without excluding an entire platform."""
     platform = str(article.get("platform") or "").casefold()
-    if platform in _NON_ARTICLE_SOURCES:
+    content_type = str(article.get("content_type") or "").casefold().strip()
+    if content_type in _NON_ARTICLE_TYPES:
         return False
-    if platform == "xiaohongshu":
-        content_type = str(article.get("content_type") or "").casefold()
-        title = str(article.get("title") or "").casefold()
-        video_markers = ("视频", "video", "直播", "vlog")
-        return not any(marker in content_type or marker in title for marker in video_markers)
+    if content_type in {"article", "column", "news", "longform", "图文"}:
+        return True
+    url = str(article.get("url") or "").casefold()
+    title = str(article.get("title") or "").casefold()
+    media_markers = ("/video", "/live", "b23.tv", "douyin.com/video", "vlog", "视频", "直播")
+    if any(marker in url or marker in title for marker in media_markers):
+        return False
+    if platform in {"bilibili", "douyin"} and not article.get("body_text"):
+        return False
     return True
 
 
@@ -1399,7 +1410,7 @@ async def _run_one_user_async(
     searched_articles = list(articles)
     before_article_filter = len(articles)
     articles = _sort_article_sources(
-        [article for article in articles if _is_article_candidate(article)]
+        [article for article in articles if _is_article_item_candidate(article)]
     )
     logger.info(
         "user %s: article-only source filter kept %d/%d candidates",

@@ -403,8 +403,8 @@ def test_to_discovered_drops_unusable_sources() -> None:
     assert "weibo:1" in ids
     assert "zhihu:1" in ids
     assert "bili:1" in ids
-    assert "dy:1" not in ids
-    assert "xhs:1" not in ids
+    assert "dy:1" in ids
+    assert "xhs:1" in ids
 
 
 def test_to_discovered_allows_bilibili_platform_kwarg() -> None:
@@ -421,16 +421,10 @@ def test_to_discovered_allows_bilibili_platform_kwarg() -> None:
     assert [item.content_id for item in items] == ["1"]
 
 
-def test_blocked_sources_constant_covers_video_platforms() -> None:
+def test_platforms_are_not_removed_by_a_global_block_set() -> None:
     """Sanity check on the module-level constant — guards against typos
     that would silently re-enable blocked platforms."""
-    assert "bilibili" not in candidate_adapter.BLOCKED_SOURCES
-    assert "douyin" in candidate_adapter.BLOCKED_SOURCES
-    assert "xiaohongshu" in candidate_adapter.BLOCKED_SOURCES
-    # Article sources must NOT be in the block set.
-    assert "weibo" not in candidate_adapter.BLOCKED_SOURCES
-    assert "zhihu" not in candidate_adapter.BLOCKED_SOURCES
-    assert "juejin" not in candidate_adapter.BLOCKED_SOURCES
+    assert not hasattr(candidate_adapter, "BLOCKED_SOURCES")
 
 
 def test_to_discovered_drops_resource_and_discussion_posts() -> None:

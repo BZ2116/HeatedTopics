@@ -1090,3 +1090,22 @@ def test_article_source_filter_keeps_xiaohongshu_text_and_drops_video() -> None:
     assert not recommender._is_article_candidate(
         {"platform": "xiaohongshu", "content_type": "video", "title": "非遗手艺", "body_text": "正文"}
     )
+
+
+def test_article_filter_keeps_article_items_from_video_capable_platforms() -> None:
+    assert recommender._is_article_item_candidate({
+        "platform": "bilibili", "content_type": "article",
+        "title": "传统工艺文章", "body_text": "正文",
+    })
+    assert recommender._is_article_item_candidate({
+        "platform": "weibo", "content_type": "article",
+        "title": "地方民俗文章", "body_text": "正文",
+    })
+    assert not recommender._is_article_item_candidate({
+        "platform": "bilibili", "content_type": "video",
+        "title": "传统工艺", "body_text": "视频介绍",
+    })
+    assert not recommender._is_article_item_candidate({
+        "platform": "weibo", "content_type": "post",
+        "title": "讨论一下", "body_text": "帖子内容",
+    })
