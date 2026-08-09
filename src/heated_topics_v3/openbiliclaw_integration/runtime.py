@@ -18,10 +18,22 @@ def configure_model_env(config: Any) -> Any:
     TOML values remain valid and are only replaced when an environment value
     is present.
     """
-    llm_provider = os.getenv("HT_LLM_PROVIDER", os.getenv("LLM_PROVIDER", "")).strip().lower()
-    llm_key = os.getenv("HT_LLM_API_KEY", os.getenv("LLM_API_KEY", os.getenv("OPENBILICLAW_LLM_API_KEY", ""))).strip()
-    llm_model = os.getenv("HT_LLM_MODEL", os.getenv("LLM_MODEL", "")).strip()
-    llm_base = os.getenv("HT_LLM_BASE_URL", os.getenv("LLM_BASE_URL", "")).strip()
+    def first_env(*names: str) -> str:
+        for name in names:
+            value = os.getenv(name, "").strip()
+            if value:
+                return value
+        return ""
+
+    llm_provider = first_env("HT_LLM_PROVIDER", "LLM_PROVIDER").lower()
+    llm_key = first_env(
+        "HT_LLM_API_KEY", "LLM_API_KEY", "OPENBILICLAW_LLM_API_KEY",
+        "OPENAI_API_KEY", "MINIMAX_API_KEY",
+    )
+    llm_model = first_env("HT_LLM_MODEL", "LLM_MODEL", "OPENAI_MODEL", "MINIMAX_MODEL")
+    llm_base = first_env("HT_LLM_BASE_URL", "LLM_BASE_URL", "OPENAI_BASE_URL", "MINIMAX_BASE_URL")
+    if not llm_provider:
+        llm_provider = "openai_compatible" if llm_base else ""
     if llm_provider or llm_key or llm_model or llm_base:
         provider = llm_provider or str(config.llm.default_provider or "openai_compatible").lower()
         if provider not in {"openai", "claude", "gemini", "deepseek", "ollama", "openrouter", "openai_compatible"}:
@@ -35,10 +47,10 @@ def configure_model_env(config: Any) -> Any:
         if llm_base:
             provider_cfg.base_url = llm_base
 
-    emb_provider = os.getenv("HT_EMBEDDING_PROVIDER", os.getenv("EMBEDDING_PROVIDER", "")).strip().lower()
-    emb_key = os.getenv("HT_EMBEDDING_API_KEY", os.getenv("EMBEDDING_API_KEY", "")).strip()
-    emb_model = os.getenv("HT_EMBEDDING_MODEL", os.getenv("EMBEDDING_MODEL", "")).strip()
-    emb_base = os.getenv("HT_EMBEDDING_BASE_URL", os.getenv("EMBEDDING_BASE_URL", "")).strip()
+    emb_provider = first_env("HT_EMBEDDING_PROVIDER", "EMBEDDING_PROVIDER").lower()
+    emb_key = first_env("HT_EMBEDDING_API_KEY", "EMBEDDING_API_KEY")
+    emb_model = first_env("HT_EMBEDDING_MODEL", "EMBEDDING_MODEL")
+    emb_base = first_env("HT_EMBEDDING_BASE_URL", "EMBEDDING_BASE_URL")
     if emb_provider or emb_key or emb_model or emb_base:
         if emb_provider:
             config.llm.embedding.provider = emb_provider

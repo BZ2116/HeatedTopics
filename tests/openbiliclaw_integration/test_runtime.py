@@ -48,6 +48,23 @@ def test_configure_model_env_supports_generic_llm_and_embedding(monkeypatch) -> 
     assert cfg.llm.embedding.model == "embed-model"
 
 
+def test_configure_model_env_does_not_let_blank_ht_values_hide_legacy(monkeypatch) -> None:
+    from openbiliclaw.config import Config
+    from heated_topics_v3.openbiliclaw_integration import runtime
+
+    monkeypatch.setenv("HT_LLM_API_KEY", "")
+    monkeypatch.setenv("HT_LLM_BASE_URL", "")
+    monkeypatch.setenv("HT_LLM_MODEL", "")
+    monkeypatch.setenv("MINIMAX_API_KEY", "legacy-key")
+    monkeypatch.setenv("MINIMAX_BASE_URL", "https://legacy.example/v1")
+    monkeypatch.setenv("MINIMAX_MODEL", "legacy-model")
+
+    cfg = runtime.configure_model_env(Config())
+    assert cfg.llm.openai_compatible.api_key == "legacy-key"
+    assert cfg.llm.openai_compatible.base_url == "https://legacy.example/v1"
+    assert cfg.llm.openai_compatible.model == "legacy-model"
+
+
 def test_load_openbiliclaw_config_normalizes_instance_keys_to_lowercase(
     tmp_path: Path, monkeypatch
 ) -> None:

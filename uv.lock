@@ -1225,7 +1225,7 @@ wheels = [
 [[package]]
 name = "openbiliclaw"
 version = "0.3.201+heatedtopics.1"
-source = { git = "https://github.com/BZ2116/OpenBiliClaw.git?rev=feature%2Fheatedtopics-external-candidates#25c2f9556c4486afa9f61a5709533d49d4ec9813" }
+source = { git = "https://github.com/BZ2116/OpenBiliClaw.git?rev=feature%2Fheatedtopics-external-candidates#cf7a1c9ee0240d628d20c5b68744fba2eb81ae56" }
 dependencies = [
     { name = "anthropic" },
     { name = "apscheduler" },
