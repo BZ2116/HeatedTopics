@@ -180,7 +180,27 @@ ollama list
 
 确认模型列表中有 `bge-m3`。
 
-## 7. 运行一个用户
+## 7. 默认运行方式：Python 接口
+
+正式业务调用和其他项目接入，优先使用 Python 接口，不要通过子进程拼接 CLI：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
+
+service = RecommendationService(max_concurrency=3)
+result = await service.recommend_user(
+    user_id="u_001",
+    track_1="旅行攻略",
+    track_2="穷游周末",
+    persona="预算敏感型旅行爱好者。",
+    run_dir="data/run_20260809",
+    source="both",
+)
+```
+
+返回值中的 `recommendations` 可直接用于业务匹配，`round_dir` 指向本次标准文件输出目录。接口已经负责用户级缓存、日期级热榜缓存、轮次目录、最大 3 个并发以及同一用户串行保护。
+
+## 8. CLI 调试和批量运行
 
 当前 CLI 使用 Excel 输入。Excel 字段：
 
@@ -217,7 +237,7 @@ uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
   --limit 15
 ```
 
-## 8. 输出和缓存位置
+## 9. 输出和缓存位置
 
 ```text
 data/run_YYYYMMDD/
@@ -237,7 +257,7 @@ data/run_YYYYMMDD/
 
 同一个用户再次调用生成下一个 round，不覆盖旧结果。`data/` 默认被 Git 忽略，只用于本地运行和验证。
 
-## 9. 外部项目接入
+## 10. 外部项目接入
 
 外部项目优先调用：
 
@@ -257,7 +277,7 @@ result = await service.recommend_user(
 
 不要在外部项目中复制 CLI 参数解析、缓存路径拼接或正文筛选逻辑。并发限制和同一用户串行保护已经由 `RecommendationService` 负责。
 
-## 10. 常见问题排查
+## 11. 常见问题排查
 
 ### OpenBiliClaw 补丁缺失
 
@@ -292,7 +312,7 @@ test -f ../last30days-skill-cn/scripts/last30days.py
 
 检查 `.env` 中 `ZHIHU_COOKIE` 是否仍有效。Cookie 只放本机环境变量，不要写进 README、测试或日志。
 
-## 11. 修改和提交规则
+## 12. 修改和提交规则
 
 修改后至少运行：
 
@@ -318,3 +338,29 @@ git diff --stat
 - 任何 Windows 或 macOS 专属的本地绝对路径。
 
 如果修改 OpenBiliClaw 的推荐引擎，先在 OpenBiliClaw fork 中建立独立分支并推送，再更新 heatedTopics 的 Git 依赖和 `uv.lock`。
+
+## 13. 项目启动最终验收
+
+完成依赖安装、模型配置和启动前检查后，最后必须执行 Python 接口验收测试：
+
+```bash
+uv run pytest tests/openbiliclaw_integration/test_service.py -q
+```
+
+该测试使用隔离的临时目录和模拟推荐引擎，不会调用真实 LLM、embedding 或平台接口，但会验证正式业务入口的关键契约：
+
+- `RecommendationService` 可以接收一个完整用户输入；
+- 用户输入可以转换为内部 `UserSpec`；
+- 用户级 round 目录能够正确生成；
+- `input/input.json` 能够写出；
+- `outputs/` 和推荐结果目录能够写出；
+- 多用户并发上限和同一用户串行锁有效；
+- 当天热榜总结接口能够读取共享缓存并写出结果。
+
+验收成功时应看到类似结果：
+
+```text
+4 passed
+```
+
+如果该测试失败，Agent 不应直接运行真实推荐或修改数据源，应先根据失败信息检查 `service.py`、缓存路径、OpenBiliClaw 安装和 Python 环境。

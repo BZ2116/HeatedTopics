@@ -22,6 +22,35 @@ def test_recommend_user_writes_round_layout(tmp_path, monkeypatch):
     assert Path(result["round_dir"]).joinpath("outputs/recommended").exists()
 
 
+def test_recommendation_service_interface_contract(tmp_path, monkeypatch):
+    """The public async interface accepts one user and persists its round."""
+    def fake_run(spec, **kwargs):
+        return {
+            "user_id": spec.user_id,
+            "input": {"track_1": spec.track_1, "track_2": spec.track_2, "persona": spec.persona},
+            "recommendations": [],
+            "searched_articles": [],
+            "summary": "",
+        }
+
+    monkeypatch.setattr(service.recommender, "run_one_user", fake_run)
+
+    async def run():
+        api = service.RecommendationService(max_concurrency=3)
+        return await api.recommend_user(
+            user_id="u_contract",
+            track_1="文化生活",
+            track_2="非遗与民俗",
+            persona="记录传统文化生活智慧。",
+            run_dir=tmp_path,
+        )
+
+    result = asyncio.run(run())
+    assert result["user_id"] == "u_contract"
+    assert Path(result["round_dir"]).joinpath("input/input.json").exists()
+    assert Path(result["round_dir"]).joinpath("outputs/input.json").exists()
+
+
 def test_service_serializes_same_user_and_caps_concurrency(monkeypatch, tmp_path):
     active = 0
     peak = 0

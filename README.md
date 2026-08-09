@@ -4,7 +4,7 @@
 
 如果你是负责接手、启动或继续开发本项目的 Agent，请先阅读 [Agent 快速接手指南](docs/AGENT_GUIDE.md)。
 
-项目当前最重要的原则是：推荐流程和调用方式分离。终端命令用于本地调试，其他项目接入时应直接调用 Python 接口。
+项目当前最重要的原则是：推荐流程和调用方式分离。Python 接口是默认和主要的运行方式，终端 CLI 仅用于本地调试、批量验证和运维执行。
 
 ## 一、整体流程
 
@@ -83,7 +83,27 @@ LAST30DAYS_CLI_PATH=/your/path/last30days-skill-cn/scripts/last30days.py
 
 程序会自动查找同级目录下的 `last30days-skill-cn/scripts/last30days.py`。也可以通过环境变量 `LAST30DAYS_CLI_PATH` 或命令行参数显式指定路径。路径使用 `/` 或 Python `Path` 规则，不要写死其他电脑的盘符。
 
-## 三、终端运行方式
+## 三、主要运行方式：Python 接口
+
+正式业务流程和其他项目接入，优先调用 `service.py`：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
+
+service = RecommendationService(max_concurrency=3)
+result = await service.recommend_user(
+    user_id="u_001",
+    track_1="旅行攻略",
+    track_2="穷游周末",
+    persona="预算敏感型旅行爱好者。",
+    run_dir="data/run_20260809",
+    source="both",
+)
+```
+
+接口负责缓存、round 目录、标准 JSON 输出、并发上限和同一用户串行保护。
+
+## 四、CLI 调试和批量运行
 
 ### 1. 准备用户 Excel
 
@@ -122,7 +142,7 @@ uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
 
 退出码：`0` 表示全部成功，`1` 表示部分用户失败，`2` 表示参数或环境配置错误，`4` 表示整体执行错误。
 
-## 四、推荐输出目录
+## 五、推荐输出目录
 
 ```text
 data/run_20260808/
@@ -144,7 +164,7 @@ data/run_20260808/
 
 同一个用户再次调用会生成 `round_002`，不会覆盖之前结果。每篇文章的 JSON 至少包含标题、来源和正文；作者、发布时间、阅读量、点赞量、评论量存在时一并保存。
 
-## 五、给其他项目调用
+## 六、给其他项目调用
 
 核心接口位于：
 
@@ -175,7 +195,7 @@ result = recommend_user(
 
 返回值包含 `recommendations`、`searched_articles`、`user_id`、`run_dir` 和本次 `round_dir`。外部项目可以直接读取返回值，也可以读取 `round_dir` 下的标准 JSON 文件。
 
-## 六、并发调用
+## 七、并发调用
 
 如果外部项目会同时触发多个用户，使用 `RecommendationService`：
 
@@ -200,7 +220,7 @@ result = await service.recommend_user(
 3. 不同用户互不影响，一个用户失败不会取消其他用户；
 4. 热榜缓存位于日期层，由所有用户共享。
 
-## 七、当天热榜总结
+## 八、当天热榜总结
 
 推荐流程之外，项目预留了独立的热榜总结接口：
 
@@ -218,7 +238,7 @@ data/run_20260808/daily_summary/summary.json
 
 后续可以在这个接口外层接入 LLM 总结、消息推送、飞书或企业微信，不需要改动用户推荐流程。
 
-## 八、测试
+## 九、测试
 
 运行核心测试：
 
@@ -233,7 +253,7 @@ uv run pytest tests/openbiliclaw_integration tests/providers -q
 - 最大并发数限制；
 - 热榜缓存读取与每日总结输出。
 
-## 九、项目结构
+## 十、项目结构
 
 ```text
 src/heated_topics_v3/openbiliclaw_integration/
