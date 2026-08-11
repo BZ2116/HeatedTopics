@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from heated_topics_v3.clock import SHANGHAI
 from heated_topics_v3.contracts import HotItem, ItemDetail
+from heated_topics_v3.hot_cache_cleaning import clean_records
 from heated_topics_v3.openbiliclaw_integration import (
     candidate_adapter,
     keyword_extractor,
@@ -314,7 +315,7 @@ def _fetch_provider_hot_list_sync(
                 cached = json.loads(cache_path.read_text(encoding="utf-8"))
                 if isinstance(cached, list):
                     logger.info("hot cache hit: %s", cache_path)
-                    return cached
+                    return clean_records(cached)
         except (OSError, ValueError, TypeError):
             logger.warning("invalid hot cache, refetching: %s", cache_path)
     try:
@@ -344,6 +345,7 @@ def _fetch_provider_hot_list_sync(
             article = _hotitem_to_article(item, None, platform)
             if article is not None:
                 out.append(article)
+        out = clean_records(out)
         if cache_path is not None:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
