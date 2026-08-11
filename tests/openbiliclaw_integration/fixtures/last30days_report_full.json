@@ -1,0 +1,119 @@
+{
+  "topic": "AI",
+  "range": {"from": "2026-07-01", "to": "2026-07-31"},
+  "generated_at": "2026-07-31T15:30:00+00:00",
+  "mode": "all",
+  "weibo": [
+    {
+      "id": "W1",
+      "text": "微博AI内容",
+      "url": "https://weibo.com/1",
+      "author_handle": "u1",
+      "date": "2026-07-29",
+      "engagement": {"views": 100, "likes": 5, "comments": 1, "reposts": 0},
+      "relevance": 0.6,
+      "subs": {"relevance": 50, "recency": 50, "engagement": 30},
+      "score": 50,
+      "cross_refs": []
+    }
+  ],
+  "xiaohongshu": [
+    {
+      "id": "X1",
+      "title": "小红书AI笔记",
+      "desc": "这是一条关于AI的笔记",
+      "url": "https://xiaohongshu.com/x1",
+      "author_name": "u2",
+      "date": "2026-07-25",
+      "hashtags": ["AI", "工具"],
+      "engagement": {"views": 800, "likes": 30, "comments": 5},
+      "relevance": 0.7,
+      "subs": {"relevance": 70, "recency": 40, "engagement": 20},
+      "score": 60,
+      "cross_refs": []
+    }
+  ],
+  "bilibili": [
+    {
+      "id": "B1",
+      "title": "B站AI视频",
+      "url": "https://www.bilibili.com/video/BV1abc",
+      "bvid": "BV1abc",
+      "channel_name": "AI频道",
+      "date": "2026-07-27",
+      "description": "详细视频描述",
+      "engagement": {"views": 1000, "danmaku": 10, "likes": 50, "favorites": 20},
+      "relevance": 0.8,
+      "subs": {"relevance": 80, "recency": 50, "engagement": 60},
+      "score": 70,
+      "cross_refs": []
+    }
+  ],
+  "zhihu": [
+    {
+      "id": "Z1",
+      "title": "知乎AI问答",
+      "excerpt": "这是一个关于AI的回答摘要",
+      "url": "https://www.zhihu.com/question/123",
+      "author": "u3",
+      "date": "2026-07-26",
+      "content_type": "answer",
+      "engagement": {"voteups": 100, "num_comments": 20, "collects": 10},
+      "relevance": 0.9,
+      "subs": {"relevance": 90, "recency": 60, "engagement": 70},
+      "score": 80,
+      "cross_refs": []
+    }
+  ],
+  "douyin": [],
+  "wechat": [
+    {
+      "id": "WC1",
+      "title": "公众号AI文章",
+      "summary": "公众号摘要",
+      "url": "https://mp.weixin.qq.com/wc1",
+      "account_name": "AI观察",
+      "date": "2026-07-28",
+      "engagement": {"views": 500},
+      "relevance": 0.6,
+      "subs": {"relevance": 60, "recency": 70, "engagement": 30},
+      "score": 55,
+      "cross_refs": []
+    }
+  ],
+  "baidu": [
+    {
+      "id": "BD1",
+      "title": "百度AI搜索结果",
+      "abstract": "百度摘要",
+      "snippet": "snippet",
+      "url": "https://www.baidu.com/link?url=bd1",
+      "source_domain": "example.com",
+      "source": "example.com",
+      "date": null,
+      "engagement": {},
+      "relevance": 0.5,
+      "subs": {"relevance": 50, "recency": 0, "engagement": 0},
+      "score": 25,
+      "cross_refs": []
+    }
+  ],
+  "toutiao": [
+    {
+      "id": "TT1",
+      "title": "头条AI文章",
+      "content": "",
+      "abstract": "头条摘要",
+      "url": "https://www.toutiao.com/tt1",
+      "source": "news_src",
+      "date": "2026-07-30",
+      "engagement": {"views": 200, "comments": 3},
+      "relevance": 0.55,
+      "subs": {"relevance": 55, "recency": 80, "engagement": 10},
+      "score": 45,
+      "cross_refs": []
+    }
+  ],
+  "best_practices": [],
+  "prompt_pack": []
+}

@@ -1,0 +1,38 @@
+{
+  "date": "20260723",
+  "stories": [
+    {
+      "id": 1001,
+      "title": "人工智能工具如何改变内容创作",
+      "hint": "作者 · 5 分钟阅读",
+      "type": 0,
+      "url": "https://daily.zhihu.com/story/1001",
+      "images": ["https://example.test/1001.jpg"]
+    },
+    {
+      "id": 1002,
+      "title": "视频故事不在正文范围",
+      "hint": "视频",
+      "type": 1,
+      "url": "https://daily.zhihu.com/story/1002"
+    }
+  ],
+  "top_stories": [
+    {
+      "id": 1002,
+      "title": "置顶推荐：新的科学发现意味着什么",
+      "hint": "知乎日报 · 置顶",
+      "type": 0,
+      "url": "https://daily.zhihu.com/story/1002",
+      "image": "https://pic.example.test/1002.jpg"
+    },
+    {
+      "id": 1001,
+      "title": "人工智能工具如何改变内容创作",
+      "hint": "知乎日报 · 8 分钟阅读",
+      "type": 0,
+      "url": "https://daily.zhihu.com/story/1001",
+      "image": "https://pic.example.test/1001.jpg"
+    }
+  ]
+}

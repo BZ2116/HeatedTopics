@@ -1,0 +1,41 @@
+{
+  "business_date": "2026-07-13",
+  "toutiao_status": "success",
+  "juejin_status": "failed",
+  "juejin_note": "intentionally disabled by smoke-only fake provider; not a production Juejin result",
+  "samples": [
+    {
+      "sequence": 1,
+      "item_id": "toutiao_7661539093834989610",
+      "title": "沈阳百年一遇暴雨",
+      "url": "https://www.toutiao.com/trending/7661539093834989610/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661539093834989610%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E6%B2%88%E9%98%B3%E7%99%BE%E5%B9%B4%E4%B8%80%E9%81%87%E6%9A%B4%E9%9B%A8%22%7D&rank=&style_id=40132&topic_id=7661539093834989610",
+      "characters": 1158,
+      "lines": 12,
+      "content_status": "full_text",
+      "extraction_method": "playwright_follow_event_article",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-reviewer-fixed-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_1.txt"
+    },
+    {
+      "sequence": 2,
+      "item_id": "toutiao_7660891930447970346",
+      "title": "高盛：中国股票出现“轮动信号”",
+      "url": "https://www.toutiao.com/trending/7660891930447970346/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227660891930447970346%22%2C%22hot_board_impr_id%22%3A%22202607131721045BA20C4122EFC26BC976%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E9%AB%98%E7%9B%9B%EF%BC%9A%E4%B8%AD%E5%9B%BD%E8%82%A1%E7%A5%A8%E5%87%BA%E7%8E%B0%E2%80%9C%E8%BD%AE%E5%8A%A8%E4%BF%A1%E5%8F%B7%E2%80%9D%22%7D&rank=&style_id=40132&topic_id=7660891930447970346",
+      "characters": 2976,
+      "lines": 45,
+      "content_status": "full_text",
+      "extraction_method": "playwright_follow_event_article",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-reviewer-fixed-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_2.txt"
+    },
+    {
+      "sequence": 3,
+      "item_id": "toutiao_7661405401853722667",
+      "title": "中国电力技术创新位居全球首位",
+      "url": "https://www.toutiao.com/article/7661871584124125736",
+      "characters": 188,
+      "lines": 4,
+      "content_status": "full_text",
+      "extraction_method": "playwright_article_page",
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-detail-reviewer-fixed-20260713\\daily_hot_lists\\2026-07-13\\details\\toutiao_3.txt"
+    }
+  ]
+}

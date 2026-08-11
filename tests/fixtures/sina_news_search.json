@@ -1,0 +1,21 @@
+{
+  "result": {
+    "status": {"code": 0, "msg": "ok"},
+    "data": [
+      {
+        "title": "关键词相关报道一",
+        "url": "https://news.sina.com.cn/c/2026-07-23/doc-ddd44444.shtml",
+        "intro": "这是与检索关键词相关的第一条报道摘要，仅供离线测试使用。",
+        "media": "示例通讯社",
+        "datetime": "2026-07-23 08:00:00"
+      },
+      {
+        "title": "关键词相关报道二",
+        "url": "https://tech.sina.com.cn/it/2026-07-22/doc-eee55555.shtml",
+        "intro": "这是与检索关键词相关的第二条报道摘要，仅供离线测试使用。",
+        "media": "示例科技日报",
+        "datetime": "2026-07-22 20:00:00"
+      }
+    ]
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "attempts": 6,
+  "success_count": 6,
+  "success_rate": 1.0,
+  "wall_elapsed_seconds": 19.003,
+  "samples": [
+    {
+      "round": 1,
+      "sequence": 1,
+      "item_id": "toutiao_7661539093834989610",
+      "original_source_url": "https://webcast-open.douyin.com/open/media_live/667431506077",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://webcast-open.douyin.com/open/media_live/667431506077",
+      "characters": 1158,
+      "lines": 12,
+      "elapsed_seconds": 3.932,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_1_1.txt"
+    },
+    {
+      "round": 1,
+      "sequence": 2,
+      "item_id": "toutiao_7661153348489543723",
+      "original_source_url": "https://www.toutiao.com/trending/7661153348489543723/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661153348489543723%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%93%88%E5%85%B0%E5%BE%B7%E7%88%B6%E4%BA%B2%E7%9C%8B%E5%8F%B0%E4%B8%8A%E5%81%9A%E4%B8%8D%E9%9B%85%E6%89%8B%E5%8A%BF%22%7D&rank=&style_id=40132&topic_id=7661153348489543723",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://www.toutiao.com/trending/7661153348489543723/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661153348489543723%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%93%88%E5%85%B0%E5%BE%B7%E7%88%B6%E4%BA%B2%E7%9C%8B%E5%8F%B0%E4%B8%8A%E5%81%9A%E4%B8%8D%E9%9B%85%E6%89%8B%E5%8A%BF%22%7D&rank=&style_id=40132&topic_id=7661153348489543723",
+      "characters": 1036,
+      "lines": 12,
+      "elapsed_seconds": 3.998,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_1_2.txt"
+    },
+    {
+      "round": 1,
+      "sequence": 3,
+      "item_id": "toutiao_7661178702650166838",
+      "original_source_url": "https://www.toutiao.com/trending/7661178702650166838/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661178702650166838%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%A4%A7%E6%A1%A5%E8%A2%AB%E6%B7%B9%E6%B2%A1+%E5%B7%B4%E5%A8%81%E5%A4%96%E5%9B%B4%E5%B7%B2%E5%BC%80%E5%A7%8B%E5%BD%B1%E5%93%8D%E4%B8%9C%E5%8C%97%22%7D&rank=&style_id=40132&topic_id=7661178702650166838",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://www.toutiao.com/trending/7661178702650166838/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661178702650166838%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%A4%A7%E6%A1%A5%E8%A2%AB%E6%B7%B9%E6%B2%A1+%E5%B7%B4%E5%A8%81%E5%A4%96%E5%9B%B4%E5%B7%B2%E5%BC%80%E5%A7%8B%E5%BD%B1%E5%93%8D%E4%B8%9C%E5%8C%97%22%7D&rank=&style_id=40132&topic_id=7661178702650166838",
+      "characters": 294,
+      "lines": 20,
+      "elapsed_seconds": 9.559,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_1_3.txt"
+    },
+    {
+      "round": 2,
+      "sequence": 1,
+      "item_id": "toutiao_7661539093834989610",
+      "original_source_url": "https://webcast-open.douyin.com/open/media_live/667431506077",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://webcast-open.douyin.com/open/media_live/667431506077",
+      "characters": 1158,
+      "lines": 12,
+      "elapsed_seconds": 3.252,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_2_1.txt"
+    },
+    {
+      "round": 2,
+      "sequence": 2,
+      "item_id": "toutiao_7661153348489543723",
+      "original_source_url": "https://www.toutiao.com/trending/7661153348489543723/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661153348489543723%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%93%88%E5%85%B0%E5%BE%B7%E7%88%B6%E4%BA%B2%E7%9C%8B%E5%8F%B0%E4%B8%8A%E5%81%9A%E4%B8%8D%E9%9B%85%E6%89%8B%E5%8A%BF%22%7D&rank=&style_id=40132&topic_id=7661153348489543723",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://www.toutiao.com/trending/7661153348489543723/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%226%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661153348489543723%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%93%88%E5%85%B0%E5%BE%B7%E7%88%B6%E4%BA%B2%E7%9C%8B%E5%8F%B0%E4%B8%8A%E5%81%9A%E4%B8%8D%E9%9B%85%E6%89%8B%E5%8A%BF%22%7D&rank=&style_id=40132&topic_id=7661153348489543723",
+      "characters": 1036,
+      "lines": 12,
+      "elapsed_seconds": 3.618,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_2_2.txt"
+    },
+    {
+      "round": 2,
+      "sequence": 3,
+      "item_id": "toutiao_7661178702650166838",
+      "original_source_url": "https://www.toutiao.com/trending/7661178702650166838/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661178702650166838%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%A4%A7%E6%A1%A5%E8%A2%AB%E6%B7%B9%E6%B2%A1+%E5%B7%B4%E5%A8%81%E5%A4%96%E5%9B%B4%E5%B7%B2%E5%BC%80%E5%A7%8B%E5%BD%B1%E5%93%8D%E4%B8%9C%E5%8C%97%22%7D&rank=&style_id=40132&topic_id=7661178702650166838",
+      "fetch_status": "success",
+      "content_status": "full_text",
+      "detail_source_url": "https://www.toutiao.com/trending/7661178702650166838/?category_name=topic_innerflow&event_type=hot_board&log_pb=%7B%22category_name%22%3A%22topic_innerflow%22%2C%22cluster_type%22%3A%221%22%2C%22enter_from%22%3A%22click_category%22%2C%22entrance_hotspot%22%3A%22outside%22%2C%22event_type%22%3A%22hot_board%22%2C%22hot_board_cluster_id%22%3A%227661178702650166838%22%2C%22hot_board_impr_id%22%3A%222026071317552172DC3572F18806FED6F3%22%2C%22jump_page%22%3A%22hot_board_page%22%2C%22location%22%3A%22news_hot_card%22%2C%22page_location%22%3A%22hot_board_page%22%2C%22source%22%3A%22trending_tab%22%2C%22style_id%22%3A%2240132%22%2C%22title%22%3A%22%E5%A4%A7%E6%A1%A5%E8%A2%AB%E6%B7%B9%E6%B2%A1+%E5%B7%B4%E5%A8%81%E5%A4%96%E5%9B%B4%E5%B7%B2%E5%BC%80%E5%A7%8B%E5%BD%B1%E5%93%8D%E4%B8%9C%E5%8C%97%22%7D&rank=&style_id=40132&topic_id=7661178702650166838",
+      "characters": 367,
+      "lines": 20,
+      "elapsed_seconds": 9.28,
+      "path": "E:\\.code\\My\\heatedTopics\\heatedTopics\\.worktrees\\hot-topic-workflow\\smoke_data\\toutiao-retry-final-3x2-20260713\\round_2_3.txt"
+    }
+  ]
+}

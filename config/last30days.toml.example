@@ -1,0 +1,31 @@
+# last30days × HeatedTopics integration config (example).
+# Copy to config/last30days.toml and adjust paths.
+# CLI flags override anything set here.
+
+[last30days]
+# Path to last30days's scripts/last30days.py. Use a path valid on the current
+# machine, or set LAST30DAYS_CLI_PATH in .env. The CLI also auto-detects a
+# sibling checkout at ../last30days-skill-cn/scripts/last30days.py.
+# cli_path = "../last30days-skill-cn/scripts/last30days.py"
+
+# Default query (per-user override via --last30days-query).
+# If unset, each user's top-weighted interest name is used.
+# default_query = "AI"
+
+# Days back (1-30, per last30days SKILL.md).
+days = 30
+
+# Enable full-body fetch. Disable for faster runs (most items will then
+# be content_status="title_only", which lowers confidence but lets the
+# pipeline run in ~5s).
+fetch_bodies = true
+
+# Platforms to query (empty = all 8 platforms: weibo xiaohongshu bilibili
+# zhihu douyin wechat baidu toutiao).
+# platforms = ["weibo", "zhihu", "bilibili"]
+
+# Subprocess timeout per user, in seconds.
+timeout = 120.0
+
+# Per-user subdirs are auto-created under this base.
+save_dir = "data/last30days"

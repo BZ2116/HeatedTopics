@@ -1,0 +1,32 @@
+# OpenBiliClaw config for the heatedTopics integration layer.
+# Copy to config/openbiliclaw.toml and adjust paths / endpoints.
+# API keys MUST come from env vars (OPENBILICLAW_LLM_API_KEY); never put
+# them in this file.
+
+[llm]
+# v2 LLM routing: default_chain lists the [llm.instances.*] IDs to try.
+# routing_version = 2 opts into the instance_routing branch in
+# openbiliclaw.llm.registry.build_llm_registry.
+routing_version = 2
+default_chain = ["minimax"]
+
+[llm.instances.minimax]
+# Stable, unique ID — referenced from default_chain above.
+# IMPORTANT: use lowercase. openbiliclaw's build_llm_registry lowercases
+# the default_chain for lookups, but matches instance keys case-sensitively,
+# so "MiniMax" is silently dropped. Keep it lowercase.
+name = "minimax"
+provider_type = "openai_compatible"
+enabled = true
+# API key is sourced from the OPENBILICLAW_LLM_API_KEY env var at runtime.
+# Keep it out of this file. The ``api_key_env`` field is purely documentary;
+# the loader ignores it. Use ``export OPENBILICLAW_LLM_API_KEY=...`` before
+# running the CLI.
+model = "MiniMax-M2.7"
+base_url = "https://api.minimaxi.com/v1"
+
+[llm.embedding]
+# Local Ollama bge-m3 — no API key needed.
+provider = "ollama"
+model = "bge-m3"
+output_dimensionality = 1024

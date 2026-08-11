@@ -1,156 +1,271 @@
-# HeatedTopics
+# HeatedTopics 推荐项目
 
-HeatedTopics 是一个热点话题采集和详情证据整理项目。流程会先发现多平台热榜话题，再对核心平台补充网页详情，最后输出结构化 JSON/JSONL 和 Markdown 报告。
+这是一个面向内容创作者的文章推荐模块。输入用户的一级赛道、二级赛道和人设，项目从多个平台的热榜、搜索结果以及最近 30 天数据中获取候选内容，抓取正文、清洗无效内容并进行相关性排序，最后输出推荐文章。
 
-## 当前采集策略
+如果你是负责接手、启动或继续开发本项目的 Agent，请先阅读 [Agent 快速接手指南](docs/AGENT_GUIDE.md)。
 
-项目分两层采集：
+项目当前最重要的原则是：推荐流程和调用方式分离。Python 接口是默认和主要的运行方式，终端 CLI 仅用于本地调试、批量验证和运维执行。
 
-1. 话题发现：默认使用 DailyHot API 采集已配置来源。
-2. 详情采集：只对百度、微博、小红书、Bilibili 和掘金做进一步详情补充，其他来源继续参与话题聚合和报告排布，但不额外打开网页抓详情。
+## 一、整体流程
 
-核心平台策略如下：
-
-| 平台 | 话题来源 | 详情策略 |
-| --- | --- | --- |
-| 百度 | DailyHot，必要时回退百度热搜页 | 搜索并抓取可用详情页内容 |
-| 微博 | DailyHot | 使用已保存登录态的 Playwright 会话访问搜索页 |
-| 小红书 | 今日热榜小红书页、TopHub 小红书热榜，必要时回退小红书网页 | 当前项目只采集话题、热度和排序；笔记详情写入占位，后续由外部小红书笔记采集项目补齐 |
-| Bilibili | DailyHot | 使用热榜元数据补充视频类详情 |
-| 掘金 | DailyHot | 使用 DailyHot 元数据补充技术类详情 |
-
-小红书的 DailyHot API 当前没有稳定热榜数据，所以项目会优先从：
-
-- https://rebang.today/?tab=xiaohongshu
-- https://tophub.today/n/L4MdA5ldxD
-
-提取榜单标题、热度值和排名。当前项目不再进入小红书官网搜索页采集笔记正文，而是在详情文件中写入 `notes_placeholder` 占位，便于后续外部笔记采集项目按 `topic_key` 补齐。
-
-## 安装和验证
-
-推荐在项目目录运行：
-
-```powershell
-cd E:\.code\My\heatedTopics\heatedTopics
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run pytest tests -q
+```text
+用户输入
+  │
+  ├─ 用户关键词解析
+  ├─ V3 平台热榜读取
+  ├─ 热榜不足时调用平台搜索
+  ├─ last30days 最近 30 天数据
+  ├─ 正文抓取与来源识别
+  ├─ 文章清洗和相关性保护
+  └─ 推荐排序与 JSON 输出
 ```
 
-## 登录态管理
+当前推荐数据源包括 V3 热榜平台和 last30days 平台。热榜按日期缓存，同一天内不同用户和同一用户的多次调用不会重复抓取同一份热榜。
 
-微博和小红书详情采集依赖本地浏览器登录态。先检查状态：
+## 二、安装和配置
 
-```powershell
-uv run python -m src.browser.session_manager check
-```
-
-需要登录时分别执行：
+项目使用 `uv` 管理 Python 环境：
 
 ```powershell
-uv run python -m src.browser.session_manager login weibo
-uv run python -m src.browser.session_manager login xiaohongshu
+uv sync
 ```
 
-登录信息保存在 `data/browser_state/`，该目录不应提交到 Git。即使微博或小红书没有登录，主流程也会继续运行；缺少登录态的平台会记录提醒并跳过对应官网详情。
+`openbiliclaw` 已配置为从 heatedTopics 专用 GitHub 分支安装，不依赖开发者电脑上的本地绝对路径。首次安装会自动拉取包含 `serve_external_candidates()` 补丁的 OpenBiliClaw；如果使用 pip，则先执行：
 
-## 运行采集
+```bash
+pip install "git+https://github.com/BZ2116/OpenBiliClaw.git@feature/heatedtopics-external-candidates"
+```
 
-采集今天的所有热点和核心详情：
+复制 `.env.example` 为 `.env`，配置必要的模型和平台信息：
+
+```env
+OPENBILICLAW_LLM_API_KEY=你的模型API_KEY
+ZHIHU_COOKIE=你的知乎Cookie
+```
+
+LLM 和 embedding 不再绑定 MiniMax 与 Ollama。可以使用统一环境变量适配不同厂商：
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=你的LLM_KEY
+HT_LLM_BASE_URL=https://你的兼容接口/v1
+HT_LLM_MODEL=你的模型名
+
+HT_EMBEDDING_PROVIDER=ollama
+HT_EMBEDDING_MODEL=bge-m3
+```
+
+支持的 embedding provider 由当前 OpenBiliClaw 版本决定，通常包括 `ollama`、`openai`、`openai_compatible`、`gemini`、`openrouter` 和 `dashscope`。也可以直接在 `config/openbiliclaw.toml` 中配置；环境变量只覆盖对应字段。
+
+正文和搜索能力依赖各平台的网络可访问性。使用关键词提取和相关性排序时，还需要保证 Ollama 正常运行，并准备配置文件中的 embedding 模型，例如：
 
 ```powershell
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run collect-recent-details --window today
+ollama pull bge-m3
 ```
 
-强制跳过缓存、重新采集：
+`last30days` 是独立的外部仓库，需要先下载：
+
+请从公开仓库 [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn) 下载代码，并确保目录中存在：
+
+```bash
+git clone https://github.com/Jesseovo/last30days-skill-cn.git ../last30days-skill-cn
+```
+
+```text
+last30days-skill-cn/scripts/last30days.py
+```
+
+推荐把它放在 heatedTopics 的同级目录；如果放在其他位置，则配置：
+
+```env
+LAST30DAYS_CLI_PATH=/your/path/last30days-skill-cn/scripts/last30days.py
+```
+
+程序会自动查找同级目录下的 `last30days-skill-cn/scripts/last30days.py`。也可以通过环境变量 `LAST30DAYS_CLI_PATH` 或命令行参数显式指定路径。路径使用 `/` 或 Python `Path` 规则，不要写死其他电脑的盘符。
+
+## 三、主要运行方式：Python 接口
+
+正式业务流程和其他项目接入，优先调用 `service.py`：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
+
+service = RecommendationService(max_concurrency=3)
+result = await service.recommend_user(
+    user_id="u_001",
+    track_1="旅行攻略",
+    track_2="穷游周末",
+    persona="预算敏感型旅行爱好者。",
+    run_dir="data/run_20260809",
+    source="both",
+)
+```
+
+接口负责缓存、round 目录、标准 JSON 输出、并发上限和同一用户串行保护。
+
+## 四、CLI 调试和批量运行
+
+### 1. 准备用户 Excel
+
+Excel 至少包含以下字段：
+
+```text
+user_id | track_1 | track_2 | persona
+```
+
+其中：
+
+- `user_id`：外部系统中的用户 ID；
+- `track_1`：一级赛道；
+- `track_2`：二级赛道；
+- `persona`：用户人设描述。
+
+### 2. 执行推荐
 
 ```powershell
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run collect-recent-details --window today --refresh
+uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
+  --users-excel data/users.xlsx `
+  --output-dir data/run_20260808 `
+  --source both `
+  --last30days-days 30 `
+  --last30days-max-queries 3 `
+  --max-parallel 3 `
+  --limit 15
 ```
 
-采集最近 7 天窗口：
+说明：
+
+- `--source both`：同时使用 V3 热榜和 last30days；
+- `--limit 15`：最多输出 15 篇，默认也是 15 篇；
+- `--max-parallel 3`：最多同时处理 3 个用户；
+- `--output-dir` 应该直接指向当天目录，例如 `data/run_20260808`。
+
+退出码：`0` 表示全部成功，`1` 表示部分用户失败，`2` 表示参数或环境配置错误，`4` 表示整体执行错误。
+
+## 五、推荐输出目录
+
+```text
+data/run_20260808/
+├── hot_cache/                         # 当天共享热榜缓存
+├── daily_summary/                     # 热榜总结功能的输出
+└── u_001/
+    ├── keyword_cache/                 # 用户关键词缓存
+    ├── hard_cache/                     # 用户级推荐运行缓存
+    └── round_001/                      # 本次调用
+        ├── input/
+        │   └── input.json
+        └── outputs/
+            ├── recommended/           # 最终推荐文章
+            ├── search/                # 全部候选文章
+            │   ├── hot/               # 热榜候选，按平台划分
+            │   └── search/            # 搜索候选，按平台划分
+            └── text/                  # 推荐正文文本
+```
+
+同一个用户再次调用会生成 `round_002`，不会覆盖之前结果。每篇文章的 JSON 至少包含标题、来源和正文；作者、发布时间、阅读量、点赞量、评论量存在时一并保存。
+
+## 六、给其他项目调用
+
+核心接口位于：
+
+```text
+src/heated_topics_v3/openbiliclaw_integration/service.py
+```
+
+单用户调用：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import recommend_user
+
+result = recommend_user(
+    user_id="u_001",
+    track_1="旅行攻略",
+    track_2="穷游周末",
+    persona="预算敏感型旅行爱好者，专做两天一夜短途攻略。",
+    run_dir="data/run_20260808",
+    limit=15,
+    source="both",
+    last30days_config={
+        "cli_path": "../last30days-skill-cn/scripts/last30days.py",
+        "days": 30,
+        "fetch_bodies": True,
+    },
+)
+```
+
+返回值包含 `recommendations`、`searched_articles`、`user_id`、`run_dir` 和本次 `round_dir`。外部项目可以直接读取返回值，也可以读取 `round_dir` 下的标准 JSON 文件。
+
+## 七、并发调用
+
+如果外部项目会同时触发多个用户，使用 `RecommendationService`：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
+
+service = RecommendationService(max_concurrency=3)
+result = await service.recommend_user(
+    user_id="u_001",
+    track_1="旅行攻略",
+    track_2="穷游周末",
+    persona="预算敏感型旅行爱好者。",
+    run_dir="data/run_20260808",
+    source="both",
+)
+```
+
+并发规则：
+
+1. 全局并发最多 3 个用户；
+2. 同一个用户同时触发时串行执行，避免竞争用户缓存和轮次目录；
+3. 不同用户互不影响，一个用户失败不会取消其他用户；
+4. 热榜缓存位于日期层，由所有用户共享。
+
+## 八、当天热榜总结
+
+推荐流程之外，项目预留了独立的热榜总结接口：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import summarize_daily_hot
+
+summary = summarize_daily_hot(run_dir="data/run_20260808")
+```
+
+它读取当天 `hot_cache` 中的全部热榜数据，输出：
+
+```text
+data/run_20260808/daily_summary/summary.json
+```
+
+后续可以在这个接口外层接入 LLM 总结、消息推送、飞书或企业微信，不需要改动用户推荐流程。
+
+## 九、测试
+
+运行核心测试：
 
 ```powershell
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run collect-recent-details --window last_7_days
+uv run pytest tests/openbiliclaw_integration tests/providers -q
 ```
 
-只采集百度、微博和小红书的话题与详情：
+服务接口测试覆盖：
 
-```powershell
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run collect-core-hot-details --window today --refresh
+- 单用户标准目录输出；
+- 用户级 round 生成；
+- 最大并发数限制；
+- 热榜缓存读取与每日总结输出。
+
+## 十、项目结构
+
+```text
+src/heated_topics_v3/openbiliclaw_integration/
+├── cli.py                    # 终端参数解析和批量入口
+├── service.py               # 对外稳定业务接口
+├── recommender.py            # 候选获取、正文处理和推荐排序
+├── candidate_adapter.py     # 平台数据统一转换
+├── body_enricher.py         # 正文抓取和来源识别
+├── keyword_extractor.py     # 用户关键词提取与缓存
+├── report_writer.py         # 标准目录和 JSON 输出
+├── user_profile.py          # 用户输入校验
+└── runtime.py               # OpenBiliClaw、LLM、环境检查
 ```
 
-这个命令会把热榜 route 和详情平台都限制为 `baidu,weibo,xiaohongshu`。其中小红书热榜会先走今日热榜/TopHub，详情阶段只写入外部笔记采集占位，不在当前项目中抓取笔记正文。
-
-## 创作者热点分类索引
-
-在已有采集结果基础上生成创作者检索推荐用的结构化索引：
-
-```powershell
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run build-creator-topic-index --render-report
-```
-
-主要输出：
-
-| 路径 | 内容 |
-| --- | --- |
-| `data/processed/creator_topic_index.json` | 面向下游检索推荐的结构化话题索引 |
-| `reports/creator_topic_cards.md` | 从索引渲染出来的创作者热点卡片报告 |
-
-分类索引采用受控的 `domain_path`、`content_modes`、`audience_tags` 做稳定召回，用 `entity_keywords`、`event_keywords` 和 `match_terms` 做补充检索证据。
-
-## 缓存机制
-
-项目会把 DailyHot、外部小红书榜单、详情证据写入本地缓存，默认有效期为 7 天。相同窗口和相同查询在一周内再次执行时，会优先读取缓存，避免重复访问 API 或网页。
-
-常用行为：
-
-| 场景 | 行为 |
-| --- | --- |
-| 普通运行 | 优先使用 7 天内缓存 |
-| 添加 `--refresh` | 跳过读取缓存，重新采集并覆盖缓存 |
-| 删除 `data/cache/` | 清空本地缓存，下次运行重新采集 |
-
-彻底重新跑一遍：
-
-```powershell
-Remove-Item -LiteralPath data\cache -Recurse -Force
-$env:PYTHONPATH='E:\.code\My\heatedTopics\heatedTopics'
-uv run python -m src.core_pipeline.run collect-core-hot-details --window today --refresh
-```
-
-## 输出文件
-
-一次完整采集会写入这些主要文件：
-
-| 路径 | 内容 |
-| --- | --- |
-| `data/raw/dailyhot_records.json` | 热榜原始记录，包括 DailyHot 和小红书外部榜单补充记录 |
-| `data/raw/platforms/xiaohongshu_topics.jsonl` | 小红书热榜话题 RAW，包含榜单来源、标题、热度、URL、原始榜单片段 |
-| `data/raw/platforms/xiaohongshu_notes.jsonl` | 小红书话题对应详情占位 RAW，包含空 `notes`、外部采集状态和占位原因 |
-| `data/raw/platforms/baidu_topics.jsonl` | 百度热榜话题 RAW |
-| `data/raw/platforms/baidu_details.jsonl` | 百度详情 RAW，包含搜索结果和 query attempts |
-| `data/raw/platforms/weibo_topics.jsonl` | 微博热榜话题 RAW |
-| `data/raw/platforms/weibo_posts.jsonl` | 微博详情 RAW，包含帖子、browser_raw、页面文本、DOM 抽取结果 |
-| `data/processed/topic_clusters.json` | 去重和聚类后的话题 |
-| `data/evidence/detail_evidence.json` | 详情证据汇总 |
-| `data/evidence/detail_evidence_raw.jsonl` | 详情证据 RAW 行记录 |
-| `reports/recent_hot_topics_digest.md` | 最终热点报告 |
-| `data/cache/` | 7 天缓存数据 |
-
-## 风控和安全边界
-
-项目采用低频、缓存优先、登录态复用的方式降低重复访问。遇到验证码、登录墙、安全校验或明显风控页面时，采集器会记录该平台的问题并继续处理其他平台。
-
-项目不实现验证码绕过、账号规避检测、指纹伪装、代理池轮换或其他可能违反平台规则的策略。微博和小红书建议使用稳定、人工登录后的浏览器会话，并控制运行频率。
-
-## 开发文档
-
-相关设计和执行计划：
-
-- `docs/superpowers/specs/2026-06-23-detail-cache-and-session-safety-design.md`
-- `docs/superpowers/plans/2026-06-23-detail-cache-and-session-safety.md`
+接手项目时，建议先阅读本 README，再从 `service.py` 的 `recommend_user()` 开始跟踪；终端 CLI 只负责输入转换和调用，不应成为其他项目的直接依赖。

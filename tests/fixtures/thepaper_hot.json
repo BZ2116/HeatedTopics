@@ -1,0 +1,72 @@
+{
+  "data": {
+    "hotNews": [
+      {
+        "contId": "3000001",
+        "name": "示例科技产业政策研讨会召开",
+        "interactionNum": 15,
+        "praiseTimes": 396,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例通讯社报道，会议围绕产业政策与配套措施展开讨论。",
+        "pubTimeLong": 1721712600000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3000001"
+      },
+      {
+        "contId": "3000002",
+        "name": "示例城市基础设施更新项目落地",
+        "interactionNum": 28,
+        "praiseTimes": 512,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例晚报报道，相关改造工程按计划分阶段推进。",
+        "pubTimeLong": 1721709000000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3000002"
+      },
+      {
+        "contId": "3000003",
+        "name": "示例视频节目预告",
+        "interactionNum": 220,
+        "praiseTimes": 800,
+        "contType": 1,
+        "paywalled": false,
+        "summary": "示例视频频道节目预告，请打开客户端观看。",
+        "pubTimeLong": 1721705400000,
+        "url": "https://www.thepaper.cn/video/3000003"
+      },
+      {
+        "contId": "3000004",
+        "name": "示例付费专栏深度分析",
+        "interactionNum": 90,
+        "praiseTimes": 410,
+        "contType": 0,
+        "paywalled": true,
+        "summary": "示例付费内容，需要订阅后才能查看完整正文。",
+        "pubTimeLong": 1721701800000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3000004"
+      },
+      {
+        "contId": "3000005",
+        "name": "示例外链转载占位",
+        "interactionNum": 12,
+        "praiseTimes": 60,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例外部链接占位，原文来自合作站点。",
+        "pubTimeLong": 1721698200000,
+        "url": "https://example.com/external/3000005"
+      },
+      {
+        "contId": "3000006",
+        "name": "示例民生服务通知",
+        "interactionNum": 33,
+        "praiseTimes": 280,
+        "contType": 0,
+        "paywalled": false,
+        "summary": "示例民生服务通知，提醒公众按流程办理相关业务。",
+        "pubTimeLong": 1721694600000,
+        "url": "https://www.thepaper.cn/newsDetail_forward_3000006"
+      }
+    ]
+  }
+}
