@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from heated_topics_v3.openbiliclaw_integration import service
+from heated_topics_v3.openbiliclaw_integration.service import HeatedTop
 
 
 def test_recommend_user_writes_round_layout(tmp_path, monkeypatch):
@@ -105,3 +106,7 @@ def test_daily_hot_summary_reads_shared_cache(tmp_path):
     result = service.summarize_daily_hot(run_dir=tmp_path)
     assert result["count"] == 1
     assert (tmp_path / "daily_summary/summary.json").exists()
+
+
+def test_heated_top_is_public_daily_entrypoint():
+    assert callable(HeatedTop().run)

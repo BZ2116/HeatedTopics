@@ -5,7 +5,11 @@ to OpenBiliClaw's RecommendationEngine, accepting multiple user profiles
 as JSON input and producing per-user top-N recommendations as JSON output.
 """
 
+from .service import HeatedTop, RecommendationService
+
 __all__ = [
+    "HeatedTop",
+    "RecommendationService",
     "candidate_adapter",
     "cli",
     "exceptions",

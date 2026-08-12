@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from . import recommender, report_writer, user_profile
+from .heated_top import HeatedTop
 
 
 def _next_round(user_dir: Path) -> Path:
@@ -132,4 +133,4 @@ def summarize_daily_hot(*, run_dir: str | Path) -> dict[str, Any]:
     return result
 
 
-__all__ = ["RecommendationService", "recommend_user", "summarize_daily_hot"]
+__all__ = ["RecommendationService", "HeatedTop"]
