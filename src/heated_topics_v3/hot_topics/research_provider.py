@@ -5,9 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import re
 import asyncio
+import json
+import os
+import shlex
 import threading
 from concurrent.futures import Future
-from typing import Protocol
+from typing import Mapping, Protocol, Sequence
 
 import httpx
 
@@ -70,13 +73,18 @@ class HttpResearchProvider:
         return deduplicate_evidence(evidence)
 
 
-class MiniMaxMcpResearchProvider:
-    """Use MiniMax Token Plan's ``web_search`` MCP tool over stdio."""
+class McpWebSearchProvider:
+    """Generic long-lived stdio MCP Web Search provider."""
 
-    def __init__(self, *, api_key: str, api_host: str = "https://api.minimaxi.com", uvx: str = "uvx") -> None:
-        self.api_key = api_key
-        self.api_host = api_host
-        self.uvx = uvx
+    def __init__(
+        self, *, command: str, args: Sequence[str], env: Mapping[str, str] | None = None,
+        tool_name: str = "web_search", provider_name: str = "mcp_web_search",
+    ) -> None:
+        self.command = command
+        self.args = list(args)
+        self.env = dict(env or {})
+        self.tool_name = tool_name
+        self.provider_name = provider_name
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready: Future[None] | None = None
@@ -99,7 +107,7 @@ class MiniMaxMcpResearchProvider:
             loop.run_forever()
             loop.close()
 
-        self._thread = threading.Thread(target=runner, name="minimax-mcp", daemon=True)
+        self._thread = threading.Thread(target=runner, name="web-search-mcp", daemon=True)
         self._thread.start()
         self._ready.result(timeout=45)
 
@@ -108,9 +116,9 @@ class MiniMaxMcpResearchProvider:
         from mcp.client.stdio import stdio_client
 
         params = StdioServerParameters(
-            command=self.uvx,
-            args=["--with", "fastmcp", "minimax-coding-plan-mcp", "-y"],
-            env={"MINIMAX_API_KEY": self.api_key, "MINIMAX_API_HOST": self.api_host},
+            command=self.command,
+            args=self.args,
+            env=self.env,
         )
         try:
             self._stdio_context = stdio_client(params)
@@ -144,7 +152,7 @@ class MiniMaxMcpResearchProvider:
         if self._stop_event:
             self._stop_event.set()
 
-    def __enter__(self) -> "MiniMaxMcpResearchProvider":
+    def __enter__(self) -> "McpWebSearchProvider":
         self._start()
         return self
 
@@ -159,13 +167,13 @@ class MiniMaxMcpResearchProvider:
         ).result(timeout=60)
 
     async def _search(self, query: str, *, topic_id: str) -> tuple[SearchEvidence, ...]:
-        import json
-        result = await self._session.call_tool("web_search", {"query": query})
+        result = await self._session.call_tool(self.tool_name, {"query": query})
         raw = "\n".join(getattr(item, "text", "") for item in result.content)
         payload = json.loads(raw)
         retrieved_at = datetime.now(timezone.utc).isoformat()
         evidence = []
-        for item in payload.get("organic", []) if isinstance(payload, dict) else []:
+        result_items = payload.get("organic", payload.get("results", [])) if isinstance(payload, dict) else []
+        for item in result_items if isinstance(result_items, list) else []:
             title = str(item.get("title") or "").strip()
             url = str(item.get("link") or "").strip()
             snippet = str(item.get("snippet") or "").strip()
@@ -174,6 +182,46 @@ class MiniMaxMcpResearchProvider:
                     topic_id=topic_id, query=query, title=title, url=url,
                     source=url.split('/')[2], published_at=str(item.get("date") or "") or None,
                     snippet=snippet, retrieved_at=retrieved_at,
-                    provider="minimax_mcp", evidence_status="search_cited",
+                    provider=self.provider_name, evidence_status="search_cited",
                 ))
         return deduplicate_evidence(evidence)
+
+
+class MiniMaxMcpResearchProvider(McpWebSearchProvider):
+    """MiniMax Token Plan MCP adapter kept for backwards compatibility."""
+
+    def __init__(self, *, api_key: str, api_host: str = "https://api.minimaxi.com", uvx: str = "uvx") -> None:
+        super().__init__(
+            command=uvx,
+            args=("--with", "fastmcp", "minimax-coding-plan-mcp", "-y"),
+            env={"MINIMAX_API_KEY": api_key, "MINIMAX_API_HOST": api_host},
+            tool_name="web_search",
+            provider_name="minimax_mcp",
+        )
+
+
+def build_web_search_provider() -> ResearchProvider:
+    """Build the configured MCP backend without coupling callers to MiniMax."""
+    backend = os.getenv("HT_WEB_SEARCH_PROVIDER", "minimax_mcp").strip().lower()
+    if backend in {"minimax", "minimax_mcp"}:
+        return MiniMaxMcpResearchProvider(
+            api_key=os.getenv("MINIMAX_API_KEY", ""),
+            api_host=os.getenv("MINIMAX_API_HOST", "https://api.minimaxi.com"),
+            uvx=os.getenv("HT_WEB_SEARCH_MCP_COMMAND", "uvx"),
+        )
+    if backend in {"mcp", "generic_mcp"}:
+        raw_args = os.getenv("HT_WEB_SEARCH_MCP_ARGS", "").strip()
+        if not raw_args:
+            raise ValueError("HT_WEB_SEARCH_MCP_ARGS is required for generic MCP backend")
+        raw_env = os.getenv("HT_WEB_SEARCH_MCP_ENV_JSON", "{}").strip()
+        parsed_env = json.loads(raw_env)
+        if not isinstance(parsed_env, dict):
+            raise ValueError("HT_WEB_SEARCH_MCP_ENV_JSON must be a JSON object")
+        return McpWebSearchProvider(
+            command=os.getenv("HT_WEB_SEARCH_MCP_COMMAND", "").strip(),
+            args=shlex.split(raw_args),
+            env={str(k): str(v) for k, v in parsed_env.items()},
+            tool_name=os.getenv("HT_WEB_SEARCH_MCP_TOOL", "web_search"),
+            provider_name=os.getenv("HT_WEB_SEARCH_MCP_PROVIDER_NAME", "mcp_web_search"),
+        )
+    raise ValueError(f"Unsupported HT_WEB_SEARCH_PROVIDER: {backend}")

@@ -4,6 +4,13 @@
 
 ## 1. 项目定位
 
+项目有两个业务入口，均位于 `heated_topics_v3.openbiliclaw_integration.service`：
+
+- `RecommendationService`：根据用户信息推荐相关文章，支持多用户并发；
+- `HeatedTop`：每天读取共享热榜缓存，整理跨平台话题、搜索证据并生成创作者话题卡片，每天执行一次即可。
+
+两条流程共享每日 `hot_cache`、LLM 和 embedding 配置，但 Web Search 只由 `HeatedTop` 使用。
+
 本项目接收一个用户的：
 
 - 一级赛道 `track_1`；
@@ -23,6 +30,19 @@
 → embedding 相关性预筛
 → OpenBiliClaw 推荐排序
 → round_xxx JSON 输出
+```
+
+每日热榜链路是：
+
+```text
+平台热榜及正文缓存
+→ 只基于标题聚类
+→ 合并明显同一事件
+→ 平台权重排序
+→ 每个话题生成搜索计划
+→ Web Search MCP 获取并清洗证据
+→ LLM Markdown 总结
+→ 结构化创作者话题卡片
 ```
 
 ## 2. 必须先准备的外部依赖
@@ -150,6 +170,13 @@ HT_EMBEDDING_PROVIDER=ollama
 HT_EMBEDDING_MODEL=bge-m3
 ZHIHU_COOKIE=your-zhihu-cookie
 LAST30DAYS_CLI_PATH=
+
+HT_WEB_SEARCH_PROVIDER=minimax_mcp
+HT_WEB_SEARCH_MCP_COMMAND=uvx
+HT_WEB_SEARCH_MCP_ARGS=--with fastmcp minimax-coding-plan-mcp -y
+HT_WEB_SEARCH_MCP_TOOL=web_search
+MINIMAX_API_KEY=your-token-plan-key
+MINIMAX_API_HOST=https://api.minimaxi.com
 ```
 
 用户只需要填写一个 LLM 和一个 embedding。平台 Cookie、last30days 路径以及其他搜索平台 key 按实际启用的数据源填写。
@@ -166,7 +193,19 @@ HT_EMBEDDING_PROVIDER=ollama
 HT_EMBEDDING_MODEL=bge-m3
 ```
 
-优先级：`HT_*` 环境变量高于配置文件中对应字段。旧的 `MINIMAX_*`、`OPENAI_*` 变量仅为历史兼容，不应再加入新的部署配置。
+优先级：`HT_*` 环境变量高于配置文件中对应字段。LLM 统一使用 `HT_LLM_*`；Web Search MCP 使用 `HT_WEB_SEARCH_*` 和对应 MCP 所需的环境变量。
+
+LLM provider 支持 OpenAI、DeepSeek、Gemini、Claude、Ollama、OpenRouter 和 `openai_compatible`。MiniMax、DashScope、硅基流动、Moonshot、智谱以及 vLLM/Ollama 网关通常通过 `openai_compatible` 接入。统一 adapter 调用 `/chat/completions`。
+
+默认 Web Search 是 MiniMax Token Plan MCP，使用长连接复用多个话题搜索。也可以配置 `HT_WEB_SEARCH_PROVIDER=generic_mcp` 接入其他 stdio MCP：
+
+```env
+HT_WEB_SEARCH_PROVIDER=generic_mcp
+HT_WEB_SEARCH_MCP_COMMAND=your-mcp-command
+HT_WEB_SEARCH_MCP_ARGS=--stdio
+HT_WEB_SEARCH_MCP_TOOL=web_search
+HT_WEB_SEARCH_MCP_ENV_JSON={"API_KEY":"your-key"}
+```
 
 绝对禁止把 `.env`、Cookie、API key、运行缓存和用户推荐结果提交到 Git。
 
@@ -189,6 +228,16 @@ ollama list
 确认模型列表中有 `bge-m3`。
 
 ## 7. 默认运行方式：Python 接口
+
+每日热榜：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import HeatedTop
+
+result = HeatedTop().run(run_dir="data/run_20260812", limit=50)
+```
+
+`limit` 同时决定话题数、搜索数和总结数。当天重复运行会按 fingerprint 复用已有卡片；需要完全重跑时使用 `force=True`。
 
 正式业务调用和其他项目接入，优先使用 Python 接口，不要通过子进程拼接 CLI：
 
@@ -250,7 +299,10 @@ uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
 ```text
 data/run_YYYYMMDD/
 ├── hot_cache/                 # 日期级热榜缓存
-├── daily_summary/             # 独立热榜总结输出
+├── daily_hot/                 # HeatedTop 输出
+│   ├── topics.json
+│   ├── topics.md
+│   └── run_status.json
 └── u_xxxx/
     ├── keyword_cache/         # 用户关键词缓存
     ├── hard_cache/            # 用户级 OpenBiliClaw 缓存
@@ -266,6 +318,17 @@ data/run_YYYYMMDD/
 同一个用户再次调用生成下一个 round，不覆盖旧结果。`data/` 默认被 Git 忽略，只用于本地运行和验证。
 
 ## 10. 外部项目接入
+
+外部项目只需要依赖两个公共对象：
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import (
+    RecommendationService,
+    HeatedTop,
+)
+```
+
+不要复制热榜聚类、MCP 搜索、缓存 fingerprint 或推荐排序逻辑。
 
 外部项目优先调用：
 
@@ -286,6 +349,10 @@ result = await service.recommend_user(
 不要在外部项目中复制 CLI 参数解析、缓存路径拼接或正文筛选逻辑。并发限制和同一用户串行保护已经由 `RecommendationService` 负责。
 
 ## 11. 常见问题排查
+
+### Web Search MCP 启动失败
+
+先确认 `HT_WEB_SEARCH_PROVIDER`、MCP 命令和参数正确；MiniMax 模式还要确认 `MINIMAX_API_KEY`。MCP provider 是长连接，单次 `HeatedTop` 运行结束后才关闭。
 
 ### OpenBiliClaw 补丁缺失
 

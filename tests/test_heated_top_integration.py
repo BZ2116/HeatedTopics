@@ -28,7 +28,13 @@ def test_heated_top_reads_date_nested_cache_and_reuses_cards(tmp_path, monkeypat
         research_failures = ()
 
     called = []
+    class FakeResearch:
+        def close(self):
+            called.append("closed")
+
+    monkeypatch.setattr(heated_top, "build_web_search_provider", lambda: FakeResearch())
     monkeypatch.setattr(heated_top, "run_hot_topics", lambda **kwargs: called.append(kwargs) or FakeResult())
     result = heated_top.HeatedTop().run(run_dir=run_dir, limit=1)
     assert result["cached_count"] == 0 or isinstance(result["cached_count"], int)
     assert called
+    assert "closed" in called

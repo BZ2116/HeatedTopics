@@ -1,91 +1,77 @@
-# HeatedTopics 推荐项目
+# HeatedTopics
 
-这是一个面向内容创作者的文章推荐模块。输入用户的一级赛道、二级赛道和人设，项目从多个平台的热榜、搜索结果以及最近 30 天数据中获取候选内容，抓取正文、清洗无效内容并进行相关性排序，最后输出推荐文章。
+HeatedTopics 为内容创作者提供两类每日内容参考：
 
-如果你是负责接手、启动或继续开发本项目的 Agent，请先阅读 [Agent 快速接手指南](docs/AGENT_GUIDE.md)。
+- **相关文章推荐**：根据用户的赛道、细分方向和人设，推荐相关的热点文章。
+- **每日热榜整理**：读取多个平台的热榜和正文缓存，合并明显属于同一事件的话题，再搜索资料并生成创作参考卡片。
 
-项目当前最重要的原则是：推荐流程和调用方式分离。Python 接口是默认和主要的运行方式，终端 CLI 仅用于本地调试、批量验证和运维执行。
+两个功能共享同一份每日热榜缓存、LLM 配置和 embedding 配置。
 
-## 一、整体流程
+如果你是负责接手、启动或继续开发本项目的 Agent，请先阅读 [Agent 快速接手指南](https://github.com/BZ2116/HeatedTopics/blob/V-final/docs/AGENT_GUIDE.md)。
 
-```text
-用户输入
-  │
-  ├─ 用户关键词解析
-  ├─ V3 平台热榜读取
-  ├─ 热榜不足时调用平台搜索
-  ├─ last30days 最近 30 天数据
-  ├─ 正文抓取与来源识别
-  ├─ 文章清洗和相关性保护
-  └─ 推荐排序与 JSON 输出
-```
+## 1. 每日热榜整理
 
-当前推荐数据源包括 V3 热榜平台和 last30days 平台。热榜按日期缓存，同一天内不同用户和同一用户的多次调用不会重复抓取同一份热榜。
-
-## 二、安装和配置
-
-项目使用 `uv` 管理 Python 环境：
-
-```powershell
-uv sync
-```
-
-`openbiliclaw` 已配置为从 heatedTopics 专用 GitHub 分支安装，不依赖开发者电脑上的本地绝对路径。首次安装会自动拉取包含 `serve_external_candidates()` 补丁的 OpenBiliClaw；如果使用 pip，则先执行：
-
-```bash
-pip install "git+https://github.com/BZ2116/OpenBiliClaw.git@feature/heatedtopics-external-candidates"
-```
-
-复制 `.env.example` 为 `.env`，配置必要的模型和平台信息：
-
-```env
-OPENBILICLAW_LLM_API_KEY=你的模型API_KEY
-ZHIHU_COOKIE=你的知乎Cookie
-```
-
-LLM 和 embedding 不再绑定 MiniMax 与 Ollama。可以使用统一环境变量适配不同厂商：
-
-```env
-HT_LLM_PROVIDER=openai_compatible
-HT_LLM_API_KEY=你的LLM_KEY
-HT_LLM_BASE_URL=https://你的兼容接口/v1
-HT_LLM_MODEL=你的模型名
-
-HT_EMBEDDING_PROVIDER=ollama
-HT_EMBEDDING_MODEL=bge-m3
-```
-
-支持的 embedding provider 由当前 OpenBiliClaw 版本决定，通常包括 `ollama`、`openai`、`openai_compatible`、`gemini`、`openrouter` 和 `dashscope`。也可以直接在 `config/openbiliclaw.toml` 中配置；环境变量只覆盖对应字段。
-
-正文和搜索能力依赖各平台的网络可访问性。使用关键词提取和相关性排序时，还需要保证 Ollama 正常运行，并准备配置文件中的 embedding 模型，例如：
-
-```powershell
-ollama pull bge-m3
-```
-
-`last30days` 是独立的外部仓库，需要先下载：
-
-请从公开仓库 [Jesseovo/last30days-skill-cn](https://github.com/Jesseovo/last30days-skill-cn) 下载代码，并确保目录中存在：
-
-```bash
-git clone https://github.com/Jesseovo/last30days-skill-cn.git ../last30days-skill-cn
-```
+每日热榜的处理链路：
 
 ```text
-last30days-skill-cn/scripts/last30days.py
+平台热榜及正文缓存
+  → 标题标准化
+  → 跨平台话题聚类
+  → 合并明显属于同一事件的话题
+  → 按平台权重和热度排序
+  → 为每个话题生成搜索计划
+  → Web Search MCP 获取证据
+  → 证据去重和相关性清洗
+  → LLM 生成 Markdown 总结
+  → 解析为结构化话题卡片
 ```
 
-推荐把它放在 heatedTopics 的同级目录；如果放在其他位置，则配置：
+聚类阶段只看标题。策略是优先合并明显的同一事件，无法确认的标题保留为独立话题，再按照平台权重、热榜排名和热度排序，避免过度合并。
 
-```env
-LAST30DAYS_CLI_PATH=/your/path/last30days-skill-cn/scripts/last30days.py
+每个话题卡片包含：
+
+- 话题标题、话题 ID、趋势分数；
+- 涉及平台和平台观察；
+- 事实摘要、关键事实、时间线和关键数字；
+- 争议点和适合创作者的选题角度；
+- 搜索证据、来源 URL、发布时间和证据状态。
+
+### 调用方式
+
+```python
+from heated_topics_v3.openbiliclaw_integration.service import HeatedTop
+
+result = HeatedTop().run(
+    run_dir="data/run_20260812",
+    limit=50,
+)
+
+print(result["topics"])
 ```
 
-程序会自动查找同级目录下的 `last30days-skill-cn/scripts/last30days.py`。也可以通过环境变量 `LAST30DAYS_CLI_PATH` 或命令行参数显式指定路径。路径使用 `/` 或 Python `Path` 规则，不要写死其他电脑的盘符。
+`limit` 同时决定最终话题数量和需要搜索、总结的话题数量。默认建议使用 50 条。当天重复运行时，程序通过稳定 fingerprint 复用已有话题卡片，减少重复搜索和 LLM 调用；需要强制重跑时传入 `force=True`。
 
-## 三、主要运行方式：Python 接口
+输入目录支持以下两种形式：
 
-正式业务流程和其他项目接入，优先调用 `service.py`：
+```text
+data/run_20260812/hot_cache/*.json
+data/run_20260812/hot_cache/2026-08-12/*.json
+```
+
+输出目录：
+
+```text
+data/run_20260812/daily_hot/
+├── topics.json       # 结构化话题卡片
+├── topics.md         # 便于人工查看的 Markdown 榜单
+└── run_status.json   # 运行状态、缓存命中和搜索失败信息
+```
+
+当天原则上只执行一次。重复执行会覆盖当天输出，但会优先复用相同 fingerprint 的已有结果。
+
+## 2. 相关文章推荐
+
+推荐流程使用用户的一级赛道、二级赛道和人设，从平台热榜、平台搜索和最近 30 天数据中获取候选文章，然后完成正文抓取、清洗、相关性排序和输出。
 
 ```python
 from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
@@ -95,177 +81,240 @@ result = await service.recommend_user(
     user_id="u_001",
     track_1="旅行攻略",
     track_2="穷游周末",
-    persona="预算敏感型旅行爱好者。",
-    run_dir="data/run_20260809",
+    persona="预算敏感型旅行爱好者，专做两天一夜短途攻略。",
+    run_dir="data/run_20260812",
     source="both",
+    limit=15,
 )
 ```
 
-接口负责缓存、round 目录、标准 JSON 输出、并发上限和同一用户串行保护。
+并发服务会限制全局并发量，并保证同一个用户不会同时写入缓存和 round 目录。每次调用都会生成新的 `round_XXX`，不会覆盖该用户之前的推荐结果。
 
-## 四、CLI 调试和批量运行
+## 3. 对外接口
 
-### 1. 准备用户 Excel
+当前业务层对外提供：
 
-Excel 至少包含以下字段：
-
-```text
-user_id | track_1 | track_2 | persona
+```python
+from heated_topics_v3.openbiliclaw_integration.service import (
+    RecommendationService,
+    HeatedTop,
+)
 ```
 
-其中：
+- `RecommendationService`：相关文章推荐，支持多用户并发调用；
+- `HeatedTop`：每日热榜整理，每天执行一次即可，不需要按用户并发调用。
 
-- `user_id`：外部系统中的用户 ID；
-- `track_1`：一级赛道；
-- `track_2`：二级赛道；
-- `persona`：用户人设描述。
-
-### 2. 执行推荐
-
-```powershell
-uv run python -m heated_topics_v3.openbiliclaw_integration.cli `
-  --users-excel data/users.xlsx `
-  --output-dir data/run_20260808 `
-  --source both `
-  --last30days-days 30 `
-  --last30days-max-queries 3 `
-  --max-parallel 3 `
-  --limit 15
-```
-
-说明：
-
-- `--source both`：同时使用 V3 热榜和 last30days；
-- `--limit 15`：最多输出 15 篇，默认也是 15 篇；
-- `--max-parallel 3`：最多同时处理 3 个用户；
-- `--output-dir` 应该直接指向当天目录，例如 `data/run_20260808`。
-
-退出码：`0` 表示全部成功，`1` 表示部分用户失败，`2` 表示参数或环境配置错误，`4` 表示整体执行错误。
-
-## 五、推荐输出目录
-
-```text
-data/run_20260808/
-├── hot_cache/                         # 当天共享热榜缓存
-├── daily_summary/                     # 热榜总结功能的输出
-└── u_001/
-    ├── keyword_cache/                 # 用户关键词缓存
-    ├── hard_cache/                     # 用户级推荐运行缓存
-    └── round_001/                      # 本次调用
-        ├── input/
-        │   └── input.json
-        └── outputs/
-            ├── recommended/           # 最终推荐文章
-            ├── search/                # 全部候选文章
-            │   ├── hot/               # 热榜候选，按平台划分
-            │   └── search/            # 搜索候选，按平台划分
-            └── text/                  # 推荐正文文本
-```
-
-同一个用户再次调用会生成 `round_002`，不会覆盖之前结果。每篇文章的 JSON 至少包含标题、来源和正文；作者、发布时间、阅读量、点赞量、评论量存在时一并保存。
-
-## 六、给其他项目调用
-
-核心接口位于：
+接口实现位于：
 
 ```text
 src/heated_topics_v3/openbiliclaw_integration/service.py
 ```
 
-单用户调用：
+## 4. 安装
 
-```python
-from heated_topics_v3.openbiliclaw_integration.service import recommend_user
+项目使用 `uv`：
 
-result = recommend_user(
-    user_id="u_001",
-    track_1="旅行攻略",
-    track_2="穷游周末",
-    persona="预算敏感型旅行爱好者，专做两天一夜短途攻略。",
-    run_dir="data/run_20260808",
-    limit=15,
-    source="both",
-    last30days_config={
-        "cli_path": "../last30days-skill-cn/scripts/last30days.py",
-        "days": 30,
-        "fetch_bodies": True,
-    },
-)
+```bash
+uv sync
 ```
 
-返回值包含 `recommendations`、`searched_articles`、`user_id`、`run_dir` 和本次 `round_dir`。外部项目可以直接读取返回值，也可以读取 `round_dir` 下的标准 JSON 文件。
+复制配置模板：
 
-## 七、并发调用
-
-如果外部项目会同时触发多个用户，使用 `RecommendationService`：
-
-```python
-from heated_topics_v3.openbiliclaw_integration.service import RecommendationService
-
-service = RecommendationService(max_concurrency=3)
-result = await service.recommend_user(
-    user_id="u_001",
-    track_1="旅行攻略",
-    track_2="穷游周末",
-    persona="预算敏感型旅行爱好者。",
-    run_dir="data/run_20260808",
-    source="both",
-)
+```bash
+cp .env.example .env
 ```
 
-并发规则：
+推荐把 `HeatedTopics` 与 `last30days-skill-cn` 放在同级目录：
 
-1. 全局并发最多 3 个用户；
-2. 同一个用户同时触发时串行执行，避免竞争用户缓存和轮次目录；
-3. 不同用户互不影响，一个用户失败不会取消其他用户；
-4. 热榜缓存位于日期层，由所有用户共享。
-
-## 八、当天热榜总结
-
-推荐流程之外，项目预留了独立的热榜总结接口：
-
-```python
-from heated_topics_v3.openbiliclaw_integration.service import summarize_daily_hot
-
-summary = summarize_daily_hot(run_dir="data/run_20260808")
+```bash
+git clone https://github.com/Jesseovo/last30days-skill-cn.git ../last30days-skill-cn
 ```
 
-它读取当天 `hot_cache` 中的全部热榜数据，输出：
+如果路径不同，设置：
+
+```env
+LAST30DAYS_CLI_PATH=/your/path/last30days-skill-cn/scripts/last30days.py
+```
+
+## 5. 共享配置
+
+推荐和热榜使用同一份 `.env`。
+
+### LLM
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=your-api-key
+HT_LLM_BASE_URL=https://api.example.com/v1
+HT_LLM_MODEL=your-model
+```
+
+项目支持以下 LLM provider：
+
+| Provider | 配置值 | 适用场景 |
+| --- | --- | --- |
+| OpenAI | `openai` | OpenAI 官方模型 |
+| DeepSeek | `deepseek` | DeepSeek 官方模型 |
+| Gemini | `gemini` | Google Gemini API |
+| Claude | `claude` | Anthropic Claude |
+| Ollama | `ollama` | 本地部署模型 |
+| OpenRouter | `openrouter` | 通过统一网关选择多家模型 |
+| OpenAI-compatible | `openai_compatible` | 兼容 Chat Completions 的云服务、本地网关和自建模型服务 |
+
+MiniMax、通义千问/DashScope、硅基流动、Moonshot、智谱、DeepSeek、OpenRouter，以及 vLLM、Ollama 等本地网关，通常可以通过 `openai_compatible` 接入。具体模型名、接口路径、上下文长度和额外参数以对应服务为准。
+
+#### OpenAI-compatible 配置示例
+
+MiniMax：
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=your-minimax-key
+HT_LLM_BASE_URL=https://api.minimaxi.com/v1
+HT_LLM_MODEL=MiniMax-Text-01
+```
+
+DeepSeek：
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=your-deepseek-key
+HT_LLM_BASE_URL=https://api.deepseek.com/v1
+HT_LLM_MODEL=deepseek-chat
+```
+
+本地 Ollama 的 OpenAI 兼容接口：
+
+```env
+HT_LLM_PROVIDER=openai_compatible
+HT_LLM_API_KEY=ollama
+HT_LLM_BASE_URL=http://127.0.0.1:11434/v1
+HT_LLM_MODEL=qwen2.5:14b
+```
+
+统一 LLM adapter 当前调用 `/chat/completions`，负责：
+
+- 跨平台话题合并；
+- 话题搜索计划生成；
+- 搜索结果归纳和创作者话题总结；
+- 相关文章推荐中的关键词提取和相关性处理。
+
+`HT_LLM_PROVIDER` 主要用于 OpenBiliClaw runtime 选择 provider；每日热榜使用的通用 `LLMAdapter` 重点读取 `HT_LLM_API_KEY`、`HT_LLM_BASE_URL` 和 `HT_LLM_MODEL`。
+
+如果服务不兼容标准 Chat Completions，不能只修改环境变量，需要在 `llm_adapter.py` 中增加对应 adapter。
+
+### Embedding
+
+```env
+HT_EMBEDDING_PROVIDER=ollama
+HT_EMBEDDING_BASE_URL=http://127.0.0.1:11434
+HT_EMBEDDING_MODEL=bge-m3
+```
+
+Embedding 可使用以下 provider：
+
+| Provider | 配置值 | 说明 |
+| --- | --- | --- |
+| Ollama | `ollama` | 推荐的本地 embedding 方案 |
+| OpenAI | `openai` | 使用 OpenAI embedding API |
+| OpenAI-compatible | `openai_compatible` | 使用兼容 embedding 接口 |
+| Gemini | `gemini` | 使用 Gemini embedding 能力 |
+| OpenRouter | `openrouter` | 由 OpenRouter 提供 embedding 模型 |
+| DashScope | `dashscope` | 使用阿里云 DashScope embedding |
+
+Embedding 主要用于相关文章推荐中的相似度计算和相关性排序，不负责每日热榜的事实搜索。使用本地 Ollama 时：
+
+```bash
+ollama pull bge-m3
+```
+
+## 6. Web Search MCP
+
+LLM 和 Web Search 是两个独立能力：LLM 负责分析、合并和总结；`ResearchProvider` 负责获取带 URL 的外部证据。当前默认使用 MiniMax Token Plan MCP，并复用长连接执行多个话题的搜索。
+
+```env
+HT_WEB_SEARCH_PROVIDER=minimax_mcp
+HT_WEB_SEARCH_MCP_COMMAND=uvx
+HT_WEB_SEARCH_MCP_ARGS=--with fastmcp minimax-coding-plan-mcp -y
+HT_WEB_SEARCH_MCP_TOOL=web_search
+MINIMAX_API_KEY=your-token-plan-key
+MINIMAX_API_HOST=https://api.minimaxi.com
+```
+
+也可以接入其他 stdio MCP：
+
+```env
+HT_WEB_SEARCH_PROVIDER=generic_mcp
+HT_WEB_SEARCH_MCP_COMMAND=your-mcp-command
+HT_WEB_SEARCH_MCP_ARGS=--stdio
+HT_WEB_SEARCH_MCP_TOOL=web_search
+HT_WEB_SEARCH_MCP_ENV_JSON={"API_KEY":"your-key"}
+```
+
+当前已接入 MiniMax MCP 和通用 stdio MCP。OpenAI 原生 Web Search、Gemini Search grounding、Anthropic Web Search 和 Perplexity Search API 暂未作为独立 `ResearchProvider` 接入，因此不能仅通过更换 LLM provider 自动启用。
+
+## 7. 推荐输出目录
 
 ```text
-data/run_20260808/daily_summary/summary.json
+data/run_20260812/
+├── hot_cache/                 # 每日共享热榜缓存
+├── daily_hot/                 # HeatedTop 输出
+└── u_001/
+    ├── keyword_cache/         # 用户关键词缓存
+    ├── hard_cache/            # 用户推荐缓存
+    └── round_001/             # 一次推荐调用
+        ├── input/input.json
+        └── outputs/
+            ├── recommended/
+            ├── search/
+            └── text/
 ```
 
-后续可以在这个接口外层接入 LLM 总结、消息推送、飞书或企业微信，不需要改动用户推荐流程。
+## 8. CLI 调试
 
-## 九、测试
+CLI 只用于本地调试和批量验证，业务项目优先使用 Python 接口。
+
+```bash
+uv run python -m heated_topics_v3.openbiliclaw_integration.cli \
+  --users-excel data/users.xlsx \
+  --output-dir data/run_20260812 \
+  --source both \
+  --max-parallel 3 \
+  --limit 15
+```
+
+Excel 至少包含：`user_id`、`track_1`、`track_2`、`persona`。
+
+## 9. 测试
 
 运行核心测试：
 
-```powershell
-uv run pytest tests/openbiliclaw_integration tests/providers -q
+```bash
+uv run pytest -q
+uv run python -m compileall -q src
 ```
 
-服务接口测试覆盖：
+热榜核心测试：
 
-- 单用户标准目录输出；
-- 用户级 round 生成；
-- 最大并发数限制；
-- 热榜缓存读取与每日总结输出。
+```bash
+uv run pytest -q tests/hot_topics tests/test_hot_topic_cache.py tests/test_heated_top_integration.py
+```
 
-## 十、项目结构
+## 10. 主要代码结构
 
 ```text
-src/heated_topics_v3/openbiliclaw_integration/
-├── cli.py                    # 终端参数解析和批量入口
-├── service.py               # 对外稳定业务接口
-├── recommender.py            # 候选获取、正文处理和推荐排序
-├── candidate_adapter.py     # 平台数据统一转换
-├── body_enricher.py         # 正文抓取和来源识别
-├── keyword_extractor.py     # 用户关键词提取与缓存
-├── report_writer.py         # 标准目录和 JSON 输出
-├── user_profile.py          # 用户输入校验
-└── runtime.py               # OpenBiliClaw、LLM、环境检查
+src/heated_topics_v3/
+├── hot_topics/
+│   ├── run_hot_topics.py          # 热榜总流程
+│   ├── hot_topic_clustering.py   # 跨平台话题聚类
+│   ├── hot_topic_ranking.py      # 话题排序
+│   ├── search_planner.py          # 搜索计划
+│   ├── research_provider.py      # Web Search/MCP provider
+│   └── creator_brief.py          # 创作者话题总结
+├── llm_adapter.py                 # 共享 LLM adapter
+└── openbiliclaw_integration/
+    ├── service.py                 # RecommendationService、HeatedTop
+    ├── heated_top.py              # 每日热榜门面
+    ├── recommender.py             # 相关文章推荐
+    └── runtime.py                 # LLM、embedding 和环境配置
 ```
-
-接手项目时，建议先阅读本 README，再从 `service.py` 的 `recommend_user()` 开始跟踪；终端 CLI 只负责输入转换和调用，不应成为其他项目的直接依赖。

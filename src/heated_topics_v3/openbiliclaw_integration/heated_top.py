@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +12,7 @@ from heated_topics_v3.contracts import HeatMetrics, HotItem
 from heated_topics_v3.providers.common import ProviderCapture
 from heated_topics_v3.hot_topics.run_hot_topics import run_hot_topics
 from heated_topics_v3.llm_adapter import LLMAdapter, LLMConfig
-from heated_topics_v3.hot_topics.research_provider import MiniMaxMcpResearchProvider
+from heated_topics_v3.hot_topics.research_provider import build_web_search_provider
 
 
 class _CachedHotProvider:
@@ -79,10 +78,7 @@ class HeatedTop:
             for p in platforms if (cache_dir / f"{p}.json").exists()
         }
         config = LLMConfig.from_env()
-        research = MiniMaxMcpResearchProvider(
-            api_key=os.getenv("MINIMAX_API_KEY", config.api_key),
-            api_host=os.getenv("MINIMAX_API_HOST", "https://api.minimaxi.com"),
-        )
+        research = build_web_search_provider()
         try:
             result = run_hot_topics(
                 providers=providers,

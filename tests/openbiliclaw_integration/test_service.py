@@ -71,7 +71,7 @@ def test_recommend_user_auto_configures_last30days(tmp_path, monkeypatch):
     service.recommend_user(
         user_id="u_l30", track_1="旅行", run_dir=tmp_path, source="both",
     )
-    assert captured["last30days_config"]["cli_path"] == "C:\\tmp\\last30days.py"
+    assert captured["last30days_config"]["cli_path"] == str(Path("C:/tmp/last30days.py"))
 
 
 def test_service_serializes_same_user_and_caps_concurrency(monkeypatch, tmp_path):
@@ -110,3 +110,4 @@ def test_daily_hot_summary_reads_shared_cache(tmp_path):
 
 def test_heated_top_is_public_daily_entrypoint():
     assert callable(HeatedTop().run)
+    assert service.__all__ == ["RecommendationService", "HeatedTop"]
